@@ -41,18 +41,30 @@ class LLMClient:
         self,
         messages: List[Message],
         json_schema: Dict,
+        schema_name: str = "structured_response",
         model: str = "qwen2.5-7b-instruct",
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ) -> Dict:
         """Send a structured completion request to the API."""
         endpoint = f"{self.base_url}/v1/chat/completions"
+        
+        # Ensure the schema is properly wrapped
+        if "name" in json_schema and "strict" in json_schema and "schema" in json_schema:
+            wrapped_schema = json_schema
+        else:
+            wrapped_schema = {
+                "name": schema_name,
+                "strict": "true",  # Note: API expects a string "true", not a boolean
+                "schema": json_schema
+            }
+        
         payload = {
             "model": model,
             "messages": [{"role": msg.role, "content": msg.content} for msg in messages],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": json_schema
+                "json_schema": wrapped_schema
             },
             "temperature": temperature,
             "max_tokens": max_tokens,
