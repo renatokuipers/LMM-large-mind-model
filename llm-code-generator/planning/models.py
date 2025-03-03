@@ -201,7 +201,7 @@ class ProjectPlan(BaseModel):
         
         return errors
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_plan(cls, values):
         """Validate the entire project plan."""
         # In a full implementation, we'd do more thorough validation here

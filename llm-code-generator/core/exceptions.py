@@ -9,6 +9,13 @@ class ValidationError(CodeGeneratorError):
     def __init__(self, message: str, errors=None):
         super().__init__(message)
         self.errors = errors or []
+        
+class PlanningError(CodeGeneratorError):
+    """Exception raised when generated planning fails."""
+    
+    def __init__(self, message: str, errors=None):
+        super().__init__(message)
+        self.errors = errors or []
 
 
 class LLMError(CodeGeneratorError):

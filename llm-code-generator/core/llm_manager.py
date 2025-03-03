@@ -260,6 +260,11 @@ class LLMManager:
             }
         }
         
+        # Prepare the additional context section separately to avoid nested f-string issues
+        additional_context_section = ""
+        if request.additional_context:
+            additional_context_section = f"## Additional Context\n{request.additional_context}"
+        
         # Build a detailed prompt for code generation
         prompt = f"""
         # Code Generation Task
@@ -275,7 +280,7 @@ class LLMManager:
         ## Requirements
         {request.requirements}
         
-        {f'## Additional Context\n{request.additional_context}' if request.additional_context else ''}
+        {additional_context_section}
         
         ## Expected Output Format
         Return a JSON object with these fields:

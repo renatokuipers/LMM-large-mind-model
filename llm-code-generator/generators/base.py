@@ -41,6 +41,11 @@ class GeneratorContext(BaseModel):
         requirements_text = "\n".join(f"- {req}" for req in self.requirements)
         dependencies_text = "\n".join(f"- {dep}" for dep in self.dependencies) if self.dependencies else "None"
         
+        # Prepare additional context section separately to avoid nested f-string issues
+        additional_context_section = ""
+        if self.additional_context:
+            additional_context_section = f"## Additional Context\n{self.additional_context}"
+        
         return f"""
         # Component Generation Context
         
@@ -61,7 +66,7 @@ class GeneratorContext(BaseModel):
         ## Project Context
         {self.project_description}
         
-        {f"## Additional Context\n{self.additional_context}" if self.additional_context else ""}
+        {additional_context_section}
         """
 
 
