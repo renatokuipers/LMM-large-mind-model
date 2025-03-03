@@ -14,12 +14,12 @@ def create_layout():
                     dbc.CardHeader("Project Configuration"),
                     dbc.CardBody([
                         # Project name and description
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Project Name", html_for="project-name"),
                             dbc.Input(id="project-name", type="text", placeholder="Enter project name")
                         ], className="mb-3"),
                         
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Project Description", html_for="project-description"),
                             dbc.Textarea(
                                 id="project-description",
@@ -29,7 +29,7 @@ def create_layout():
                         ], className="mb-3"),
                         
                         # Technology stack
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Language", html_for="language-dropdown"),
                             dcc.Dropdown(
                                 id="language-dropdown",
@@ -41,12 +41,12 @@ def create_layout():
                             )
                         ], className="mb-3"),
                         
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Framework (optional)", html_for="framework-input"),
                             dbc.Input(id="framework-input", type="text", placeholder="e.g., Flask, Express")
                         ], className="mb-3"),
                         
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Database (optional)", html_for="database-dropdown"),
                             dcc.Dropdown(
                                 id="database-dropdown",
@@ -61,7 +61,7 @@ def create_layout():
                         ], className="mb-3"),
                         
                         # Frontend options
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Include Frontend"),
                             dbc.Checklist(
                                 id="frontend-toggle",
@@ -71,7 +71,7 @@ def create_layout():
                             )
                         ], className="mb-3"),
                         
-                        dbc.FormGroup([
+                        dbc.Row([
                             dbc.Label("Frontend Framework (if applicable)", html_for="frontend-framework"),
                             dbc.Input(
                                 id="frontend-framework",
