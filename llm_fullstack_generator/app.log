@@ -67,3 +67,31 @@
 2025-03-03 17:10:59,659 - modules.generation.code_generator - INFO - Generating code for file: ./horror_henry/src/config.py (Task: setup-core)
 2025-03-03 17:11:01,184 - __main__ - INFO - Starting LLM Fullstack Generator
 2025-03-03 17:12:37,062 - __main__ - INFO - Starting LLM Fullstack Generator
+2025-03-03 17:19:32,994 - __main__ - INFO - Starting LLM Fullstack Generator
+2025-03-03 17:19:32,995 - dash.dash - INFO - Dash is running on http://127.0.0.1:8050/
+
+2025-03-03 17:19:33,912 - __main__ - INFO - Starting LLM Fullstack Generator
+2025-03-03 17:20:30,563 - __main__ - INFO - Initializing project: Horror Henry
+2025-03-03 17:20:30,564 - core.orchestrator - INFO - Initializing project: Horror Henry
+2025-03-03 17:20:30,564 - modules.planning.epic_generator - INFO - Generating EPICs for project: Horror Henry
+2025-03-03 17:20:58,224 - modules.planning.epic_generator - INFO - Generated 9 EPICs with 18 tasks
+2025-03-03 17:20:58,224 - modules.planning.task_validator - INFO - Validating EPICs for project: Horror Henry
+2025-03-03 17:21:27,529 - modules.planning.task_validator - INFO - Refined plan: 7 EPICs with 18 tasks
+2025-03-03 17:21:27,529 - __main__ - INFO - Starting code generation
+2025-03-03 17:21:27,529 - core.orchestrator - INFO - Executing task: create-project-directory - Create Project Directory
+2025-03-03 17:21:27,529 - modules.generation.code_generator - INFO - Generating code for file: HorrorHenry (Task: create-project-directory)
+2025-03-03 17:21:38,664 - modules.validation.code_validator - INFO - Validating code for file: HorrorHenry
+2025-03-03 17:21:52,255 - utils.file_manager - INFO - Successfully wrote file: ./generated_projects\HorrorHenry
+2025-03-03 17:21:52,256 - modules.memory.codebase_context - INFO - Updating codebase context for file: HorrorHenry
+2025-03-03 17:21:52,257 - core.orchestrator - INFO - Executing task: setup-virtual-environment - Setup Virtual Environment
+2025-03-03 17:21:52,257 - core.orchestrator - INFO - Executing task: install-dependencies - Install Python Dependencies
+2025-03-03 17:21:52,258 - core.orchestrator - INFO - Executing task: create-main-class - Create Main Class for Game Logic
+2025-03-03 17:21:52,258 - modules.generation.code_generator - INFO - Generating code for file: horror_henry/game_logic.py (Task: create-main-class)
+2025-03-03 17:22:05,853 - modules.validation.code_validator - INFO - Validating code for file: horror_henry/game_logic.py
+2025-03-03 17:22:24,542 - utils.file_manager - INFO - Successfully wrote file: ./generated_projects\horror_henry/game_logic.py
+2025-03-03 17:22:24,543 - modules.memory.codebase_context - INFO - Updating codebase context for file: horror_henry/game_logic.py
+2025-03-03 17:22:24,544 - core.orchestrator - INFO - Executing task: design-user-interface-components - Design User Interface Components
+2025-03-03 17:22:24,544 - core.orchestrator - INFO - Executing task: create-tkinter-window - Create Tkinter Window
+2025-03-03 17:22:24,544 - modules.generation.code_generator - INFO - Generating code for file: horror_henry/gui.py (Task: create-tkinter-window)
+2025-03-03 17:22:26,358 - __main__ - INFO - Starting LLM Fullstack Generator
+2025-03-03 17:23:32,985 - __main__ - INFO - Starting LLM Fullstack Generator
