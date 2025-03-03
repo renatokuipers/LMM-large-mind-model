@@ -40,12 +40,12 @@ class Config(BaseModel):
         """Create configuration from environment variables."""
         return cls(
             llm=LLMSettings(
-                api_base_url=os.environ.get("LLM_API_BASE_URL", "http://localhost:8000"),
-                model_name=os.environ.get("LLM_MODEL_NAME", "local-model"),
+                api_base_url=os.environ.get("LLM_API_BASE_URL", "http://192.168.2.12:1234"),
+                model_name=os.environ.get("LLM_MODEL_NAME", "qwen2.5-7b-instruct"),
                 api_key=os.environ.get("LLM_API_KEY"),
-                max_context_length=int(os.environ.get("LLM_MAX_CONTEXT_LENGTH", "8192")),
-                temperature=float(os.environ.get("LLM_TEMPERATURE", "0.2")),
-                max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "2048")),
+                max_context_length=int(os.environ.get("LLM_MAX_CONTEXT_LENGTH", "16384")),
+                temperature=float(os.environ.get("LLM_TEMPERATURE", "0.7")),
+                max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "-1")),
                 timeout_seconds=int(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
             ),
             app=AppSettings(

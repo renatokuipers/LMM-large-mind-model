@@ -1,18 +1,21 @@
 from typing import Dict, List, Optional, Union, Any
 import logging
 import json
+import asyncio
 from pydantic import BaseModel, Field, validator
-import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+
+# Import the new LLM client
+from llm_module import LLMClient, Message, process_stream
 
 from schemas.llm_io import LLMRequest, LLMResponse, CodeGenerationRequest, CodeGenerationResponse
 from core.code_memory import CodeMemory
+from core.exceptions import LLMError
 
 logger = logging.getLogger(__name__)
 
 
 class LLMConfig(BaseModel):
-    """Configuration for the local LLM."""
+    """Configuration for the LLM."""
     
     api_base_url: str = Field(..., description="Base URL for the LLM API")
     model_name: str = Field(..., description="Name of the model to use")
@@ -30,10 +33,10 @@ class LLMConfig(BaseModel):
 
 
 class LLMManager:
-    """Manages interactions with the local LLM.
+    """Manages interactions with the LLM.
     
     This class handles prompting, context management, and response parsing
-    for code generation tasks.
+    for code generation tasks using the llm_module client.
     """
     
     def __init__(self, config: LLMConfig, code_memory: Optional[CodeMemory] = None):
@@ -45,14 +48,13 @@ class LLMManager:
         """
         self.config = config
         self.code_memory = code_memory
-        self.client = httpx.AsyncClient(
-            timeout=config.timeout_seconds,
-            headers={"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
-        )
+        # Initialize LLMClient from llm_module.py
+        self.client = LLMClient(base_url=config.api_base_url)
     
     async def close(self):
-        """Close the HTTP client."""
-        await self.client.aclose()
+        """Close the client (no-op for LLMClient)."""
+        # LLMClient doesn't require explicit closing
+        pass
     
     def _build_system_prompt(self, task_type: str) -> str:
         """Build a system prompt for a specific task type.
@@ -117,28 +119,69 @@ class LLMManager:
         
         return enhanced_prompt
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     async def _send_request(self, request: LLMRequest) -> dict:
-        """Send a request to the LLM API with retry logic.
+        """Send a request to the LLM API using llm_module.
         
         Args:
             request: LLM request
             
         Returns:
-            Raw API response
+            Raw API response dict matching the expected format
             
         Raises:
-            httpx.HTTPError: If the request fails after retries
+            LLMError: If the request fails
         """
-        payload = request.dict(exclude_none=True)
+        # Convert LLMRequest format to Message format for llm_module
+        messages = [
+            Message(role=msg["role"], content=msg["content"]) 
+            for msg in request.messages
+        ]
         
-        response = await self.client.post(
-            f"{self.config.api_base_url}/v1/chat/completions",
-            json=payload
-        )
-        response.raise_for_status()
-        
-        return response.json()
+        try:
+            # Handle structured outputs (JSON format)
+            if request.response_format and request.response_format.get("type") == "json_object":
+                # Create a schema for structured completion
+                schema = {
+                    "name": "completion_response",
+                    "strict": "true",
+                    "schema": {"type": "object"}
+                }
+                
+                # Use structured completion from llm_module
+                response_data = await asyncio.to_thread(
+                    self.client.structured_completion,
+                    messages=messages,
+                    json_schema=schema,
+                    model=request.model,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens if request.max_tokens and request.max_tokens > 0 else 4096
+                )
+                
+                # Format the response to match expected structure
+                return {
+                    "choices": [{"message": {"content": json.dumps(response_data)}}],
+                    "usage": {}  # llm_module doesn't provide usage stats
+                }
+                
+            else:
+                # Use standard chat completion
+                content = await asyncio.to_thread(
+                    self.client.chat_completion,
+                    messages=messages,
+                    model=request.model,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens if request.max_tokens and request.max_tokens > 0 else -1,
+                    stream=False
+                )
+                
+                return {
+                    "choices": [{"message": {"content": content}}],
+                    "usage": {}
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in LLM request: {str(e)}")
+            raise LLMError(f"Failed to complete LLM request: {str(e)}")
     
     async def generate(self, 
                       prompt: str, 
@@ -155,7 +198,7 @@ class LLMManager:
             LLM response
             
         Raises:
-            Exception: If the LLM request fails
+            LLMError: If the LLM request fails
         """
         # Enhance context if code memory is available
         enhanced_prompt = self._enhance_context_with_code_memory(prompt)
@@ -199,17 +242,22 @@ class LLMManager:
             
         Raises:
             ValueError: If the response cannot be parsed
+            LLMError: If the LLM request fails
         """
-        # Define the expected response schema
-        response_schema = {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "The generated code"},
-                "explanation": {"type": "string", "description": "Explanation of the code"},
-                "imports": {"type": "array", "items": {"type": "string"}, "description": "Required imports"},
-                "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Component dependencies"}
-            },
-            "required": ["code", "imports", "dependencies"]
+        # Define the JSON schema for structured code generation
+        code_schema = {
+            "name": "code_generation_response",
+            "strict": "true",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "The generated code"},
+                    "explanation": {"type": "string", "description": "Explanation of the code"},
+                    "imports": {"type": "array", "items": {"type": "string"}, "description": "Required imports"},
+                    "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Component dependencies"}
+                },
+                "required": ["code", "imports", "dependencies"]
+            }
         }
         
         # Build a detailed prompt for code generation
@@ -240,25 +288,25 @@ class LLMManager:
         """
         
         try:
-            # Generate with the structured schema
-            response = await self.generate(
-                prompt=prompt,
-                task_type="code_generation",
-                schema=response_schema
+            # Create messages for the LLM request
+            messages = [
+                Message(role="system", content=self._build_system_prompt("code_generation")),
+                Message(role="user", content=self._enhance_context_with_code_memory(prompt))
+            ]
+            
+            # Use structured completion directly
+            response_data = await asyncio.to_thread(
+                self.client.structured_completion,
+                messages=messages,
+                json_schema=code_schema,
+                model=self.config.model_name,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens if self.config.max_tokens > 0 else 4096
             )
             
-            # Parse the JSON response
-            try:
-                response_data = json.loads(response.content)
-            except json.JSONDecodeError:
-                raise ValueError(f"Failed to parse LLM response as JSON: {response.content}")
-            
-            # Validate and extract fields
-            if not isinstance(response_data, dict) or "code" not in response_data:
-                raise ValueError(f"Invalid response structure: {response_data}")
-            
+            # Create the response object
             code_response = CodeGenerationResponse(
-                code=response_data["code"],
+                code=response_data.get("code", ""),
                 explanation=response_data.get("explanation", ""),
                 imports=response_data.get("imports", []),
                 dependencies=response_data.get("dependencies", [])
@@ -268,4 +316,4 @@ class LLMManager:
             
         except Exception as e:
             logger.error(f"Error generating code: {str(e)}")
-            raise
+            raise LLMError(f"Failed to generate code: {str(e)}")
