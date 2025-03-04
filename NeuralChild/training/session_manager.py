@@ -1,1 +1,0 @@
-# Manages training interaction sessions
