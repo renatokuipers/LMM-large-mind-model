@@ -271,23 +271,27 @@ class EmotionsNetwork(BaseNetwork):
     
     def _process_interpersonal_input(self, interpersonal_data: Dict[str, Any], source: str) -> None:
         """Process interpersonal interactions (especially with mother)"""
+        # Initialize intensity with a default value to prevent the error
+        intensity = 0.0
+        
         if "mother_emotion" in interpersonal_data:
             # Emotional contagion - child picks up mother's emotions
             mother_emotion = interpersonal_data["mother_emotion"]
             contagion_strength = 0.4  # How strongly mother's emotions transfer
-            intensity = interpersonal_data.get("intensity", 0.5)  # FIXED! Always define with a default
+            # Get intensity with a default if not provided
+            intensity = interpersonal_data.get("intensity", 0.5)
             
             if mother_emotion in self.emotional_state:
                 # Direct emotional contagion
                 self._update_emotion(mother_emotion, intensity * contagion_strength)
             
-                # Record emotional event
-                self.emotional_memory.add_event(EmotionEvent(
-                    emotion=mother_emotion,
-                    intensity=intensity,
-                    stimulus="mother",
-                    source_network=source
-                ))
+            # Record emotional event
+            self.emotional_memory.add_event(EmotionEvent(
+                emotion=mother_emotion,
+                intensity=intensity,
+                stimulus="mother",
+                source_network=source
+            ))
         
         if "mother_actions" in interpersonal_data:
             actions = interpersonal_data["mother_actions"]
