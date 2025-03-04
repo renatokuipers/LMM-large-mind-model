@@ -219,7 +219,7 @@ def show_form_errors(validation_data):
 # Navigate to projects list
 @callback(
     [
-        Output("page-content", "children"),
+        Output("page-content", "children", allow_duplicate=True),
         Output("toast-message", "data", allow_duplicate=True),
     ],
     [Input("nav-projects", "n_clicks")],
@@ -406,8 +406,8 @@ def project_card_hover(n_hover, current_style):
 # Project creation callback
 @callback(
     [
-        Output("projects-store", "data"),
-        Output("current-project-id", "data"),
+        Output("projects-store", "data", allow_duplicate=True),
+        Output("current-project-id", "data", allow_duplicate=True),
         Output("page-content", "children", allow_duplicate=True),
         Output("toast-message", "data", allow_duplicate=True),
     ],
@@ -1114,7 +1114,8 @@ def generate_epic_code(btn_clicks, project_id, projects_data):
                 "Epic Not Found", 
                 "The requested epic could not be found.",
                 None
-            ), create_notification("Epic not found", 
+            ), create_notification(
+                "Epic not found", 
                 "Error", 
                 "warning", 
                 "exclamation-triangle"

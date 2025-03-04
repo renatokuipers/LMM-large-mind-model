@@ -45,13 +45,15 @@ BUTTON_STYLE = {
 
 # Helper functions
 def create_breadcrumbs(items):
-    """Create a breadcrumb navigation component"""
+    """Create a breadcrumb navigation component compatible with older dbc versions"""
     breadcrumb_items = []
     for i, (label, href, active) in enumerate(items):
+        # Use dictionary format instead of BreadcrumbItem component
         if active:
-            breadcrumb_items.append(dbc.BreadcrumbItem(label, active=True))
+            item = {"label": label, "active": True}
         else:
-            breadcrumb_items.append(dbc.BreadcrumbItem(label, href=href))
+            item = {"label": label, "href": href}
+        breadcrumb_items.append(item)
     
     return dbc.Breadcrumb(
         items=breadcrumb_items,
