@@ -10,30 +10,32 @@ import random
 from pydantic import BaseModel, Field, field_validator, model_validator
 import numpy as np
 
-# Internal imports
+# LLM module for communication
 from llm_module import LLMClient, Message
-from mother import MotherResponse, ChildState, EmotionalState as MotherEmotionalState
 
-# Network imports (these will be implemented later)
-# from networks.perception import PerceptionNetwork
-# from networks.emotions import EmotionNetwork
-# from networks.consciousness import ConsciousnessNetwork
-# from networks.attention import AttentionNetwork
-# from networks.unconsciousness import UnconsciousnessNetwork
-# from networks.instincts import InstinctsNetwork
-# from networks.drives import DrivesNetwork
-# from networks.archetypes import ArchetypesNetwork
-# from networks.thoughts import ThoughtsNetwork
-# from networks.moods import MoodsNetwork
+# Mother component for interaction
+from mother import Mother, MotherResponse, ChildState, EmotionalState as MotherEmotionalState
 
-# Language and memory imports (these will be implemented later)
+# Network imports - complete neural architecture
+from networks.network_types import NetworkType, ConnectionType
+from networks.archetypes import ArchetypesNetwork
+from networks.instincts import InstinctsNetwork
+from networks.unconsciousness import UnconsciousnessNetwork
+from networks.drives import DrivesNetwork
+from networks.emotions import EmotionsNetwork
+from networks.moods import MoodsNetwork
+from networks.attention import AttentionNetwork
+from networks.perception import PerceptionNetwork
+from networks.consciousness import ConsciousnessNetwork
+from networks.thoughts import ThoughtsNetwork
+
+# Language and memory imports
 from language.developmental_stages import DevelopmentTracker, LanguageDevelopmentStage, LanguageCapabilities
 from language.lexical_memory import LexicalMemory
 from language.production import LanguageProduction
 from language.syntactic_processor import SyntacticProcessor
 from language.vocabulary import VocabularyManager
 from language.semantic_network import SemanticNetwork, SemanticRelation
-# from memory.memory_manager import MemoryManager
 
 # Configure logging
 logging.basicConfig(
@@ -118,36 +120,6 @@ class HumanMindDevelopmentStage(str, Enum):
         else:
             return cls.LATE_ADULTHOOD
 
-class NetworkType(str, Enum):
-    """Types of neural networks in the child's mind"""
-    ARCHETYPES = "archetypes"
-    INSTINCTS = "instincts"
-    UNCONSCIOUSNESS = "unconsciousness"
-    DRIVES = "drives"
-    EMOTIONS = "emotions"
-    MOODS = "moods"
-    ATTENTION = "attention"
-    PERCEPTION = "perception"
-    CONSCIOUSNESS = "consciousness"
-    THOUGHTS = "thoughts"
-
-class NetworkActivationLevel(BaseModel):
-    """Activation level and metrics for a neural network"""
-    network_type: NetworkType
-    activation: float = Field(0.0, ge=0.0, le=1.0)
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
-    learning_rate: float = Field(0.01, gt=0.0, le=1.0)
-    training_progress: float = Field(0.0, ge=0.0, le=1.0)
-    last_active: datetime = Field(default_factory=datetime.now)
-    error_rate: float = Field(0.0, ge=0.0)
-    
-    def update_activation(self, stimulation: float) -> None:
-        """Update the activation level based on input stimulation"""
-        # Simple activation function with decay
-        decay_factor = 0.9  # Previous activation decays by this factor
-        self.activation = min(1.0, max(0.0, self.activation * decay_factor + stimulation))
-        self.last_active = datetime.now()
-
 class EmotionalState(BaseModel):
     """Child's emotional state, inspired by Plutchik's wheel of emotions"""
     joy: float = Field(0.0, ge=0.0, le=1.0)
@@ -212,36 +184,6 @@ class EmotionalState(BaseModel):
         self.trust *= decay_factor
         self.anticipation *= decay_factor
 
-class VocabularyItem(BaseModel):
-    """A word in the child's vocabulary"""
-    word: str
-    understanding: float = Field(0.1, ge=0.0, le=1.0)
-    learned_at: datetime = Field(default_factory=datetime.now)
-    contexts: List[str] = Field(default_factory=list)
-    usage_count: int = Field(0, ge=0)
-    emotional_associations: Dict[str, float] = Field(default_factory=dict)
-    
-    def update_understanding(self, context: str, emotion: Optional[str] = None, emotion_intensity: float = 0.0) -> None:
-        """Update understanding of this word based on new exposure"""
-        self.usage_count += 1
-        
-        # Add context if new
-        if context not in self.contexts:
-            self.contexts.append(context)
-        
-        # Update understanding (plateaus as it approaches 1.0)
-        learning_rate = 0.05 * (1.0 - self.understanding)
-        self.understanding = min(1.0, self.understanding + learning_rate)
-        
-        # Update emotional association if provided
-        if emotion:
-            if emotion not in self.emotional_associations:
-                self.emotional_associations[emotion] = emotion_intensity
-            else:
-                # Blend existing and new emotional association
-                current = self.emotional_associations[emotion]
-                self.emotional_associations[emotion] = (current * 0.8) + (emotion_intensity * 0.2)
-
 class DevelopmentalMetrics(BaseModel):
     """Tracking metrics for child's development"""
     age_days: float = Field(0.0, ge=0.0)
@@ -304,7 +246,8 @@ class NeuralChild:
         self,
         config_path: Optional[Path] = None,
         save_dir: Path = Path("./data/neural_child"),
-        simulation_speed: float = 1.0  # Multiplier for development speed
+        simulation_speed: float = 1.0,  # Multiplier for development speed
+        llm_base_url: str = "http://192.168.2.12:1234"
     ):
         """Initialize the neural child with configuration"""
         # Load or create config
@@ -320,8 +263,23 @@ class NeuralChild:
         self.metrics = DevelopmentalMetrics()
         self.emotional_state = EmotionalState()
         
+        # Initialize LLM client for Mother interactions
+        self.llm_client = LLMClient(base_url=llm_base_url)
+        
+        # Initialize Mother component
+        self.mother = Mother(
+            llm_client=self.llm_client,
+            model="qwen2.5-7b-instruct",
+            temperature=0.75,
+            max_tokens=1000,
+            history_size=10
+        )
+        
         # Initialize neural networks
         self.networks = self._initialize_networks()
+        
+        # Connect networks to each other
+        self._establish_network_connections()
         
         # Initialize language systems
         self.syntactic_processor = SyntacticProcessor()
@@ -337,7 +295,7 @@ class NeuralChild:
         # Memory for recent interactions
         self.recent_interactions = []
         
-        logger.info("Neural child initialized")
+        logger.info("Neural child initialized with complete neural architecture")
     
     def _load_config(self, config_path: Optional[Path]) -> ChildConfig:
         """Load or create configuration"""
@@ -362,44 +320,397 @@ class NeuralChild:
             }
         )
     
-    def _initialize_networks(self) -> Dict[NetworkType, NetworkActivationLevel]:
-        """Initialize all neural networks"""
+    def _initialize_networks(self) -> Dict[NetworkType, Any]:
+        """Initialize all neural networks with proper configurations"""
         networks = {}
-        for network_type in NetworkType:
-            emphasis = self.config.network_emphasis.get(network_type, 0.1)
-            networks[network_type] = NetworkActivationLevel(
-                network_type=network_type,
-                activation=0.0,
-                confidence=0.0,
-                learning_rate=0.01 * self.config.learning_rate_multiplier,
-                training_progress=0.0,
-                error_rate=random.uniform(0.1, 0.3)  # Initial random error rate
-            )
+        
+        # Initialize each network with appropriate parameters
+        networks[NetworkType.ARCHETYPES] = ArchetypesNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.15
+        )
+        
+        networks[NetworkType.INSTINCTS] = InstinctsNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier * 0.5,
+            activation_threshold=0.1
+        )
+        
+        networks[NetworkType.UNCONSCIOUSNESS] = UnconsciousnessNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier * 0.8,
+            activation_threshold=0.1
+        )
+        
+        networks[NetworkType.DRIVES] = DrivesNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.2
+        )
+        
+        networks[NetworkType.EMOTIONS] = EmotionsNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.15,
+            emotional_sensitivity=self.config.emotional_sensitivity
+        )
+        
+        networks[NetworkType.MOODS] = MoodsNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier * 0.8,
+            activation_threshold=0.2,
+            baseline_mood="neutral"
+        )
+        
+        networks[NetworkType.ATTENTION] = AttentionNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.2,
+            attention_span_base=0.2
+        )
+        
+        networks[NetworkType.PERCEPTION] = PerceptionNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.1
+        )
+        
+        networks[NetworkType.CONSCIOUSNESS] = ConsciousnessNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.3,
+            self_awareness_base=0.1
+        )
+        
+        networks[NetworkType.THOUGHTS] = ThoughtsNetwork(
+            learning_rate_multiplier=self.config.learning_rate_multiplier,
+            activation_threshold=0.3
+        )
+        
         return networks
     
-    def process_mother_response(self, mother_response: MotherResponse) -> None:
-        """Process a response from the mother, updating internal state"""
-        logger.info("Processing mother's response")
+    def _establish_network_connections(self) -> None:
+        """Establish connections between neural networks"""
+        # Perception connects to many networks as it's the input gateway
+        self.networks[NetworkType.PERCEPTION].connect_to(
+            target_network=NetworkType.ATTENTION.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.8
+        )
         
-        # Update emotional state based on mother's response
+        self.networks[NetworkType.PERCEPTION].connect_to(
+            target_network=NetworkType.EMOTIONS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.7
+        )
+        
+        self.networks[NetworkType.PERCEPTION].connect_to(
+            target_network=NetworkType.CONSCIOUSNESS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.6
+        )
+        
+        self.networks[NetworkType.PERCEPTION].connect_to(
+            target_network=NetworkType.UNCONSCIOUSNESS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.5
+        )
+        
+        # Attention modulates consciousness and thoughts
+        self.networks[NetworkType.ATTENTION].connect_to(
+            target_network=NetworkType.CONSCIOUSNESS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.7
+        )
+        
+        self.networks[NetworkType.ATTENTION].connect_to(
+            target_network=NetworkType.THOUGHTS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.6
+        )
+        
+        # Emotions influence many networks
+        self.networks[NetworkType.EMOTIONS].connect_to(
+            target_network=NetworkType.MOODS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.8
+        )
+        
+        self.networks[NetworkType.EMOTIONS].connect_to(
+            target_network=NetworkType.DRIVES.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.6
+        )
+        
+        self.networks[NetworkType.EMOTIONS].connect_to(
+            target_network=NetworkType.CONSCIOUSNESS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.7
+        )
+        
+        self.networks[NetworkType.EMOTIONS].connect_to(
+            target_network=NetworkType.THOUGHTS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.6
+        )
+        
+        # Unconsciousness connects to archetypes and consciousness
+        self.networks[NetworkType.UNCONSCIOUSNESS].connect_to(
+            target_network=NetworkType.ARCHETYPES.value,
+            connection_type=ConnectionType.ASSOCIATIVE,
+            initial_strength=0.6
+        )
+        
+        self.networks[NetworkType.UNCONSCIOUSNESS].connect_to(
+            target_network=NetworkType.CONSCIOUSNESS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.4
+        )
+        
+        self.networks[NetworkType.UNCONSCIOUSNESS].connect_to(
+            target_network=NetworkType.THOUGHTS.value,
+            connection_type=ConnectionType.ASSOCIATIVE,
+            initial_strength=0.5
+        )
+        
+        # Instincts connect to drives and emotions
+        self.networks[NetworkType.INSTINCTS].connect_to(
+            target_network=NetworkType.DRIVES.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.7
+        )
+        
+        self.networks[NetworkType.INSTINCTS].connect_to(
+            target_network=NetworkType.EMOTIONS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.6
+        )
+        
+        # Drives connect to consciousness and thoughts
+        self.networks[NetworkType.DRIVES].connect_to(
+            target_network=NetworkType.CONSCIOUSNESS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.5
+        )
+        
+        self.networks[NetworkType.DRIVES].connect_to(
+            target_network=NetworkType.THOUGHTS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.6
+        )
+        
+        # Moods influence emotions and thoughts
+        self.networks[NetworkType.MOODS].connect_to(
+            target_network=NetworkType.EMOTIONS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.5,
+            bidirectional=True
+        )
+        
+        self.networks[NetworkType.MOODS].connect_to(
+            target_network=NetworkType.THOUGHTS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.4
+        )
+        
+        # Consciousness connects to thoughts
+        self.networks[NetworkType.CONSCIOUSNESS].connect_to(
+            target_network=NetworkType.THOUGHTS.value,
+            connection_type=ConnectionType.EXCITATORY,
+            initial_strength=0.8,
+            bidirectional=True
+        )
+        
+        # Archetypes connect to consciousness and emotions
+        self.networks[NetworkType.ARCHETYPES].connect_to(
+            target_network=NetworkType.CONSCIOUSNESS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.4
+        )
+        
+        self.networks[NetworkType.ARCHETYPES].connect_to(
+            target_network=NetworkType.EMOTIONS.value,
+            connection_type=ConnectionType.MODULATORY,
+            initial_strength=0.5
+        )
+        
+        logger.info("Established connections between neural networks")
+    
+    def process_mother_response(self, mother_response: MotherResponse) -> None:
+        """Process a response from the mother, updating internal state through neural networks"""
+        logger.info("Processing mother's response through neural architecture")
+        
+        # Update emotional state directly based on mother's response
         self.emotional_state.update_from_mother_response(mother_response)
         
-        # Process verbal content - learn vocabulary
+        # Process through perception network first - this is the entry point
+        perception_input = {
+            "verbal": mother_response.verbal.text,
+            "non_verbal": {
+                "physical_actions": mother_response.non_verbal.physical_actions,
+                "facial_expression": mother_response.non_verbal.facial_expression,
+                "proximity": mother_response.non_verbal.proximity
+            },
+            "emotional_context": {
+                "primary": mother_response.emotional.primary_emotion,
+                "intensity": mother_response.emotional.intensity,
+                "secondary": mother_response.emotional.secondary_emotion
+            }
+        }
+        
+        self.networks[NetworkType.PERCEPTION].receive_input(perception_input, "mother")
+        perception_output = self.networks[NetworkType.PERCEPTION].process_inputs()
+        
+        # Process verbal content through language systems
         self._process_verbal_content(mother_response.verbal.text, mother_response.teaching)
         
-        # Update network activations based on response
-        self._update_networks_from_response(mother_response)
+        # Propagate perception output to connected networks
+        self._propagate_network_outputs(NetworkType.PERCEPTION, perception_output)
         
-        # Update developmental metrics
-        self._update_metrics(mother_response)
+        # Process through attention network
+        attention_input = {
+            "percepts": perception_output.get("percepts", []),
+            "emotional_state": {
+                emotion: getattr(self.emotional_state, emotion)
+                for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+                if getattr(self.emotional_state, emotion) > 0.1
+            }
+        }
+        
+        self.networks[NetworkType.ATTENTION].receive_input(attention_input, NetworkType.PERCEPTION.value)
+        attention_output = self.networks[NetworkType.ATTENTION].process_inputs()
+        
+        # Propagate attention output to connected networks
+        self._propagate_network_outputs(NetworkType.ATTENTION, attention_output)
+        
+        # Process through emotions network
+        emotions_input = {
+            "stimuli": perception_output.get("percepts", []),
+            "mother_emotion": {
+                "emotion": mother_response.emotional.primary_emotion,
+                "intensity": mother_response.emotional.intensity
+            },
+            "interpersonal": {
+                "mother_emotion": mother_response.emotional.primary_emotion,
+                "intensity": mother_response.emotional.intensity,
+                "mother_actions": mother_response.non_verbal.physical_actions
+            }
+        }
+        
+        self.networks[NetworkType.EMOTIONS].receive_input(emotions_input, NetworkType.PERCEPTION.value)
+        emotions_output = self.networks[NetworkType.EMOTIONS].process_inputs()
+        
+        # Propagate emotions output to connected networks
+        self._propagate_network_outputs(NetworkType.EMOTIONS, emotions_output)
+        
+        # Process through instincts network
+        instincts_input = {
+            "stimuli": perception_output.get("percepts", []),
+            "percepts": perception_output.get("percepts", [])
+        }
+        
+        self.networks[NetworkType.INSTINCTS].receive_input(instincts_input, NetworkType.PERCEPTION.value)
+        instincts_output = self.networks[NetworkType.INSTINCTS].process_inputs()
+        
+        # Propagate instincts output to connected networks
+        self._propagate_network_outputs(NetworkType.INSTINCTS, instincts_output)
+        
+        # Process through drives network
+        drives_input = {
+            "mother_response": {
+                "verbal": mother_response.verbal.text,
+                "non_verbal": {
+                    "physical_actions": mother_response.non_verbal.physical_actions
+                }
+            },
+            "emotional_state": {
+                emotion: getattr(self.emotional_state, emotion)
+                for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+                if getattr(self.emotional_state, emotion) > 0.1
+            }
+        }
+        
+        self.networks[NetworkType.DRIVES].receive_input(drives_input, "mother")
+        drives_output = self.networks[NetworkType.DRIVES].process_inputs()
+        
+        # Propagate drives output to connected networks
+        self._propagate_network_outputs(NetworkType.DRIVES, drives_output)
+        
+        # Process through unconsciousness network
+        unconscious_input = {
+            "stimuli": perception_output.get("percepts", []),
+            "emotional_state": {
+                emotion: getattr(self.emotional_state, emotion)
+                for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+                if getattr(self.emotional_state, emotion) > 0.1
+            }
+        }
+        
+        self.networks[NetworkType.UNCONSCIOUSNESS].receive_input(unconscious_input, NetworkType.PERCEPTION.value)
+        unconscious_output = self.networks[NetworkType.UNCONSCIOUSNESS].process_inputs()
+        
+        # Propagate unconsciousness output to connected networks
+        self._propagate_network_outputs(NetworkType.UNCONSCIOUSNESS, unconscious_output)
+        
+        # Process through archetypes network
+        archetypes_input = {
+            "stimuli": perception_output.get("percepts", []),
+            "emotional_state": {
+                emotion: getattr(self.emotional_state, emotion)
+                for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+                if getattr(self.emotional_state, emotion) > 0.1
+            },
+            "triggered_concepts": unconscious_output.get("triggered_concepts", [])
+        }
+        
+        self.networks[NetworkType.ARCHETYPES].receive_input(archetypes_input, NetworkType.UNCONSCIOUSNESS.value)
+        archetypes_output = self.networks[NetworkType.ARCHETYPES].process_inputs()
+        
+        # Propagate archetypes output to connected networks
+        self._propagate_network_outputs(NetworkType.ARCHETYPES, archetypes_output)
+        
+        # Process through moods network
+        moods_input = {
+            "emotional_state": emotions_output.get("emotional_state", {}),
+            "environment": {
+                "novelty": len(perception_output.get("percepts", [])) / 10.0
+            }
+        }
+        
+        self.networks[NetworkType.MOODS].receive_input(moods_input, NetworkType.EMOTIONS.value)
+        moods_output = self.networks[NetworkType.MOODS].process_inputs()
+        
+        # Propagate moods output to connected networks
+        self._propagate_network_outputs(NetworkType.MOODS, moods_output)
+        
+        # Process through consciousness network (integrates many inputs)
+        consciousness_input = {
+            "perceptions": perception_output.get("percepts", []),
+            "emotions": emotions_output.get("emotional_state", {}),
+            "attention_focus": attention_output.get("focus_objects", [])
+        }
+        
+        self.networks[NetworkType.CONSCIOUSNESS].receive_input(consciousness_input, "integration")
+        consciousness_output = self.networks[NetworkType.CONSCIOUSNESS].process_inputs()
+        
+        # Propagate consciousness output to connected networks
+        self._propagate_network_outputs(NetworkType.CONSCIOUSNESS, consciousness_output)
+        
+        # Finally, process through thoughts network (final integration)
+        thoughts_input = {
+            "perceptions": perception_output.get("percepts", []),
+            "consciousness": {
+                "active_contents": consciousness_output.get("active_contents", {}),
+                "self_representations": consciousness_output.get("self_representations", [])
+            },
+            "emotional_state": emotions_output.get("emotional_state", {}),
+            "vocabulary": list(self.vocabulary_manager.lexical_memory.words.keys())
+        }
+        
+        self.networks[NetworkType.THOUGHTS].receive_input(thoughts_input, NetworkType.CONSCIOUSNESS.value)
+        thoughts_output = self.networks[NetworkType.THOUGHTS].process_inputs()
         
         # Add to recent interactions
         self.recent_interactions.append({
             "timestamp": datetime.now().isoformat(),
             "mother_verbal": mother_response.verbal.text,
             "mother_emotion": mother_response.emotional.primary_emotion,
-            "child_emotion": self.emotional_state.dominant_emotion()[0]
+            "child_emotion": self.emotional_state.dominant_emotion()[0],
+            "thoughts": thoughts_output.get("thoughts", [])
         })
+        
         if len(self.recent_interactions) > 20:
             self.recent_interactions.pop(0)
         
@@ -416,12 +727,49 @@ class NeuralChild:
             capabilities.grammar_complexity
         )
         
-        logger.info(f"Updated state - vocabulary size: {len(self.vocabulary_manager.lexical_memory.words)}, "
-                  f"emotion: {self.emotional_state.dominant_emotion()[0]}, "
-                  f"language stage: {capabilities.stage}")
+        # Update developmental metrics
+        self._update_metrics(mother_response)
+        
+        # Update network development based on age
+        self._update_network_development()
+        
+        logger.info(f"Processed mother's response through neural architecture")
+        logger.info(f"Current emotional state: {self.emotional_state.dominant_emotion()[0]}")
+        logger.info(f"Generated thoughts: {thoughts_output.get('thoughts', [])}")
+    
+    def _propagate_network_outputs(self, source_network: NetworkType, output_data: Dict[str, Any]) -> None:
+        """Propagate outputs from one network to its connected networks"""
+        # Get the source network instance
+        source = self.networks[source_network]
+        
+        # For each connection from this network
+        for target_name, connection in source.connections.items():
+            # Find the target network by name
+            target_network = None
+            for network_type, network in self.networks.items():
+                if network.name == target_name:
+                    target_network = network
+                    break
+            
+            if target_network:
+                # Prepare data based on connection type
+                signal_strength = connection.strength * source.state.activation
+                
+                propagated_data = {
+                    "source_activation": source.state.activation,
+                    "signal_strength": signal_strength,
+                    "source_network": source.name,
+                    "connection_type": connection.connection_type.value
+                }
+                
+                # Add output data from source network
+                propagated_data.update(output_data)
+                
+                # Send to target network
+                target_network.receive_input(propagated_data, source.name)
     
     def _process_verbal_content(self, text: str, teaching_elements) -> None:
-        """Extract and learn from verbal content"""
+        """Extract and learn from verbal content through language systems"""
         # Process general speech with vocabulary manager
         emotional_state_dict = {
             emotion: getattr(self.emotional_state, emotion)
@@ -470,51 +818,6 @@ class NeuralChild:
             
             logger.info(f"Learned new concept: {concept_item.concept_name}")
     
-    def _update_networks_from_response(self, mother_response: MotherResponse) -> None:
-        """Update neural network activations based on mother's response"""
-        # Perception is always activated when processing input
-        self.networks[NetworkType.PERCEPTION].update_activation(0.8)
-        
-        # Activate emotional networks based on emotional content
-        emotion_intensity = mother_response.emotional.intensity
-        self.networks[NetworkType.EMOTIONS].update_activation(emotion_intensity * 0.9)
-        self.networks[NetworkType.MOODS].update_activation(emotion_intensity * 0.3)
-        
-        # Activate cognitive networks based on teaching complexity
-        teaching_complexity = len(mother_response.teaching.vocabulary) + len(mother_response.teaching.concepts)
-        teaching_complexity = min(1.0, teaching_complexity * 0.1)  # Normalize
-        
-        self.networks[NetworkType.ATTENTION].update_activation(teaching_complexity * 0.7)
-        self.networks[NetworkType.CONSCIOUSNESS].update_activation(teaching_complexity * 0.5)
-        self.networks[NetworkType.THOUGHTS].update_activation(teaching_complexity * 0.4)
-        
-        # Subconscious processing is always happening at a low level
-        self.networks[NetworkType.UNCONSCIOUSNESS].update_activation(0.2)
-        self.networks[NetworkType.ARCHETYPES].update_activation(0.1)
-        
-        # Drive activation based on mother's approach
-        if "nurture" in mother_response.parenting.approach.lower():
-            self.networks[NetworkType.DRIVES].update_activation(0.3)
-            self.networks[NetworkType.INSTINCTS].update_activation(0.4)
-        elif "discipline" in mother_response.parenting.approach.lower():
-            self.networks[NetworkType.DRIVES].update_activation(0.6)
-            self.networks[NetworkType.INSTINCTS].update_activation(0.7)
-        else:
-            self.networks[NetworkType.DRIVES].update_activation(0.2)
-            self.networks[NetworkType.INSTINCTS].update_activation(0.3)
-        
-        # Update training progress for all networks
-        for network in self.networks.values():
-            if network.activation > 0.1:  # Only networks with meaningful activation learn
-                progress_increment = network.activation * network.learning_rate
-                network.training_progress = min(1.0, network.training_progress + progress_increment)
-                
-                # As networks train more, error rate decreases
-                network.error_rate = max(0.01, network.error_rate * 0.999)
-                
-                # Confidence increases with training progress
-                network.confidence = min(1.0, network.training_progress * 0.8 + 0.1)
-    
     def _update_metrics(self, mother_response: MotherResponse) -> None:
         """Update developmental metrics based on interaction"""
         # Update interaction count
@@ -534,10 +837,8 @@ class NeuralChild:
         attention_increment = 0.001 * mother_response.parenting.adaptation_to_development
         self.metrics.attention_span = min(1.0, self.metrics.attention_span + attention_increment)
         
-        # Update emotional stability
-        if "regulate" in mother_response.parenting.intention.lower():
-            stability_increment = 0.002
-            self.metrics.emotional_stability = min(1.0, self.metrics.emotional_stability + stability_increment)
+        # Update emotional stability based on emotional network state
+        self.metrics.emotional_stability = min(1.0, self.networks[NetworkType.EMOTIONS].emotional_regulation)
         
         # Update social awareness if relevant teaching
         social_values = ["sharing", "empathy", "cooperation", "friendship"]
@@ -547,16 +848,56 @@ class NeuralChild:
                 self.metrics.social_awareness = min(1.0, self.metrics.social_awareness + social_increment)
                 break
         
-        # Update abstraction capability based on concept teaching
-        if mother_response.teaching.concepts:
-            abstraction_increment = 0.002 * len(mother_response.teaching.concepts)
-            self.metrics.abstraction_capability = min(1.0, self.metrics.abstraction_capability + abstraction_increment)
+        # Update abstraction capability based on thoughts network
+        self.metrics.abstraction_capability = min(1.0, self.networks[NetworkType.THOUGHTS].abstraction_level)
         
         # Validate development stage against age
         self.metrics = self.metrics.model_validate(self.metrics.model_dump())
     
+    def _update_network_development(self) -> None:
+        """Update all networks' developmental parameters based on age and vocabulary"""
+        # Update each network with appropriate developmental parameters
+        self.networks[NetworkType.ARCHETYPES].update_development(
+            age_days=self.metrics.age_days,
+            emotional_state={
+                emotion: getattr(self.emotional_state, emotion)
+                for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+                if getattr(self.emotional_state, emotion) > 0.1
+            }
+        )
+        
+        self.networks[NetworkType.INSTINCTS].update_development(age_days=self.metrics.age_days)
+        
+        self.networks[NetworkType.UNCONSCIOUSNESS].update_development(age_days=self.metrics.age_days)
+        
+        self.networks[NetworkType.DRIVES].update_developmental_stage(self.metrics.development_stage.value)
+        
+        self.networks[NetworkType.EMOTIONS].update_development(age_days=self.metrics.age_days)
+        
+        self.networks[NetworkType.MOODS].update_development(age_days=self.metrics.age_days)
+        
+        self.networks[NetworkType.ATTENTION].update_development(
+            age_days=self.metrics.age_days,
+            interactions_count=self.metrics.total_interactions
+        )
+        
+        self.networks[NetworkType.PERCEPTION].update_development(
+            age_days=self.metrics.age_days, 
+            vocabulary_size=self.metrics.vocabulary_size
+        )
+        
+        self.networks[NetworkType.CONSCIOUSNESS].update_development(
+            age_days=self.metrics.age_days,
+            vocabulary_size=self.metrics.vocabulary_size
+        )
+        
+        self.networks[NetworkType.THOUGHTS].update_development(
+            age_days=self.metrics.age_days,
+            vocabulary_size=self.metrics.vocabulary_size
+        )
+    
     def generate_response(self) -> str:
-        """Generate a verbal response based on current developmental state"""
+        """Generate a verbal response based on current developmental state and neural activation"""
         # Get language capabilities
         capabilities = self.language_tracker.get_capabilities()
         
@@ -566,11 +907,17 @@ class NeuralChild:
             for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
         }
         
+        # Get current thoughts that might influence response
+        thoughts = []
+        if NetworkType.THOUGHTS in self.networks:
+            thought_output = self.networks[NetworkType.THOUGHTS]._prepare_output_data()
+            thoughts = thought_output.get("thoughts", [])
+        
         # Generate response using language production module
         response = self.language_production.generate_utterance(
             capabilities=capabilities,
             emotional_state=emotional_state_dict,
-            context=None,  # Could use context from recent interactions
+            context=", ".join(thoughts) if thoughts else None,
             response_to=self.recent_interactions[-1]["mother_verbal"] if self.recent_interactions else None
         )
         
@@ -600,14 +947,35 @@ class NeuralChild:
             attention_span=self.metrics.attention_span
         )
     
+    def interact_with_mother(self) -> Tuple[str, str]:
+        """Complete interaction cycle with mother"""
+        # Get current child state
+        child_state = self.get_child_state()
+        
+        # Get mother's response
+        mother_response = self.mother.respond_to_child(child_state)
+        
+        # Process mother's response
+        self.process_mother_response(mother_response)
+        
+        # Return the interaction for display
+        return child_state.message, mother_response.verbal.text
+    
     def is_ready_for_chat(self) -> bool:
         """Check if the child is developed enough for chat interactions"""
         return self.metrics.age_days >= self.config.chat_readiness_threshold
     
     def get_active_networks(self) -> List[str]:
         """Get a list of currently active neural networks"""
-        return [str(network_type.value) for network_type, network in self.networks.items() 
-                if network.activation > 0.3]
+        return [network_type.value for network_type, network in self.networks.items() 
+                if network.state.activation > 0.3]
+    
+    def get_network_states(self) -> Dict[str, Dict[str, Any]]:
+        """Get states of all neural networks for visualization"""
+        return {
+            network_type.value: network.get_state() 
+            for network_type, network in self.networks.items()
+        }
     
     def save_state(self, filepath: Optional[Path] = None) -> None:
         """Save the current state of the neural child"""
@@ -617,12 +985,24 @@ class NeuralChild:
         # Save vocabulary manager state
         self.vocabulary_manager.save_state()
         
+        # Prepare network states for serialization
+        network_states = {}
+        for network_type, network in self.networks.items():
+            network_states[network_type.value] = {
+                "network_type": network_type.value,
+                "activation": network.state.activation,
+                "confidence": network.state.confidence,
+                "learning_rate": network.state.learning_rate,
+                "training_progress": network.state.training_progress,
+                "last_active": network.state.last_active,
+                "error_rate": network.state.error_rate
+            }
+        
         # Prepare state for serialization
         state = {
             "metrics": self.metrics.model_dump(),
             "emotional_state": self.emotional_state.model_dump(),
-            "networks": {str(network_type.value): network.model_dump() 
-                        for network_type, network in self.networks.items()},
+            "networks": network_states,
             "config": self.config.model_dump(),
             "recent_interactions": self.recent_interactions,
             "language_capabilities": self.language_tracker.get_capabilities().model_dump()
@@ -630,7 +1010,7 @@ class NeuralChild:
         
         # Save to file
         with open(filepath, 'w') as f:
-            json.dump(state, f, indent=2, cls=DateTimeEncoder)  # Use our custom encoder here
+            json.dump(state, f, indent=2, cls=DateTimeEncoder)
         
         logger.info(f"Neural child state saved to {filepath}")
     
@@ -643,14 +1023,20 @@ class NeuralChild:
         with open(filepath, 'r') as f:
             state = json.load(f)
         
-        # Restore state using Pydantic validation (handles datetime strings automatically)
+        # Restore state using Pydantic validation
         self.metrics = DevelopmentalMetrics.model_validate(state["metrics"])
         self.emotional_state = EmotionalState.model_validate(state["emotional_state"])
         
-        # Restore networks
+        # Restore network states
         for network_type_str, network_data in state["networks"].items():
             network_type = NetworkType(network_type_str)
-            self.networks[network_type] = NetworkActivationLevel(**network_data)
+            if network_type in self.networks:
+                # Update network state
+                self.networks[network_type].state.activation = network_data["activation"]
+                self.networks[network_type].state.confidence = network_data["confidence"]
+                self.networks[network_type].state.learning_rate = network_data["learning_rate"]
+                self.networks[network_type].state.training_progress = network_data["training_progress"]
+                self.networks[network_type].state.error_rate = network_data["error_rate"]
         
         # Restore config
         self.config = ChildConfig(**state["config"])
@@ -663,83 +1049,39 @@ class NeuralChild:
             self.language_tracker = DevelopmentTracker(initial_age_days=self.metrics.age_days)
             self.language_tracker.capabilities = LanguageCapabilities.model_validate(state["language_capabilities"])
         
-        # Note: Vocabulary state would be loaded separately
+        # Update network development parameters based on loaded age
+        self._update_network_development()
         
         logger.info(f"Neural child state loaded from {filepath}")
-        logger.info(f"Age: {self.metrics.age_days:.1f} days, Vocabulary: {len(self.vocabulary_manager.lexical_memory.words)} words")
+        logger.info(f"Age: {self.metrics.age_days:.1f} days, Vocabulary: {self.metrics.vocabulary_size} words")
 
 # ========== EXAMPLE USAGE ==========
 
 def create_test_child() -> NeuralChild:
     """Create a test instance of the neural child"""
-    return NeuralChild(simulation_speed=2.0)  # Faster development for testing
+    return NeuralChild(simulation_speed=2.0)
 
 if __name__ == "__main__":
     # Simple test to demonstrate usage
     child = create_test_child()
     
-    # Example of simple "development" through 5 interactions
+    # Interaction cycle
+    print("\n=== Beginning Neural Child Interaction ===")
+    
     for i in range(5):
         print(f"\n--- Interaction {i+1} ---")
         
-        # Create a simple mock mother response
-        mock_response = MotherResponse(
-            verbal={
-                "text": "Hello my little one! Can you say 'ball'? Ball is round and fun to play with.",
-                "tone": "gentle",
-                "complexity_level": 0.3
-            },
-            emotional={
-                "primary_emotion": "joy",
-                "intensity": 0.8,
-                "secondary_emotion": "love",
-                "patience_level": 0.9
-            },
-            non_verbal={
-                "physical_actions": ["smiles", "points to a ball"],
-                "facial_expression": "warm smile",
-                "proximity": "close"
-            },
-            teaching={
-                "vocabulary": [
-                    {
-                        "word": "ball",
-                        "simple_definition": "a round toy you can throw and catch",
-                        "example_usage": "The ball is red."
-                    }
-                ],
-                "concepts": [],
-                "values": ["play", "learning"],
-                "corrections": []
-            },
-            perception={
-                "child_emotion": "curiosity",
-                "child_needs": ["attention", "learning"],
-                "misinterpretations": None
-            },
-            parenting={
-                "intention": "teach new vocabulary",
-                "approach": "nurturing guidance",
-                "consistency": 0.9,
-                "adaptation_to_development": 0.85
-            },
-            context_awareness={
-                "references_previous_interactions": None,
-                "environment_factors": ["playtime"],
-                "recognizes_progress": True
-            }
-        )
+        # Complete interaction cycle with mother
+        child_message, mother_message = child.interact_with_mother()
         
-        # Process the mother's response
-        child.process_mother_response(mock_response)
-        
-        # Generate and print the child's response
-        child_state = child.get_child_state()
-        print(f"Child age: {child_state.age_days:.1f} days")
-        print(f"Child emotional state: {child.emotional_state.dominant_emotion()[0]}")
-        print(f"Child vocabulary size: {len(child.vocabulary_manager.lexical_memory.words)}")
-        print(f"Child response: '{child_state.message}'")
+        # Display the interaction
+        print(f"Child age: {child.metrics.age_days:.1f} days")
+        print(f"Child: '{child_message}'")
+        print(f"Mother: '{mother_message}'")
+        print(f"Child emotion: {child.emotional_state.dominant_emotion()[0]}")
+        print(f"Vocabulary size: {child.metrics.vocabulary_size}")
         print(f"Active networks: {child.get_active_networks()}")
     
-    # Save the state
+    # Save the final state
     child.save_state()
+    print("\nNeural child state saved!")
