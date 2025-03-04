@@ -199,7 +199,6 @@ class InstinctsNetwork(BaseNetwork):
     
     def process_inputs(self) -> Dict[str, Any]:
         """Process inputs to trigger instinctual responses"""
-        # Reset active instincts for this cycle
         self.active_instincts = []
         
         if not self.input_buffer:
@@ -208,19 +207,18 @@ class InstinctsNetwork(BaseNetwork):
         # Collect all stimuli
         all_stimuli = []
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
+            source = input_item.get("source", "unknown")
             
             # Extract stimuli from various sources
-            if "stimuli" in data:
-                all_stimuli.extend(data["stimuli"])
-            elif "percepts" in data:
-                all_stimuli.extend(data["percepts"])
-            elif "stimulus" in data:
-                all_stimuli.append(data["stimulus"])
+            all_stimuli.extend(data.get("stimuli", []))
+            all_stimuli.extend(data.get("percepts", []))
+            if "stimulus" in data:
+                all_stimuli.append(data.get("stimulus"))
             
             # Process any direct instinct activations
-            if "activate_instinct" in data:
-                instinct_name = data["activate_instinct"]
+            instinct_name = data.get("activate_instinct")
+            if instinct_name:
                 for instinct in self.instincts:
                     if instinct.name == instinct_name and instinct.strength > 0.2:
                         response, strength = instinct.activate()

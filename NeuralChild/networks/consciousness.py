@@ -68,9 +68,7 @@ class ConsciousnessNetwork(BaseNetwork):
         logger.info(f"Initialized consciousness network with self-awareness {self_awareness_base}")
     
     def process_inputs(self) -> Dict[str, Any]:
-        """
-        Process inputs from other networks to create the current state of consciousness
-        """
+        """Process inputs from other networks to create the current state of consciousness"""
         if not self.input_buffer:
             return {}
         
@@ -79,33 +77,31 @@ class ConsciousnessNetwork(BaseNetwork):
         thoughts = []
         emotions = {}
         attention_focus = []
-        
         network_activations = {}
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
             # Track network activations
-            if "activation" in data:
-                network_activations[source] = data["activation"]
+            network_activations[source] = data.get("activation", 0.0)
             
             # Process perceptions
-            if source == NetworkType.PERCEPTION.value and "percepts" in data:
-                perceptions.extend(data["percepts"])
+            if source == NetworkType.PERCEPTION.value:
+                perceptions.extend(data.get("percepts", []))
             
             # Process emotions
-            if source == NetworkType.EMOTIONS.value and "emotional_state" in data:
-                for emotion, intensity in data["emotional_state"].items():
-                    emotions[emotion] = intensity
+            if source == NetworkType.EMOTIONS.value:
+                emotional_state = data.get("emotional_state", {})
+                emotions.update(emotional_state)
             
             # Process thoughts
-            if source == NetworkType.THOUGHTS.value and "thoughts" in data:
-                thoughts.extend(data["thoughts"])
+            if source == NetworkType.THOUGHTS.value:
+                thoughts.extend(data.get("thoughts", []))
             
             # Process attention focus
-            if source == NetworkType.ATTENTION.value and "focus_objects" in data:
-                attention_focus.extend(data["focus_objects"])
+            if source == NetworkType.ATTENTION.value:
+                attention_focus.extend(data.get("focus_objects", []))
         
         # Apply attention filter - consciousness primarily contains what's attended to
         filtered_perceptions = []

@@ -105,29 +105,30 @@ class UnconsciousnessNetwork(BaseNetwork):
         perceptual_context = []
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
             # Process percepts
-            if source == NetworkType.PERCEPTION.value and "percepts" in data:
-                stimuli.extend(data["percepts"])
-                perceptual_context = data["percepts"]
+            if source == NetworkType.PERCEPTION.value:
+                percepts = data.get("percepts", [])
+                stimuli.extend(percepts)
+                perceptual_context = percepts
             
             # Process emotional states
-            if source == NetworkType.EMOTIONS.value and "emotional_state" in data:
-                emotional_context = data["emotional_state"]
+            if source == NetworkType.EMOTIONS.value:
+                emotional_context.update(data.get("emotional_state", {}))
             
             # Process consciousness contents
-            if source == NetworkType.CONSCIOUSNESS.value and "active_contents" in data:
-                for category, contents in data["active_contents"].items():
-                    if isinstance(contents, list):
-                        stimuli.extend(contents)
-                    elif isinstance(contents, dict):
-                        stimuli.extend(contents.keys())
+            if source == NetworkType.CONSCIOUSNESS.value:
+                contents = data.get("active_contents", {})
+                for category, values in contents.items():
+                    if isinstance(values, list):
+                        stimuli.extend(values)
+                    elif isinstance(values, dict):
+                        stimuli.extend(values.keys())
             
             # Process direct stimuli
-            if "stimuli" in data:
-                stimuli.extend(data["stimuli"])
+            stimuli.extend(data.get("stimuli", []))
         
         # Trim duplicates
         stimuli = list(set(stimuli))

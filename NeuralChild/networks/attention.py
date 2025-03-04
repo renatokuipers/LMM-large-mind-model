@@ -60,20 +60,25 @@ class AttentionNetwork(BaseNetwork):
         emotional_state = {}
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
+            source = input_item.get("source", "unknown")
             
             # Extract stimuli - could be objects, words, concepts, etc.
-            if "stimuli" in data and isinstance(data["stimuli"], list):
-                all_stimuli.extend(data["stimuli"])
-            elif "vocabulary" in data and isinstance(data["vocabulary"], list):
-                all_stimuli.extend(data["vocabulary"])
-            elif "concepts" in data and isinstance(data["concepts"], list):
-                all_stimuli.extend(data["concepts"])
+            stimuli = data.get("stimuli", [])
+            if isinstance(stimuli, list):
+                all_stimuli.extend(stimuli)
+            
+            vocabulary = data.get("vocabulary", [])
+            if isinstance(vocabulary, list):
+                all_stimuli.extend(vocabulary)
+            
+            concepts = data.get("concepts", [])
+            if isinstance(concepts, list):
+                all_stimuli.extend(concepts)
             
             # Extract emotional state which affects attention
-            if "emotional_state" in data:
-                for emotion, intensity in data["emotional_state"].items():
-                    emotional_state[emotion] = intensity
+            emotional_data = data.get("emotional_state", {})
+            emotional_state.update(emotional_data)
         
         # Update attention scores for all stimuli
         self._update_attention_scores(all_stimuli, emotional_state)

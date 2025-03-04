@@ -103,36 +103,39 @@ class EmotionsNetwork(BaseNetwork):
     
     def process_inputs(self) -> Dict[str, Any]:
         """Process inputs to generate emotional responses"""
-        # Apply emotional decay based on time
         self._apply_emotional_decay()
         
         if not self.input_buffer:
             return self._calculate_activation()
         
-        # Process each input based on source
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
             # Process perceptual inputs
-            if source == NetworkType.PERCEPTION.value and "percepts" in data:
-                self._process_perceptual_input(data["percepts"], source)
+            if source == NetworkType.PERCEPTION.value:
+                self._process_perceptual_input(data.get("percepts", []), source)
             
             # Process drive inputs
-            elif source == NetworkType.DRIVES.value and "drive_levels" in data:
-                self._process_drive_input(data["drive_levels"], source)
+            elif source == NetworkType.DRIVES.value:
+                drive_levels = data.get("drive_levels", {})
+                self._process_drive_input(drive_levels, source)
             
-            # Process interpersonal inputs (like mother's responses)
-            elif "interpersonal" in data:
-                self._process_interpersonal_input(data["interpersonal"], source)
+            # Process interpersonal inputs
+            interpersonal_data = data.get("interpersonal", {})
+            if interpersonal_data:
+                self._process_interpersonal_input(interpersonal_data, source)
             
             # Process direct emotional stimuli
-            elif "emotional_stimulus" in data:
-                self._process_emotional_stimulus(data["emotional_stimulus"], source)
+            emotional_stimulus = data.get("emotional_stimulus", {})
+            if emotional_stimulus:
+                self._process_emotional_stimulus(emotional_stimulus, source)
             
-            # Special handling for consciousness influence (emotional regulation)
-            elif source == NetworkType.CONSCIOUSNESS.value and "regulation" in data:
-                self._apply_emotional_regulation(data["regulation"])
+            # Special handling for consciousness influence
+            if source == NetworkType.CONSCIOUSNESS.value:
+                regulation_data = data.get("regulation", {})
+                if regulation_data:
+                    self._apply_emotional_regulation(regulation_data)
         
         # Apply emotional complexity (blending of emotions)
         self._apply_emotional_complexity()
@@ -272,19 +275,19 @@ class EmotionsNetwork(BaseNetwork):
             # Emotional contagion - child picks up mother's emotions
             mother_emotion = interpersonal_data["mother_emotion"]
             contagion_strength = 0.4  # How strongly mother's emotions transfer
+            intensity = interpersonal_data.get("intensity", 0.5)  # FIXED! Always define with a default
             
             if mother_emotion in self.emotional_state:
                 # Direct emotional contagion
-                intensity = interpersonal_data.get("intensity", 0.5) * contagion_strength
-                self._update_emotion(mother_emotion, intensity)
+                self._update_emotion(mother_emotion, intensity * contagion_strength)
             
-            # Record emotional event
-            self.emotional_memory.add_event(EmotionEvent(
-                emotion=mother_emotion,
-                intensity=intensity,
-                stimulus="mother",
-                source_network=source
-            ))
+                # Record emotional event
+                self.emotional_memory.add_event(EmotionEvent(
+                    emotion=mother_emotion,
+                    intensity=intensity,
+                    stimulus="mother",
+                    source_network=source
+                ))
         
         if "mother_actions" in interpersonal_data:
             actions = interpersonal_data["mother_actions"]

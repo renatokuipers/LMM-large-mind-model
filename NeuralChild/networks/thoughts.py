@@ -104,55 +104,53 @@ class ThoughtsNetwork(BaseNetwork):
         language_items = []   # Words, phrases that might be used
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
             # Process perceptions
-            if source == NetworkType.PERCEPTION.value and "percepts" in data:
-                perceptions.extend(data["percepts"])
+            if source == NetworkType.PERCEPTION.value:
+                perceptions.extend(data.get("percepts", []))
             
             # Process consciousness contents
             if source == NetworkType.CONSCIOUSNESS.value:
-                if "active_contents" in data:
-                    contents = data["active_contents"]
-                    if isinstance(contents, dict):
-                        for category, items in contents.items():
-                            if isinstance(items, list):
-                                consciousness.extend(items)
-                            elif isinstance(items, dict):
-                                consciousness.extend(items.keys())
-                    elif isinstance(contents, list):
-                        consciousness.extend(contents)
-                if "self_representations" in data:
-                    consciousness.extend(data["self_representations"])
+                contents = data.get("active_contents", {})
+                if isinstance(contents, dict):
+                    for category, items in contents.items():
+                        if isinstance(items, list):
+                            consciousness.extend(items)
+                        elif isinstance(items, dict):
+                            consciousness.extend(items.keys())
+                self_reps = data.get("self_representations", [])
+                consciousness.extend(self_reps)
             
             # Process attention focus
-            if source == NetworkType.ATTENTION.value and "focus_objects" in data:
-                attention_focus.extend(data["focus_objects"])
+            if source == NetworkType.ATTENTION.value:
+                attention_focus.extend(data.get("focus_objects", []))
             
             # Process emotional state
-            if source == NetworkType.EMOTIONS.value and "emotional_state" in data:
-                emotional_state = data["emotional_state"]
+            if source == NetworkType.EMOTIONS.value:
+                emotional_state.update(data.get("emotional_state", {}))
             
             # Process unconscious associations
-            if source == NetworkType.UNCONSCIOUSNESS.value and "triggered_concepts" in data:
-                active_concepts.extend(data["triggered_concepts"])
+            if source == NetworkType.UNCONSCIOUSNESS.value:
+                active_concepts.extend(data.get("triggered_concepts", []))
             
             # Process language inputs
-            if "vocabulary" in data:
-                if isinstance(data["vocabulary"], list):
-                    language_items.extend(data["vocabulary"])
-                elif isinstance(data["vocabulary"], dict):
-                    for category, words in data["vocabulary"].items():
-                        if isinstance(words, list):
-                            language_items.extend(words)
+            vocab_data = data.get("vocabulary", {})
+            if isinstance(vocab_data, list):
+                language_items.extend(vocab_data)
+            elif isinstance(vocab_data, dict):
+                for category, words in vocab_data.items():
+                    if isinstance(words, list):
+                        language_items.extend(words)
             
             # Process direct thought triggers
-            if "thought_trigger" in data:
-                trigger = data["thought_trigger"]
-                if "content" in trigger:
+            trigger = data.get("thought_trigger", {})
+            if trigger:
+                content = trigger.get("content")
+                if content:
                     thought = Thought(
-                        content=trigger["content"],
+                        content=content,
                         confidence=trigger.get("confidence", 0.8),
                         sources=[source],
                         type=trigger.get("type", "general"),
@@ -213,7 +211,7 @@ class ThoughtsNetwork(BaseNetwork):
         perceptions: List[str],
         attention_focus: List[str],
         emotional_state: Dict[str, float]
-    ) -> List[Thought]:
+    ) -> List<Thought:
         """Generate new thoughts based on inputs"""
         new_thoughts = []
         

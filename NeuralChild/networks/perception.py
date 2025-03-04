@@ -92,14 +92,13 @@ class PerceptionNetwork(BaseNetwork):
         contextual_data = {}
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
             # Handle verbal inputs (like mother's speech)
-            if "verbal" in data:
-                content = data["verbal"]
-                if isinstance(content, dict) and "text" in content:
-                    content = content["text"]
+            verbal_data = data.get("verbal", {})
+            if verbal_data:
+                content = verbal_data.get("text", "") if isinstance(verbal_data, dict) else verbal_data
                 raw_inputs.append(PerceptualInput(
                     source=source,
                     content=content,
@@ -108,28 +107,26 @@ class PerceptionNetwork(BaseNetwork):
                 ))
             
             # Handle direct perceptual inputs
-            if "percepts" in data:
-                for percept in data["percepts"]:
-                    if isinstance(percept, str):
-                        raw_inputs.append(PerceptualInput(
-                            source=source,
-                            content=percept,
-                            modality="direct",
-                            salience=0.8
-                        ))
-                    elif isinstance(percept, dict):
-                        raw_inputs.append(PerceptualInput(
-                            source=source,
-                            content=percept.get("content", ""),
-                            modality=percept.get("modality", "direct"),
-                            salience=percept.get("salience", 0.8)
-                        ))
+            for percept in data.get("percepts", []):
+                if isinstance(percept, str):
+                    raw_inputs.append(PerceptualInput(
+                        source=source,
+                        content=percept,
+                        modality="direct",
+                        salience=0.8
+                    ))
+                elif isinstance(percept, dict):
+                    raw_inputs.append(PerceptualInput(
+                        source=source,
+                        content=percept.get("content", ""),
+                        modality=percept.get("modality", "direct"),
+                        salience=percept.get("salience", 0.8)
+                    ))
             
             # Handle visual inputs
-            if "visual" in data:
-                content = data["visual"]
-                if isinstance(content, dict):
-                    content = str(content)
+            visual_data = data.get("visual")
+            if visual_data:
+                content = str(visual_data) if isinstance(visual_data, dict) else visual_data
                 raw_inputs.append(PerceptualInput(
                     source=source,
                     content=content,
@@ -138,12 +135,10 @@ class PerceptionNetwork(BaseNetwork):
                 ))
             
             # Collect emotional context
-            if "emotional_state" in data:
-                contextual_data["emotional_state"] = data["emotional_state"]
+            contextual_data["emotional_state"] = data.get("emotional_state", {})
             
             # Collect attention state
-            if "attention_focus" in data:
-                contextual_data["attention_focus"] = data["attention_focus"]
+            contextual_data["attention_focus"] = data.get("attention_focus", [])
         
         # Process each raw input
         processed_percepts = self._process_raw_inputs(raw_inputs, contextual_data)
@@ -362,14 +357,14 @@ class PerceptionNetwork(BaseNetwork):
             })
         
         return {
-            "activation": self.state.activation,
-            "confidence": self.state.confidence,
-            "network_type": self.network_type.value,
-            "percepts": percept_strings,
-            "sensory_acuity": self.sensory_acuity,
-            "pattern_recognition": self.pattern_recognition,
-            "modality_distribution": modality_counts,
-            "frequent_percepts": frequent_percepts
+            "activation": min(1.0, max(0.0, self.state.activation)),
+            "confidence": min(1.0, max(0.0, self.state.confidence)),
+            "network_type": min(1.0, max(0.0, self.network_type.value)),
+            "percepts": min(1.0, max(0.0, percept_strings)),
+            "sensory_acuity": min(1.0, max(0.0, self.sensory_acuity)),
+            "pattern_recognition": min(1.0, max(0.0, self.pattern_recognition)),
+            "modality_distribution": min(1.0, max(0.0, modality_counts)),
+            "frequent_percepts": min(1.0, max(0.0, frequent_percepts))
         }
     
     def get_current_percepts(self) -> List[str]:

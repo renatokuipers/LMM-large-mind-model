@@ -79,23 +79,26 @@ class ArchetypesNetwork(BaseNetwork):
         contextual_keywords = []
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
+            source = input_item.get("source", "unknown")
             
             # Extract emotional information
-            if "emotional_state" in data:
-                for emotion, intensity in data["emotional_state"].items():
-                    if emotion not in emotional_data:
-                        emotional_data[emotion] = []
-                    emotional_data[emotion].append(intensity)
+            emotional_state = data.get("emotional_state", {})
+            for emotion, intensity in emotional_state.items():
+                if emotion not in emotional_data:
+                    emotional_data[emotion] = []
+                emotional_data[emotion].append(intensity)
             
             # Extract contextual keywords
-            if "context" in data and isinstance(data["context"], str):
-                words = data["context"].lower().split()
+            context = data.get("context", "")
+            if isinstance(context, str):
+                words = context.lower().split()
                 contextual_keywords.extend(words)
             
             # Extract direct vocabulary
-            if "vocabulary" in data and isinstance(data["vocabulary"], list):
-                contextual_keywords.extend(data["vocabulary"])
+            vocabulary = data.get("vocabulary", [])
+            if isinstance(vocabulary, list):
+                contextual_keywords.extend(vocabulary)
         
         # Process emotional data (average intensities)
         emotions = {emotion: sum(values) / len(values) 

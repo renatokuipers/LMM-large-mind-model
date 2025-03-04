@@ -90,38 +90,40 @@ class DrivesNetwork(BaseNetwork):
     
     def process_inputs(self) -> Dict[str, Any]:
         """Process inputs to update drive states"""
-        # Apply natural decay to all drives since last update
         self._apply_natural_decay()
         
         if not self.input_buffer:
             return self._calculate_activation()
         
-        # Process each input item
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
-            # Process mother interactions that satisfy drives
-            if "mother_response" in data:
-                self._process_mother_response(data["mother_response"])
+            # Process mother interactions
+            mother_response = data.get("mother_response", {})
+            if mother_response:
+                self._process_mother_response(mother_response)
             
-            # Process emotional states that influence drives
-            if "emotional_state" in data:
-                self._process_emotional_influence(data["emotional_state"])
+            # Process emotional states
+            emotional_state = data.get("emotional_state", {})
+            if emotional_state:
+                self._process_emotional_influence(emotional_state)
             
-            # Process direct drive satisfaction signals
-            if "drive_satisfaction" in data:
-                for drive, satisfaction in data["drive_satisfaction"].items():
-                    if drive in self.drives:
-                        self.satisfy_drive(drive, satisfaction)
+            # Process direct drive satisfaction
+            drive_satisfaction = data.get("drive_satisfaction", {})
+            for drive, satisfaction in drive_satisfaction.items():
+                if drive in self.drives:
+                    self.satisfy_drive(drive, satisfaction)
             
             # Process environmental inputs
-            if "environment" in data:
-                self._process_environment(data["environment"])
+            environment = data.get("environment", {})
+            if environment:
+                self._process_environment(environment)
             
-            # Handle explicit developmental stage updates
-            if "developmental_stage" in data:
-                self.update_developmental_stage(data["developmental_stage"])
+            # Handle developmental stage updates
+            developmental_stage = data.get("developmental_stage")
+            if developmental_stage:
+                self.update_developmental_stage(developmental_stage)
         
         # Clear input buffer
         self.input_buffer = []

@@ -175,27 +175,26 @@ class MoodsNetwork(BaseNetwork):
         physiological_state = {}
         
         for input_item in self.input_buffer:
-            data = input_item["data"]
+            data = input_item.get("data", {})
             source = input_item.get("source", "unknown")
             
             # Extract emotional state influences
-            if source == NetworkType.EMOTIONS.value and "emotional_state" in data:
-                for emotion, intensity in data["emotional_state"].items():
-                    emotion_influences[emotion] = intensity
+            if source == NetworkType.EMOTIONS.value:
+                emotional_state = data.get("emotional_state", {})
+                emotion_influences.update(emotional_state)
             
             # Extract environmental factors
-            if "environment" in data:
-                for factor, value in data["environment"].items():
-                    environmental_factors[factor] = value
+            env_data = data.get("environment", {})
+            environmental_factors.update(env_data)
             
             # Extract physiological states
-            if "physiological" in data:
-                for state, value in data["physiological"].items():
-                    physiological_state[state] = value
+            phys_data = data.get("physiological", {})
+            physiological_state.update(phys_data)
             
             # Handle explicit mood triggers
-            if "mood_trigger" in data:
-                self._process_mood_trigger(data["mood_trigger"])
+            mood_trigger = data.get("mood_trigger", {})
+            if mood_trigger:
+                self._process_mood_trigger(mood_trigger)
         
         # Update moods based on inputs
         if emotion_influences:
