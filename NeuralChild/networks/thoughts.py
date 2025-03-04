@@ -211,7 +211,7 @@ class ThoughtsNetwork(BaseNetwork):
         perceptions: List[str],
         attention_focus: List[str],
         emotional_state: Dict[str, float]
-    ) -> List<Thought:
+    ) -> List[Thought]:
         """Generate new thoughts based on inputs"""
         new_thoughts = []
         
