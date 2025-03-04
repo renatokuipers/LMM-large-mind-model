@@ -521,7 +521,7 @@ class NeuralChild:
         self.metrics.total_interactions += 1
         
         # Update vocabulary size
-        self.metrics.vocabulary_size = len(self.vocabulary)
+        self.metrics.vocabulary_size = len(self.vocabulary_manager.lexical_memory.words)
         
         # Update age (accelerated for simulation)
         time_increment = 0.1 * self.config.simulated_time_ratio * self.simulation_speed
@@ -737,7 +737,7 @@ if __name__ == "__main__":
         child_state = child.get_child_state()
         print(f"Child age: {child_state.age_days:.1f} days")
         print(f"Child emotional state: {child.emotional_state.dominant_emotion()[0]}")
-        print(f"Child vocabulary size: {len(child.vocabulary)}")
+        print(f"Child vocabulary size: {len(child.vocabulary_manager.lexical_memory.words)}")
         print(f"Child response: '{child_state.message}'")
         print(f"Active networks: {child.get_active_networks()}")
     
