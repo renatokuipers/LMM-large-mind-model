@@ -1,0 +1,206 @@
+{
+  "metrics": {
+    "age_days": 90.0,
+    "vocabulary_size": 3,
+    "development_stage": "early_childhood",
+    "attention_span": 0.10425000000000002,
+    "emotional_stability": 0.1,
+    "social_awareness": 0.0,
+    "abstraction_capability": 0.0,
+    "total_interactions": 5,
+    "total_training_time": 3.75
+  },
+  "emotional_state": {
+    "joy": 0.6877059500000001,
+    "sadness": 0.0,
+    "anger": 0.0,
+    "fear": 0.0,
+    "surprise": 0.0,
+    "disgust": 0.0,
+    "trust": 0.0,
+    "anticipation": 0.0
+  },
+  "vocabulary": {
+    "ball": {
+      "word": "ball",
+      "understanding": 0.5610925187960233,
+      "learned_at": "2025-03-04T16:55:39.383635",
+      "contexts": [
+        "a round toy you can throw and catch",
+        "mother's speech"
+      ],
+      "usage_count": 14,
+      "emotional_associations": {
+        "joy": 0.3565638595469287
+      }
+    },
+    "hello": {
+      "word": "hello",
+      "understanding": 0.142625,
+      "learned_at": "2025-03-04T16:55:39.385633",
+      "contexts": [
+        "mother's speech"
+      ],
+      "usage_count": 2,
+      "emotional_associations": {
+        "joy": 0.19713003500000004
+      }
+    },
+    "to": {
+      "word": "to",
+      "understanding": 0.05,
+      "learned_at": "2025-03-04T16:55:39.386633",
+      "contexts": [
+        "mother's speech"
+      ],
+      "usage_count": 0,
+      "emotional_associations": {
+        "joy": 0.20631178500000003
+      }
+    }
+  },
+  "networks": {
+    "archetypes": {
+      "network_type": "archetypes",
+      "activation": 0.40951000000000004,
+      "confidence": 0.10971528000000001,
+      "learning_rate": 0.01,
+      "training_progress": 0.012144100000000001,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.15071394034897329
+    },
+    "instincts": {
+      "network_type": "instincts",
+      "activation": 1.0,
+      "confidence": 0.12946400000000002,
+      "learning_rate": 0.01,
+      "training_progress": 0.03683000000000001,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.2834449401818099
+    },
+    "unconsciousness": {
+      "network_type": "unconsciousness",
+      "activation": 0.8190200000000001,
+      "confidence": 0.12103056000000001,
+      "learning_rate": 0.01,
+      "training_progress": 0.026288200000000005,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.20297923028927803
+    },
+    "drives": {
+      "network_type": "drives",
+      "activation": 0.8190200000000001,
+      "confidence": 0.12103056000000001,
+      "learning_rate": 0.01,
+      "training_progress": 0.026288200000000005,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.27678531336206197
+    },
+    "emotions": {
+      "network_type": "emotions",
+      "activation": 1.0,
+      "confidence": 0.13776000000000002,
+      "learning_rate": 0.01,
+      "training_progress": 0.047200000000000006,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.2708966377426241
+    },
+    "moods": {
+      "network_type": "moods",
+      "activation": 0.982824,
+      "confidence": 0.125236672,
+      "learning_rate": 0.01,
+      "training_progress": 0.03154584,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.250982923912261
+    },
+    "attention": {
+      "network_type": "attention",
+      "activation": 0.286657,
+      "confidence": 0.106800696,
+      "learning_rate": 0.01,
+      "training_progress": 0.00850087,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.16903638671567392
+    },
+    "perception": {
+      "network_type": "perception",
+      "activation": 1.0,
+      "confidence": 0.13840000000000002,
+      "learning_rate": 0.01,
+      "training_progress": 0.04800000000000001,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.22578907485872757
+    },
+    "consciousness": {
+      "network_type": "consciousness",
+      "activation": 0.20475500000000002,
+      "confidence": 0.10409764,
+      "learning_rate": 0.01,
+      "training_progress": 0.005122050000000001,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.18472892666099802
+    },
+    "thoughts": {
+      "network_type": "thoughts",
+      "activation": 0.163804,
+      "confidence": 0.103278112,
+      "learning_rate": 0.01,
+      "training_progress": 0.0040976400000000005,
+      "last_active": "2025-03-04T16:55:39.387633",
+      "error_rate": 0.2024714549102077
+    }
+  },
+  "config": {
+    "learning_rate_multiplier": 1.0,
+    "emotional_sensitivity": 0.7,
+    "curiosity_factor": 0.8,
+    "memory_retention": 0.6,
+    "simulated_time_ratio": 90.0,
+    "chat_readiness_threshold": 10.0,
+    "network_emphasis": {
+      "emotions": 0.19999999999999996,
+      "perception": 0.19999999999999996,
+      "consciousness": 0.14999999999999997,
+      "instincts": 0.14999999999999997,
+      "attention": 0.09999999999999998,
+      "archetypes": 0.04999999999999999,
+      "drives": 0.04999999999999999,
+      "thoughts": 0.04999999999999999,
+      "moods": 0.029999999999999992,
+      "unconsciousness": 0.019999999999999997
+    }
+  },
+  "recent_interactions": [
+    {
+      "timestamp": "2025-03-04T16:55:39.384633",
+      "mother_verbal": "Hello my little one! Can you say 'ball'? Ball is round and fun to play with.",
+      "mother_emotion": "joy",
+      "child_emotion": "joy"
+    },
+    {
+      "timestamp": "2025-03-04T16:55:39.384633",
+      "mother_verbal": "Hello my little one! Can you say 'ball'? Ball is round and fun to play with.",
+      "mother_emotion": "joy",
+      "child_emotion": "joy"
+    },
+    {
+      "timestamp": "2025-03-04T16:55:39.385633",
+      "mother_verbal": "Hello my little one! Can you say 'ball'? Ball is round and fun to play with.",
+      "mother_emotion": "joy",
+      "child_emotion": "joy"
+    },
+    {
+      "timestamp": "2025-03-04T16:55:39.386633",
+      "mother_verbal": "Hello my little one! Can you say 'ball'? Ball is round and fun to play with.",
+      "mother_emotion": "joy",
+      "child_emotion": "joy"
+    },
+    {
+      "timestamp": "2025-03-04T16:55:39.387633",
+      "mother_verbal": "Hello my little one! Can you say 'ball'? Ball is round and fun to play with.",
+      "mother_emotion": "joy",
+      "child_emotion": "joy"
+    }
+  ]
+}

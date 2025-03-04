@@ -40,6 +40,13 @@ logger = logging.getLogger("NeuralChild")
 
 # ========== DEVELOPMENT ENUMS & MODELS ==========
 
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime objects"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
 class HumanMindDevelopmentStage(str, Enum):
     """
     Stages of Human Mind Development
@@ -669,7 +676,7 @@ class NeuralChild:
         
         # Save to file
         with open(filepath, 'w') as f:
-            json.dump(state, f, indent=2)
+            json.dump(state, f, indent=2, cls=DateTimeEncoder)  # Use our custom encoder here
         
         logger.info(f"Neural child state saved to {filepath}")
     
@@ -682,9 +689,9 @@ class NeuralChild:
         with open(filepath, 'r') as f:
             state = json.load(f)
         
-        # Restore state
-        self.metrics = DevelopmentalMetrics(**state["metrics"])
-        self.emotional_state = EmotionalState(**state["emotional_state"])
+        # Restore state using Pydantic validation (handles datetime strings automatically)
+        self.metrics = DevelopmentalMetrics.model_validate(state["metrics"])
+        self.emotional_state = EmotionalState.model_validate(state["emotional_state"])
         
         # Restore vocabulary
         self.vocabulary = {}
