@@ -10,7 +10,8 @@ from typing import Dict, List
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.DARKLY],
-    suppress_callback_exceptions=True
+    suppress_callback_exceptions=True,
+    prevent_initial_callbacks=True
 )
 server = app.server
 
@@ -330,7 +331,7 @@ def create_task_detail_modal(epic_id, task_id, project_data):
     
 # App layout
 app.layout = html.Div([
-    dcc.Store(id='projects-store', storage_type='local'),
+    dcc.Store(id='projects-store', storage_type='local', data={"projects": {}}),
     dcc.Store(id='current-project-id', storage_type='local'),
     dcc.Store(id='current-epic-id', storage_type='local'),
     

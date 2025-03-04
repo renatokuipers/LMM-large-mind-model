@@ -26,7 +26,7 @@ code_generator_service = CodeGeneratorService(llm_client)
 PROJECTS_FILE = "projects_data.json"
 
 # Helper functions
-def load_projects():
+def load_projects() -> ProjectStore:
     """Load projects from file"""
     try:
         return ProjectStore.load_from_file(PROJECTS_FILE)
@@ -34,56 +34,94 @@ def load_projects():
         print(f"Error loading projects: {str(e)}")
         return ProjectStore()
 
-def save_projects(projects: ProjectStore):
+def save_projects(projects: ProjectStore) -> None:
     """Save projects to file"""
     try:
         projects.save_to_file(PROJECTS_FILE)
     except Exception as e:
         print(f"Error saving projects: {str(e)}")
 
-# Navigation callbacks
+# NAVIGATION CALLBACKS - Split into separate callbacks for each component
+
+# Navigate to projects list
 @callback(
     Output("page-content", "children"),
-    [
-        Input("nav-projects", "n_clicks"),
-        Input("nav-create", "n_clicks"),
-        Input("btn-create-project", "n_clicks"),
-        Input("btn-back-to-projects", "n_clicks"),
-        Input("btn-cancel-project", "n_clicks"),
-        Input({"type": "btn-view-project", "index": dash.ALL}, "n_clicks"),
-    ],
+    [Input("nav-projects", "n_clicks")],
+    [State("projects-store", "data")],
+    prevent_initial_call=True
+)
+def nav_to_projects(n_clicks, projects_data):
+    """Navigate to projects list"""
+    projects = load_projects()
+    projects_dict = json.loads(projects.json()) if projects else {"projects": {}}
+    return create_projects_layout(projects_dict)
+
+# Navigate to create new project form
+@callback(
+    Output("page-content", "children", allow_duplicate=True),
+    [Input("nav-create", "n_clicks")],
+    prevent_initial_call=True
+)
+def nav_to_create(n_clicks):
+    """Navigate to create new project form"""
+    return create_new_project_layout()
+
+# Navigate to create project form from button
+@callback(
+    Output("page-content", "children", allow_duplicate=True),
+    [Input("btn-create-project", "n_clicks")],
+    prevent_initial_call=True
+)
+def create_button_to_form(n_clicks):
+    """Navigate to create project form"""
+    return create_new_project_layout()
+
+# Navigate back to projects list
+@callback(
+    Output("page-content", "children", allow_duplicate=True),
+    [Input("btn-back-to-projects", "n_clicks")],
+    [State("projects-store", "data")],
+    prevent_initial_call=True
+)
+def back_to_projects(n_clicks, projects_data):
+    """Navigate back to projects list"""
+    projects = load_projects()
+    projects_dict = json.loads(projects.json()) if projects else {"projects": {}}
+    return create_projects_layout(projects_dict)
+
+# Cancel project creation and return to projects list
+@callback(
+    Output("page-content", "children", allow_duplicate=True),
+    [Input("btn-cancel-project", "n_clicks")],
+    [State("projects-store", "data")],
+    prevent_initial_call=True
+)
+def cancel_project(n_clicks, projects_data):
+    """Cancel project creation and return to projects list"""
+    projects = load_projects()
+    projects_dict = json.loads(projects.json()) if projects else {"projects": {}}
+    return create_projects_layout(projects_dict)
+
+# View project detail
+@callback(
+    Output("page-content", "children", allow_duplicate=True),
+    [Input({"type": "btn-view-project", "index": dash.ALL}, "n_clicks")],
     [
         State("projects-store", "data"),
-        State("current-project-id", "data"),
     ],
     prevent_initial_call=True
 )
-def navigate(nav_projects, nav_create, btn_create, btn_back, btn_cancel, btn_view, 
-            projects_data, current_project_id):
-    """Handle navigation between pages"""
-    triggered_id = ctx.triggered_id
+def view_project(btn_clicks, projects_data):
+    """Navigate to project detail view"""
+    ctx_triggered = ctx.triggered_id
     
-    # Load projects data
-    projects = load_projects()
-    projects_dict = json.loads(projects.json()) if projects else {"projects": {}}
-    
-    # Navigate to projects list
-    if triggered_id == "nav-projects" or triggered_id == "btn-back-to-projects" or triggered_id == "btn-cancel-project":
-        return create_projects_layout(projects_dict)
-    
-    # Navigate to create new project form
-    elif triggered_id == "nav-create" or triggered_id == "btn-create-project":
-        return create_new_project_layout()
-    
-    # Navigate to project detail
-    elif isinstance(triggered_id, dict) and triggered_id.get("type") == "btn-view-project":
-        project_id = triggered_id.get("index")
-        project_data = projects_dict.get("projects", {}).get(project_id)
+    if isinstance(ctx_triggered, dict) and ctx_triggered.get("type") == "btn-view-project":
+        project_id = ctx_triggered.get("index")
+        project_data = projects_data.get("projects", {}).get(project_id)
         if project_data:
             return create_project_detail_layout(project_id, project_data)
     
-    # Default to projects list
-    return create_projects_layout(projects_dict)
+    return no_update
 
 # Project creation callback
 @callback(
@@ -546,7 +584,7 @@ def open_output_directory(n_clicks, project_id, projects_data):
         return no_update
     
     try:
-        # Open directory in file explorer
+        # Open directory in file explorer (Windows-specific)
         os.startfile(output_dir)
     except Exception as e:
         print(f"Error opening directory: {str(e)}")
