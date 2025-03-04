@@ -1,7 +1,7 @@
 # moods.py
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
-from pydantic import Field
+from pydantic import Field, BaseModel
 import logging
 import random
 import numpy as np
@@ -12,7 +12,7 @@ from networks.network_types import NetworkType, ConnectionType
 
 logger = logging.getLogger("MoodsNetwork")
 
-class MoodState(BaseNetwork):
+class MoodState(BaseModel):
     """A mood state that persists over time"""
     name: str
     intensity: float = Field(0.0, ge=0.0, le=1.0)
