@@ -9,6 +9,7 @@ import networkx as nx
 from scipy.spatial.distance import cosine
 import json
 from pathlib import Path
+from enum import Enum
 import os
 
 logger = logging.getLogger("SemanticNetwork")

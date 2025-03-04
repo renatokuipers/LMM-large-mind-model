@@ -286,25 +286,25 @@ class SyntacticProcessor:
         return rules
     
     def update_rule_masteries(self, stage: LanguageDevelopmentStage, 
-                             grammar_complexity: float) -> None:
+                            grammar_complexity: float) -> None:
         """Update rule masteries based on developmental stage"""
         # Only consider rules appropriate for the current or earlier stages
         applicable_rules = [rule for rule in self.grammar_rules if rule.min_stage <= stage]
-    
-    for rule in applicable_rules:
-        if rule.mastery_level < 0.9:  # If not already mastered
-            # Calculate learning potential based on rule difficulty and grammar complexity
-            learning_potential = max(0.0, grammar_complexity - rule.acquisition_difficulty)
-            
-            if learning_potential > 0:
-                # Apply learning with random factor
-                learning_increment = learning_potential * 0.05 * random.uniform(0.5, 1.5)
-                rule.mastery_level = min(0.95, rule.mastery_level + learning_increment)
+        
+        for rule in applicable_rules:
+            if rule.mastery_level < 0.9:  # If not already mastered
+                # Calculate learning potential based on rule difficulty and grammar complexity
+                learning_potential = max(0.0, grammar_complexity - rule.acquisition_difficulty)
                 
-                if rule.mastery_level > 0.5 and not rule.first_used:
-                    # Mark as first used when mastery reaches threshold
-                    rule.first_used = datetime.now()
-                    logger.info(f"Grammar rule '{rule.name}' reached usable mastery level")
+                if learning_potential > 0:
+                    # Apply learning with random factor
+                    learning_increment = learning_potential * 0.05 * random.uniform(0.5, 1.5)
+                    rule.mastery_level = min(0.95, rule.mastery_level + learning_increment)
+                    
+                    if rule.mastery_level > 0.5 and not rule.first_used:
+                        # Mark as first used when mastery reaches threshold
+                        rule.first_used = datetime.now()
+                        logger.info(f"Grammar rule '{rule.name}' reached usable mastery level")
     
     def analyze_text(self, text: str) -> Dict[str, Any]:
         """Analyze text for grammatical patterns and extract syntactic information"""
