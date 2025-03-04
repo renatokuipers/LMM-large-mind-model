@@ -27,8 +27,12 @@ from mother import MotherResponse, ChildState, EmotionalState as MotherEmotional
 # from networks.moods import MoodsNetwork
 
 # Language and memory imports (these will be implemented later)
-# from language.vocabulary import VocabularyManager
-# from language.production import LanguageProduction
+from language.developmental_stages import DevelopmentTracker, LanguageDevelopmentStage, LanguageCapabilities
+from language.lexical_memory import LexicalMemory
+from language.production import LanguageProduction
+from language.syntactic_processor import SyntacticProcessor
+from language.vocabulary import VocabularyManager
+from language.semantic_network import SemanticNetwork, SemanticRelation
 # from memory.memory_manager import MemoryManager
 
 # Configure logging
@@ -315,18 +319,23 @@ class NeuralChild:
         # Initialize the child's state
         self.metrics = DevelopmentalMetrics()
         self.emotional_state = EmotionalState()
-        self.vocabulary = {}  # Dict[str, VocabularyItem]
         
         # Initialize neural networks
         self.networks = self._initialize_networks()
         
+        # Initialize language systems
+        self.syntactic_processor = SyntacticProcessor()
+        self.language_tracker = DevelopmentTracker(initial_age_days=self.metrics.age_days)
+        self.vocabulary_manager = VocabularyManager(simulation_speed=simulation_speed)
+        
+        # Initialize language production component
+        self.language_production = LanguageProduction(
+            lexical_memory=self.vocabulary_manager.lexical_memory,
+            syntactic_processor=self.syntactic_processor
+        )
+        
         # Memory for recent interactions
         self.recent_interactions = []
-        
-        # Network managers
-        # These will be initialized when their respective modules are implemented
-        # self.language_manager = VocabularyManager()
-        # self.memory_manager = MemoryManager()
         
         logger.info("Neural child initialized")
     
@@ -394,60 +403,72 @@ class NeuralChild:
         if len(self.recent_interactions) > 20:
             self.recent_interactions.pop(0)
         
-        logger.info(f"Updated state - vocabulary size: {len(self.vocabulary)}, "
-                  f"emotion: {self.emotional_state.dominant_emotion()[0]}")
+        # Apply language development updates
+        self.language_tracker.update(
+            age_days=self.metrics.age_days,
+            vocabulary_size=len(self.vocabulary_manager.lexical_memory.words)
+        )
+        
+        # Update syntactic processor based on language capabilities
+        capabilities = self.language_tracker.get_capabilities()
+        self.syntactic_processor.update_rule_masteries(
+            capabilities.stage, 
+            capabilities.grammar_complexity
+        )
+        
+        logger.info(f"Updated state - vocabulary size: {len(self.vocabulary_manager.lexical_memory.words)}, "
+                  f"emotion: {self.emotional_state.dominant_emotion()[0]}, "
+                  f"language stage: {capabilities.stage}")
     
     def _process_verbal_content(self, text: str, teaching_elements) -> None:
         """Extract and learn from verbal content"""
+        # Process general speech with vocabulary manager
+        emotional_state_dict = {
+            emotion: getattr(self.emotional_state, emotion)
+            for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+            if getattr(self.emotional_state, emotion) > 0.1
+        }
+        
+        self.vocabulary_manager.process_heard_speech(
+            text=text,
+            context="mother's speech",
+            emotional_state=emotional_state_dict
+        )
+        
         # Process explicit teaching elements
         for vocab_item in teaching_elements.vocabulary:
-            word = vocab_item.word.lower()
-            if word in self.vocabulary:
-                # Update existing word
-                self.vocabulary[word].update_understanding(
-                    context=vocab_item.simple_definition,
-                    emotion=self.emotional_state.dominant_emotion()[0],
-                    emotion_intensity=self.emotional_state.dominant_emotion()[1]
-                )
-            else:
-                # Add new word to vocabulary
-                self.vocabulary[word] = VocabularyItem(
-                    word=word,
-                    understanding=0.1,
-                    contexts=[vocab_item.simple_definition],
-                    emotional_associations={
-                        self.emotional_state.dominant_emotion()[0]: self.emotional_state.dominant_emotion()[1]
-                    }
-                )
-                logger.info(f"Learned new word: {word}")
+            self.vocabulary_manager.explicitly_learn_word(
+                word=vocab_item.word,
+                definition=vocab_item.simple_definition,
+                example_usage=vocab_item.example_usage,
+                emotional_state=emotional_state_dict
+            )
+            logger.info(f"Explicitly learned word: {vocab_item.word}")
         
-        # Very simple tokenization - in a real implementation, use NLTK or spaCy
-        # This is just a placeholder until we implement the language module
-        simple_tokens = text.lower().split()
-        for token in simple_tokens:
-            # Clean token of punctuation
-            clean_token = token.strip(".,;:!?\"'()[]{}").lower()
-            if not clean_token or len(clean_token) < 2:
-                continue
+        # Process concept teaching
+        for concept_item in teaching_elements.concepts:
+            # Add concept to semantic network
+            self.vocabulary_manager.semantic_network.add_concept(
+                word=concept_item.concept_name,
+                properties={},
+                emotions=emotional_state_dict
+            )
+            
+            # If concept already exists as a word, update its definition
+            if concept_item.concept_name.lower() in self.vocabulary_manager.lexical_memory.words:
+                word_item = self.vocabulary_manager.lexical_memory.words[concept_item.concept_name.lower()]
+                word_item.definition = concept_item.explanation
                 
-            if clean_token in self.vocabulary:
-                # Update existing word
-                self.vocabulary[clean_token].update_understanding(
-                    context="mother's speech",
-                    emotion=self.emotional_state.dominant_emotion()[0],
-                    emotion_intensity=self.emotional_state.dominant_emotion()[1] * 0.5  # Weaker association
+            # Otherwise, explicitly learn it
+            else:
+                self.vocabulary_manager.explicitly_learn_word(
+                    word=concept_item.concept_name,
+                    definition=concept_item.explanation,
+                    example_usage=concept_item.relevance,
+                    emotional_state=emotional_state_dict
                 )
-            elif random.random() < 0.05:  # Small chance to learn a new word passively
-                # Add new word to vocabulary with low understanding
-                self.vocabulary[clean_token] = VocabularyItem(
-                    word=clean_token,
-                    understanding=0.05,  # Lower starting understanding for passive learning
-                    contexts=["mother's speech"],
-                    emotional_associations={
-                        self.emotional_state.dominant_emotion()[0]: self.emotional_state.dominant_emotion()[1] * 0.3
-                    }
-                )
-                logger.info(f"Passively learned new word: {clean_token}")
+            
+            logger.info(f"Learned new concept: {concept_item.concept_name}")
     
     def _update_networks_from_response(self, mother_response: MotherResponse) -> None:
         """Update neural network activations based on mother's response"""
@@ -536,116 +557,46 @@ class NeuralChild:
     
     def generate_response(self) -> str:
         """Generate a verbal response based on current developmental state"""
-        # This is a simplified placeholder - real implementation would use the networks
+        # Get language capabilities
+        capabilities = self.language_tracker.get_capabilities()
         
-        # Get active networks
-        active_networks = {name: network for name, network in self.networks.items() 
-                          if network.activation > 0.3}
+        # Get emotional state as dictionary for language production
+        emotional_state_dict = {
+            emotion: getattr(self.emotional_state, emotion)
+            for emotion in ["joy", "sadness", "anger", "fear", "surprise", "disgust", "trust", "anticipation"]
+        }
         
-        # Get dominant emotion
-        dominant_emotion, intensity = self.emotional_state.dominant_emotion()
+        # Generate response using language production module
+        response = self.language_production.generate_utterance(
+            capabilities=capabilities,
+            emotional_state=emotional_state_dict,
+            context=None,  # Could use context from recent interactions
+            response_to=self.recent_interactions[-1]["mother_verbal"] if self.recent_interactions else None
+        )
         
-        # Get words based on current vocabulary and understanding
-        known_words = {word: item for word, item in self.vocabulary.items() 
-                      if item.understanding > 0.4}
+        # Extract words used in response for updating statistics
+        words_used = response.lower().split()
+        self.vocabulary_manager.update_after_child_production(words_used, successful_communication=True)
         
-        # Generate response based on developmental stage
-        if self.metrics.development_stage == HumanMindDevelopmentStage.PRENATAL:
-            return ""  # No response in prenatal stage
-        
-        elif self.metrics.development_stage == HumanMindDevelopmentStage.INFANCY:
-            # Infants make simple sounds or say very basic words
-            if not known_words:
-                return random.choice(["Ga", "Ba", "Ma", "Da", "Ah", "Oo"])
-            else:
-                # Maybe use one known word
-                if random.random() < 0.3 and known_words:
-                    return random.choice(list(known_words.keys()))
-                else:
-                    return random.choice(["Ga", "Ba", "Ma", "Da", "Ah", "Oo"])
-        
-        elif self.metrics.development_stage == HumanMindDevelopmentStage.EARLY_CHILDHOOD:
-            # Early childhood: 1-2 word phrases
-            if len(known_words) < 2:
-                # Not enough words known
-                if known_words:
-                    return random.choice(list(known_words.keys()))
-                else:
-                    return random.choice(["Ma-ma", "Da-da", "Ba-ba"])
-            else:
-                # Create 1-2 word phrase
-                words = list(known_words.keys())
-                num_words = min(2, max(1, int(self.metrics.age_days / 20)))  # More words as age increases
-                selected_words = random.sample(words, num_words)
-                return " ".join(selected_words)
-        
-        elif self.metrics.development_stage == HumanMindDevelopmentStage.MIDDLE_CHILDHOOD:
-            # Middle childhood: simple sentences
-            if len(known_words) < 3:
-                # Fall back to early childhood response
-                words = list(known_words.keys())
-                num_words = min(2, len(words))
-                selected_words = random.sample(words, num_words)
-                return " ".join(selected_words)
-            else:
-                # Create simple sentence
-                words = list(known_words.keys())
-                num_words = min(4, max(2, int(self.metrics.age_days / 40)))
-                selected_words = random.sample(words, num_words)
-                
-                # Add emotional modifier based on dominant emotion
-                if dominant_emotion == "joy" and intensity > 0.6:
-                    return " ".join(selected_words) + "!"
-                elif dominant_emotion == "sadness" and intensity > 0.6:
-                    return " ".join(selected_words) + "..."
-                else:
-                    return " ".join(selected_words) + "."
-        
-        else:
-            # Later stages: more complex sentences
-            if len(known_words) < 5:
-                # Fall back to simpler response
-                words = list(known_words.keys())
-                num_words = min(4, len(words))
-                selected_words = random.sample(words, num_words)
-                return " ".join(selected_words) + "."
-            else:
-                # Create more complex sentence
-                words = list(known_words.keys())
-                num_words = min(8, max(4, int(self.metrics.age_days / 60)))
-                selected_words = random.sample(words, num_words)
-                
-                # Add emotional and cognitive elements
-                if dominant_emotion == "joy" and intensity > 0.7:
-                    return "I feel happy! " + " ".join(selected_words) + "!"
-                elif dominant_emotion == "sadness" and intensity > 0.7:
-                    return "I feel sad... " + " ".join(selected_words) + "."
-                elif dominant_emotion == "fear" and intensity > 0.7:
-                    return "I scared. " + " ".join(selected_words) + "?"
-                elif "consciousness" in active_networks and active_networks["consciousness"].activation > 0.6:
-                    return "I think... " + " ".join(selected_words) + "."
-                else:
-                    return " ".join(selected_words) + "."
+        return response
     
     def get_child_state(self) -> ChildState:
         """Generate the observable state of the child for the mother"""
-        # Generate a simple response
+        # Generate a response
         message = self.generate_response()
         
         # Determine apparent emotion
         dominant_emotion, _ = self.emotional_state.dominant_emotion()
         
         # Get list of recently learned concepts
-        recent_concepts = [word for word, item in self.vocabulary.items() 
-                          if (datetime.now() - item.learned_at).total_seconds() < 3600]  # Last hour
-        recent_concepts = recent_concepts[-5:]  # Only most recent 5
+        recent_words = self.vocabulary_manager.get_vocabulary_statistics().recent_words[:5]
         
         return ChildState(
             message=message,
             apparent_emotion=dominant_emotion,
-            vocabulary_size=len(self.vocabulary),
+            vocabulary_size=len(self.vocabulary_manager.lexical_memory.words),
             age_days=self.metrics.age_days,
-            recent_concepts_learned=recent_concepts,
+            recent_concepts_learned=recent_words,
             attention_span=self.metrics.attention_span
         )
     
@@ -663,15 +614,18 @@ class NeuralChild:
         if filepath is None:
             filepath = self.save_dir / f"neural_child_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         
+        # Save vocabulary manager state
+        self.vocabulary_manager.save_state()
+        
         # Prepare state for serialization
         state = {
             "metrics": self.metrics.model_dump(),
             "emotional_state": self.emotional_state.model_dump(),
-            "vocabulary": {word: item.model_dump() for word, item in self.vocabulary.items()},
             "networks": {str(network_type.value): network.model_dump() 
                         for network_type, network in self.networks.items()},
             "config": self.config.model_dump(),
-            "recent_interactions": self.recent_interactions
+            "recent_interactions": self.recent_interactions,
+            "language_capabilities": self.language_tracker.get_capabilities().model_dump()
         }
         
         # Save to file
@@ -693,11 +647,6 @@ class NeuralChild:
         self.metrics = DevelopmentalMetrics.model_validate(state["metrics"])
         self.emotional_state = EmotionalState.model_validate(state["emotional_state"])
         
-        # Restore vocabulary
-        self.vocabulary = {}
-        for word, item_data in state["vocabulary"].items():
-            self.vocabulary[word] = VocabularyItem(**item_data)
-        
         # Restore networks
         for network_type_str, network_data in state["networks"].items():
             network_type = NetworkType(network_type_str)
@@ -709,8 +658,15 @@ class NeuralChild:
         # Restore recent interactions
         self.recent_interactions = state["recent_interactions"]
         
+        # Restore language capabilities if present
+        if "language_capabilities" in state:
+            self.language_tracker = DevelopmentTracker(initial_age_days=self.metrics.age_days)
+            self.language_tracker.capabilities = LanguageCapabilities.model_validate(state["language_capabilities"])
+        
+        # Note: Vocabulary state would be loaded separately
+        
         logger.info(f"Neural child state loaded from {filepath}")
-        logger.info(f"Age: {self.metrics.age_days:.1f} days, Vocabulary: {len(self.vocabulary)} words")
+        logger.info(f"Age: {self.metrics.age_days:.1f} days, Vocabulary: {len(self.vocabulary_manager.lexical_memory.words)} words")
 
 # ========== EXAMPLE USAGE ==========
 
