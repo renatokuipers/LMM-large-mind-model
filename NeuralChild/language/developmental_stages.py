@@ -144,17 +144,20 @@ class LanguageDevelopmentStage(str, Enum):
 class LanguageCapabilities(BaseModel):
     """Current language capabilities of the neural child"""
     stage: LanguageDevelopmentStage = Field(LanguageDevelopmentStage.PRE_LINGUISTIC)
-    feature_levels: Dict[LanguageFeature, float] = Field(default_factory=dict)
+    feature_levels: Dict[LanguageFeature, float] = Field(default_factory=lambda: {feature: 0.0 for feature in LanguageFeature})
     vocabulary_size: int = Field(0, ge=0)
     max_utterance_length: int = Field(0, ge=0)
     grammar_complexity: float = Field(0.0, ge=0.0, le=1.0)
     
-    @field_validator('feature_levels', mode='before')
+    # This validator might be the issue - it's not initializing properly
+    @field_validator('feature_levels')
     @classmethod
     def initialize_features(cls, v):
         """Initialize feature levels if not provided"""
         if not v:
             return {feature: 0.0 for feature in LanguageFeature}
+        
+        # Make sure all enum values are in the dictionary
         for feature in LanguageFeature:
             if feature not in v:
                 v[feature] = 0.0
