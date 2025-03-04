@@ -425,9 +425,14 @@ class MoodsNetwork(BaseNetwork):
         for name, mood in self.active_moods.items():
             if name in self.mood_impacts and mood.intensity > 0.3:
                 for target, impact in self.mood_impacts[name].items():
+                    # Skip emotion_bias as it's handled separately
+                    if target == "emotion_bias":
+                        continue
                     if target not in impacts:
                         impacts[target] = 0.0
-                    impacts[target] += impact * mood.intensity
+                    # Only process numerical impacts
+                    if isinstance(impact, (int, float)):
+                        impacts[target] += impact * mood.intensity
         
         # Calculate emotion bias
         emotion_bias = {}

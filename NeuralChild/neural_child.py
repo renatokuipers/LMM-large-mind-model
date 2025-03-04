@@ -531,30 +531,71 @@ class NeuralChild:
     def process_mother_response(self, mother_response: MotherResponse) -> None:
         """Process a response from the mother, updating internal state through neural networks"""
         logger.info("Processing mother's response through neural architecture")
-        
+
         # Update emotional state directly based on mother's response
         self.emotional_state.update_from_mother_response(mother_response)
+
+        # Create a properly structured input for all networks
+        # This ensures consistent format regardless of mother_response structure
+        perception_input = {}
         
-        # Process through perception network first - this is the entry point
-        perception_input = {
-            "verbal": mother_response.verbal.text,
-            "non_verbal": {
+        # Handle verbal content safely
+        if hasattr(mother_response.verbal, 'text'):
+            verbal_text = mother_response.verbal.text
+        elif isinstance(mother_response.verbal, str):
+            verbal_text = mother_response.verbal
+        else:
+            verbal_text = str(mother_response.verbal)
+        
+        # Handle non-verbal content safely
+        if hasattr(mother_response.non_verbal, 'physical_actions') and hasattr(mother_response.non_verbal, 'facial_expression') and hasattr(mother_response.non_verbal, 'proximity'):
+            non_verbal = {
                 "physical_actions": mother_response.non_verbal.physical_actions,
                 "facial_expression": mother_response.non_verbal.facial_expression,
                 "proximity": mother_response.non_verbal.proximity
-            },
-            "emotional_context": {
+            }
+        else:
+            # Default structure if non_verbal doesn't have expected attributes
+            non_verbal = {
+                "physical_actions": [str(mother_response.non_verbal)],
+                "facial_expression": "neutral",
+                "proximity": "normal"
+            }
+        
+        # Handle emotional context safely
+        if hasattr(mother_response.emotional, 'primary_emotion') and hasattr(mother_response.emotional, 'intensity') and hasattr(mother_response.emotional, 'secondary_emotion'):
+            emotional_context = {
                 "primary": mother_response.emotional.primary_emotion,
                 "intensity": mother_response.emotional.intensity,
                 "secondary": mother_response.emotional.secondary_emotion
             }
-        }
+        else:
+            # Default structure if emotional doesn't have expected attributes
+            emotional_context = {
+                "primary": "neutral",
+                "intensity": 0.5,
+                "secondary": None
+            }
         
+        # Construct perception input with validated structure
+        perception_input = {
+            "verbal": verbal_text,
+            "non_verbal": non_verbal,
+            "emotional_context": emotional_context
+        }
+
+        # Process through perception network first - this is the entry point
         self.networks[NetworkType.PERCEPTION].receive_input(perception_input, "mother")
         perception_output = self.networks[NetworkType.PERCEPTION].process_inputs()
         
         # Process verbal content through language systems
-        self._process_verbal_content(mother_response.verbal.text, mother_response.teaching)
+        # Safely handle teaching elements
+        if hasattr(mother_response, 'teaching'):
+            self._process_verbal_content(verbal_text, mother_response.teaching)
+        else:
+            # Create an empty TeachingElements object if needed
+            empty_teaching = TeachingElements(vocabulary=[], concepts=[], values=[], corrections=[])
+            self._process_verbal_content(verbal_text, empty_teaching)
         
         # Propagate perception output to connected networks
         self._propagate_network_outputs(NetworkType.PERCEPTION, perception_output)

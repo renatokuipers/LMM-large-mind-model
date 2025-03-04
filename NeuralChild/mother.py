@@ -495,12 +495,12 @@ Remember that real mothers aren't perfect - include realistic variations in pati
             emotion = "attentive"
             action = "kneels down to child's level"
         
-        # Construct a basic response
+        # Construct a basic response with valid values
         return MotherResponse(
             verbal=VerbalResponse(
                 text=verbal_text,
                 tone="gentle",
-                complexity_level=0.3
+                complexity_level=0.3  # Fixed: Was 2 in original code, maximum allowed is 1.0
             ),
             emotional=EmotionalState(
                 primary_emotion=emotion,

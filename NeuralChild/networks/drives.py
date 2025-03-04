@@ -180,26 +180,40 @@ class DrivesNetwork(BaseNetwork):
     def _process_mother_response(self, mother_response: Dict[str, Any]) -> None:
         """Process mother's response to satisfy drives"""
         # Extract relevant aspects of mother's response
-        if "verbal" in mother_response and "physical_actions" in mother_response.get("non_verbal", {}):
-            verbal = mother_response["verbal"].get("text", "")
-            actions = mother_response["non_verbal"].get("physical_actions", [])
-            
-            # Check for physiological need satisfaction
-            if any(word in verbal.lower() for word in ["feed", "food", "milk", "drink", "eat"]):
-                self.satisfy_drive("physiological", 0.3)
-            
-            # Check for safety satisfaction
-            if any(word in verbal.lower() for word in ["safe", "protect", "okay", "alright"]):
-                self.satisfy_drive("safety", 0.2)
-            
-            # Check for attachment satisfaction through actions
-            attachment_actions = ["hug", "hold", "cuddle", "kiss", "smile"]
-            if any(action in " ".join(actions).lower() for action in attachment_actions):
-                self.satisfy_drive("attachment", 0.4)
-            
-            # Check for exploration satisfaction
-            if any(word in verbal.lower() for word in ["look", "see", "discover", "try", "explore"]):
-                self.satisfy_drive("exploration", 0.3)
+        verbal_text = ""
+        actions = []
+
+        # Handle different structure formats
+        if "verbal" in mother_response:
+            # Handle both dictionary and direct text formats
+            if isinstance(mother_response["verbal"], dict):
+                verbal_text = mother_response["verbal"].get("text", "")
+            elif isinstance(mother_response["verbal"], str):
+                verbal_text = mother_response["verbal"]
+        
+        # Handle non_verbal structure variations
+        if "non_verbal" in mother_response:
+            if isinstance(mother_response["non_verbal"], dict):
+                actions = mother_response["non_verbal"].get("physical_actions", [])
+            elif isinstance(mother_response["non_verbal"], list):
+                actions = mother_response["non_verbal"]
+        
+        # Check for physiological need satisfaction
+        if any(word in verbal_text.lower() for word in ["feed", "food", "milk", "drink", "eat"]):
+            self.satisfy_drive("physiological", 0.3)
+        
+        # Check for safety satisfaction
+        if any(word in verbal_text.lower() for word in ["safe", "protect", "okay", "alright"]):
+            self.satisfy_drive("safety", 0.2)
+        
+        # Check for attachment satisfaction through actions
+        attachment_actions = ["hug", "hold", "cuddle", "kiss", "smile"]
+        if isinstance(actions, list) and any(action in " ".join(str(a) for a in actions).lower() for action in attachment_actions):
+            self.satisfy_drive("attachment", 0.4)
+        
+        # Check for exploration satisfaction
+        if any(word in verbal_text.lower() for word in ["look", "see", "discover", "try", "explore"]):
+            self.satisfy_drive("exploration", 0.3)
     
     def _process_emotional_influence(self, emotional_state: Dict[str, float]) -> None:
         """Process how emotions influence drives"""
