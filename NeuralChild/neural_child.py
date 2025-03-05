@@ -347,7 +347,8 @@ class NeuralChild:
                 if network_name == NetworkType.EMOTIONS.value:
                     # Emotions need emotional state
                     emotional_state = self.get_emotional_state()
-                    network.update_development(self.age_days, emotional_state)
+                    #network.update_development(self.age_days, emotional_state)
+                    network.update_development(self.age_days)
                 elif network_name == NetworkType.CONSCIOUSNESS.value:
                     # Consciousness needs vocabulary size
                     vocab_size = self.vocabulary_manager.get_vocabulary_statistics().total_words
@@ -360,6 +361,14 @@ class NeuralChild:
                     # Archetypes need emotional state
                     emotional_state = self.get_emotional_state()
                     network.update_development(self.age_days, emotional_state)
+                elif network_name == NetworkType.ATTENTION.value:
+                    # Get interaction count from history
+                    interactions_count = len(self.interaction_history)
+                    network.update_development(self.age_days, interactions_count)
+                elif network_name == NetworkType.PERCEPTION.value:
+                    # Perception also needs vocabulary size
+                    vocab_size = self.vocabulary_manager.get_vocabulary_statistics().total_words
+                    network.update_development(self.age_days, vocab_size)
                 else:
                     # Default just use age
                     network.update_development(self.age_days)

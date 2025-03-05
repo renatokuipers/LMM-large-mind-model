@@ -580,7 +580,7 @@ class MemoryManager:
             items_by_type=items_by_type,
             avg_salience=avg_salience,
             strongest_associations=strongest_associations,
-            memory_age_distribution=age_distribution,
+            memory_age_distribution=dict(age_distribution),  # Explicitly convert to dict
             total_associations=len(all_associations)
         )
     

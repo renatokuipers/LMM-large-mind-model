@@ -777,180 +777,129 @@ def update_saved_states_list(n):
     ],
 )
 def control_training(
-    init_clicks, start_clicks, pause_clicks, stop_clicks, save_clicks, load_clicks, 
-    n_intervals, speed, save_interval_min, initialized, active, paused, state_to_load
+    init_clicks, start_clicks, pause_clicks, stop_clicks, save_clicks, 
+    load_clicks, n_intervals, speed, save_interval_min, 
+    initialized, active, paused, state_to_load
 ):
-    """Control the training process"""
     global neural_child, mother, training_thread, training_active, training_paused, save_interval
     
-    # Get which button was clicked
     ctx = dash.callback_context
     if not ctx.triggered:
-        button_id = None
-    else:
-        button_id = ctx.triggered[0]["prop_id"].split(".")[0]
-
-    # Return current state if no button was clicked and not initialized
-    if not button_id and not initialized:
-        return False, True, True, True, True, False, False, False, "Status: Not initialized", "Age: N/A", "Milestone Progress: N/A"
+        # Initial state
+        return (
+            False, False, True, True, True,  # Button states
+            False, False, False,  # Store states
+            "Status: Not initialized", "Age: N/A", "Milestone Progress: N/A"
+        )
     
-    # Initialize neural child
-    if button_id == "initialize-btn":
-        try:
+    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    
+    try:
+        if button_id == "initialize-btn":
             neural_child = NeuralChild(development_speed_multiplier=speed)
             mother = Mother(llm_client=llm_client)
-            initialized = True
-            status_text = "Status: Initialized, ready to start training"
-            age_text = f"Age: {neural_child.age_days:.2f} days"
+            
             milestones = neural_child.get_milestone_progress()
             milestone_avg = sum(milestones.values()) / len(milestones)
-            milestone_text = f"Milestone Progress: {milestone_avg:.2%}"
             
-            # Reset training state
-            training_state.__init__()
-            training_state.update_metrics(neural_child)
-            
-            logger.info("Neural child initialized successfully")
-            
-            # Return updated state with initialization
-            return True, False, True, True, False, True, False, False, status_text, age_text, milestone_text
-            
-        except Exception as e:
-            logger.error(f"Error initializing neural child: {str(e)}")
-            return False, True, True, True, True, False, False, False, f"Status: Error initializing - {str(e)}", "Age: N/A", "Milestone Progress: N/A"
-
-    # Load state
-    elif button_id == "load-btn" and state_to_load:
-        try:
-            if neural_child is None:
-                neural_child = NeuralChild(development_speed_multiplier=speed)
-                
-            if mother is None:
-                mother = Mother(llm_client=llm_client)
-                
-            # Load the state
-            success = neural_child.load_state(Path(state_to_load))
-            if success:
-                initialized = True
-                
-                # Reset training state
-                training_state.__init__()
-                training_state.update_metrics(neural_child)
-                
-                status_text = "Status: State loaded successfully"
-                age_text = f"Age: {neural_child.age_days:.2f} days"
-                milestones = neural_child.get_milestone_progress()
-                milestone_avg = sum(milestones.values()) / len(milestones)
-                milestone_text = f"Milestone Progress: {milestone_avg:.2%}"
-                
-                logger.info(f"Loaded state from {state_to_load}")
-            else:
-                status_text = "Status: Error loading state"
-                age_text = "Age: N/A"
-                milestone_text = "Milestone Progress: N/A"
-        except Exception as e:
-            logger.error(f"Error loading state: {str(e)}")
-            status_text = f"Status: Error loading state - {str(e)}"
-            age_text = "Age: N/A"
-            milestone_text = "Milestone Progress: N/A"
-    
-    # Start training
-    elif button_id == "start-btn" and initialized and not active:
-        if neural_child and mother:
-            # Update save interval
-            save_interval = save_interval_min
-            
-            # Start training thread
+            return (
+                True, False, True, True, False,  # Button states
+                True, False, False,  # Store states
+                f"Status: Initialized (Speed: {speed}x)", 
+                f"Age: {neural_child.age_days:.2f} days", 
+                f"Milestone Progress: {milestone_avg:.2%}"
+            )
+        
+        elif button_id == "start-btn" and not active:
             training_active = True
             training_paused = False
             training_thread = threading.Thread(target=training_loop)
             training_thread.daemon = True
             training_thread.start()
             
-            active = True
-            paused = False
-            status_text = "Status: Training in progress"
-            logger.info("Started training")
-        else:
-            status_text = "Status: Error starting training - Neural child or mother not initialized"
+            return (
+                True, True, False, False, True,  # Button states
+                True, True, False,  # Store states
+                "Status: Training in progress", 
+                f"Age: {neural_child.age_days:.2f} days", 
+                "Milestone Progress: Tracking..."
+            )
+        
+        elif button_id == "pause-btn":
+            training_paused = not training_paused
             
-    # Pause training
-    elif button_id == "pause-btn" and active:
-        if training_active:
-            if not training_paused:
-                training_paused = True
-                paused = True
-                status_text = "Status: Training paused"
-                logger.info("Paused training")
-            else:
-                training_paused = False
-                paused = False
-                status_text = "Status: Training resumed"
-                logger.info("Resumed training")
-    
-    # Stop training
-    elif button_id == "stop-btn" and active:
-        if training_active:
+            return (
+                True, True, False, False, True,  # Button states
+                True, True, training_paused,  # Store states
+                f"Status: Training {'paused' if training_paused else 'resumed'}", 
+                f"Age: {neural_child.age_days:.2f} days", 
+                "Milestone Progress: Tracking..."
+            )
+        
+        elif button_id == "stop-btn":
             training_active = False
             training_paused = False
-            if training_thread and training_thread.is_alive():
-                # Let the thread finish naturally
-                pass
             
-            active = False
-            paused = False
-            status_text = "Status: Training stopped"
-            logger.info("Stopped training")
-    
-    # Save state
-    elif button_id == "save-btn" and initialized and neural_child:
-        try:
-            # Create a directory for the save
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = neural_child.save_state()
-            
-            status_text = f"Status: Saved state to {save_path.name}"
-            logger.info(f"Saved state to {save_path}")
-        except Exception as e:
-            logger.error(f"Error saving state: {str(e)}")
-            status_text = f"Status: Error saving state - {str(e)}"
-    
-    # Update status if neural child exists but no button was clicked
-    elif initialized and neural_child and n_intervals % 5 == 0:
-        age_text = f"Age: {neural_child.age_days:.2f} days"
-        milestones = neural_child.get_milestone_progress()
-        milestone_avg = sum(milestones.values()) / len(milestones)
-        milestone_text = f"Milestone Progress: {milestone_avg:.2%}"
+            return (
+                False, False, True, True, True,  # Button states
+                False, False, False,  # Store states
+                "Status: Training stopped", 
+                f"Age: {neural_child.age_days:.2f} days", 
+                "Milestone Progress: N/A"
+            )
         
-        if active:
-            if paused:
-                status_text = "Status: Training paused"
+        elif button_id == "save-btn":
+            if neural_child:
+                save_path = neural_child.save_state()
+                return (
+                    no_update, no_update, no_update, no_update, no_update,
+                    no_update, no_update, no_update,
+                    f"Status: Saved state to {save_path.name}", 
+                    no_update, no_update
+                )
+        
+        elif button_id == "load-btn" and state_to_load:
+            neural_child = NeuralChild()
+            success = neural_child.load_state(Path(state_to_load))
+            
+            if success:
+                mother = Mother(llm_client=llm_client)
+                milestones = neural_child.get_milestone_progress()
+                milestone_avg = sum(milestones.values()) / len(milestones)
+                
+                return (
+                    True, False, True, True, False,  # Button states
+                    True, False, False,  # Store states
+                    f"Status: Loaded state from {state_to_load}", 
+                    f"Age: {neural_child.age_days:.2f} days", 
+                    f"Milestone Progress: {milestone_avg:.2%}"
+                )
             else:
-                status_text = "Status: Training in progress"
-        else:
-            status_text = "Status: Ready"
+                return (
+                    False, False, True, True, True,  # Button states
+                    False, False, False,  # Store states
+                    f"Status: Failed to load state from {state_to_load}", 
+                    "Age: N/A", 
+                    "Milestone Progress: N/A"
+                )
         
-        # In this case, we're just updating metrics
-        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, status_text, age_text, milestone_text
+    except Exception as e:
+        logger.error(f"Training control error: {e}")
+        return (
+            False, False, True, True, True,  # Button states
+            False, False, False,  # Store states
+            f"Status: Error - {str(e)}", 
+            "Age: N/A", 
+            "Milestone Progress: N/A"
+        )
     
-    # Default status
-    if not initialized:
-        status_text = status_text if 'status_text' in locals() else "Status: Not initialized"
-        age_text = age_text if 'age_text' in locals() else "Age: N/A"
-        milestone_text = milestone_text if 'milestone_text' in locals() else "Milestone Progress: N/A"
-    
-    # Update button states
-    initialize_disabled = initialized and not (active and not paused)
-    start_disabled = not initialized or active
-    pause_disabled = not active
-    stop_disabled = not active
-    save_disabled = not initialized
-    
-    # Set global variables based on UI state
-    training_active = active
-    training_paused = paused
-    
-    return initialize_disabled, start_disabled, pause_disabled, stop_disabled, save_disabled, initialized, active, paused, status_text, age_text, milestone_text
+    # Default fallback
+    return (
+        False, False, no_update, no_update, no_update,
+        no_update, no_update, no_update,
+        "Status: Awaiting action", 
+        no_update, no_update
+    )
 
 @app.callback(
     [
