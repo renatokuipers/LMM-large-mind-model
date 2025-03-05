@@ -1,0 +1,102 @@
+# Python bytecode files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env/
+.venv/
+
+# PyTorch specific
+*.pt
+*.pth
+.pytorch/
+
+# Project specific directories (adjust as needed)
+data/
+models/
+logs/
+checkpoints/
+runs/
+wandb/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.ropeproject/
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Documentation
+docs/_build/
+site/
+
+# Development tools
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+pyrightconfig.json
+
+# Large media files that might be accidentally added
+*.mp4
+*.mov
+*.avi
+*.wav
+*.mp3
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+*~
+
+# Backup files
+*.bak
+
+# User-specific files that might contain sensitive info
+config_local.py
+secrets.json
+.env
+.secrets
+
+# Debug dumps
+core.* 
