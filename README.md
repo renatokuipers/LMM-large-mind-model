@@ -1,190 +1,129 @@
-# 🧠 NeuralChild: A Psychological Mind Simulation Framework
+# Neural Child Project
 
-NeuralChild creates a simulated mind that develops through interactions rather than traditional large-scale dataset training. The system models psychological development by implementing the psychological functions that emerge from biological brain structures.
+A computational simulation of child cognitive and emotional development using neural components.
 
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+## Overview
 
-## Core Concept
+The Neural Child project is a sophisticated psychological simulation that models a child's development from infancy through early childhood. It incorporates various aspects of child development:
 
-The key innovation of NeuralChild is that this mind learns to communicate, feel, and develop a sense of self through nurturing interactions with a "Mother" LLM. The system isn't static; it literally "grows up" from infancy to maturity through these interactions.
+- **Emotional Development**: Simulates how a child's emotional responses develop over time
+- **Language Acquisition**: Models the process of learning language from caregiver interactions
+- **Memory Formation**: Simulates episodic, semantic, and procedural memory development
+- **Cognitive Development**: Models the development of attention, reasoning, and problem-solving abilities
+- **Social Development**: Simulates how the child learns to interact with caregivers
 
-Unlike traditional LLMs, NeuralChild represents a "Large Mind Model" (LMM) with the following characteristics:
-- Independent thought and decision-making capabilities
-- Adaptable norms and values through interactions
-- Persistent memory and life experience accumulation
-- Development of unique preferences and "personality"
-- Self-awareness similar to human consciousness
+The system does not rely on external LLMs for generating responses, but instead uses neural components to simulate the internal psychological processes of a developing child.
 
-## Installation
+## Project Structure
+
+```
+neural_child/
+├── mind/               # Core mind architecture
+│   ├── base.py         # Base classes for neural components
+│   └── mind.py         # Central Mind class integrating all components
+├── emotion/            # Emotional development components
+├── language/           # Language acquisition components
+├── memory/             # Memory formation and retrieval
+├── cognition/          # Cognitive processing components
+├── development/        # Developmental stage management
+└── social/             # Social interaction components
+
+mother/                 # Mother interaction components
+├── mother.py           # Mother agent implementation
+
+dashboard/              # Visualization and interaction UI
+├── app.py              # Dash application
+└── assets/             # Dashboard assets
+
+utils/                  # Utility functions and configurations
+```
+
+## Key Features
+
+- **Developmental Stages**: The child progresses through realistic developmental stages
+- **Emotional Simulation**: Models basic emotions and their development over time
+- **Natural Language Processing**: Simulates language acquisition from simple sounds to complex sentences
+- **Memory Systems**: Models different types of memory formation and recall
+- **Interactive Dashboard**: Provides visualization and interaction capabilities
+- **Mother Agent**: Simulates a caregiver that interacts with and nurtures the Neural Child
+
+## Getting Started
 
 ### Prerequisites
 
-- Python 3.8 or higher
-- A local LLM with structured output capabilities
+- Python 3.8+
+- Required packages listed in `requirements.txt`
 
-### Installing from source
+### Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/neuralchild.git
-cd neuralchild
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/neural-child.git
+   cd neural-child
+   ```
 
-# Install the package
-pip install -e .
+2. Create a virtual environment:
+   ```
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-# For development dependencies
-pip install -e ".[dev]"
-```
-
-## Usage
+3. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
 
 ### Running the Dashboard
 
-The simplest way to interact with NeuralChild is through the provided dashboard:
+1. Start the Dash application:
+   ```
+   python -m dashboard.app
+   ```
 
-```bash
-# Start the dashboard with default settings
-neuralchild
+2. Open your browser and navigate to `http://127.0.0.1:8050/`
 
-# Specify a custom configuration file
-neuralchild --config my_config.json
+## Using the Dashboard
 
-# Load a previously saved state
-neuralchild --load-state saved_state.json
+The dashboard provides a comprehensive interface for interacting with and monitoring the Neural Child:
 
-# Run on a different port
-neuralchild --port 8051
-```
+### Child Status Panel
 
-### Headless Mode
+- **Age Display**: Shows the current age of the child
+- **Development Speed**: Adjust how quickly the child develops
+- **Advance Time**: Move forward in time to see development progress
+- **Physiological Needs**: Monitor and address the child's basic needs
 
-For server environments or batch processing, you can run NeuralChild without the dashboard:
+### Development Metrics
 
-```bash
-# Run simulation for 1000 interactions
-neuralchild --no-dashboard --simulate 1000
+- **Language Development**: Track vocabulary size, grammar complexity, etc.
+- **Emotional Development**: Monitor emotional regulation, complexity, etc.
+- **Cognitive Development**: Track attention span, problem-solving abilities, etc.
+- **Memory Development**: Monitor memory capacity and retention
 
-# Save state after simulation
-neuralchild --no-dashboard --simulate 1000 --save-after-simulate final_state.json
-```
+### Interaction Panel
 
-### Programmatic Usage
+- **Mother's Utterances**: Enter text to communicate with the child
+- **Emotional State**: Set the mother's emotional state during interaction
+- **Teaching Elements**: Introduce new concepts to the child
+- **Conversation History**: View the history of interactions
 
-```python
-from NeuralChild import NeuralChild, DevelopmentalStage
+## Development Timeline and Milestones
 
-# Create a neural child instance
-child = NeuralChild()
+The Neural Child progresses through several developmental stages:
 
-# Run a single interaction
-result = child.interact_with_mother()
+1. **Prenatal** (before birth): Basic neural architecture formation
+2. **Neonatal** (0-1 month): Reflexive responses, primitive emotions
+3. **Early Infancy** (1-6 months): Basic emotions, pattern recognition
+4. **Late Infancy** (6-12 months): Attachment, primitive communication
+5. **Toddlerhood** (1-3 years): Language explosion, emotional complexity
+6. **Early Childhood** (3-6 years): Advanced language, social understanding
 
-# Get developmental metrics
-metrics = child.get_developmental_metrics()
-print(f"Current developmental stage: {metrics['developmental_stage']}")
-print(f"Vocabulary size: {metrics['vocabulary_size']}")
+Each stage includes specific milestones in language, emotional, cognitive, and social domains.
 
-# Save and load state
-child.save_state("my_child.json")
-child.load_state("my_child.json")
+## Contributing
 
-# Run simulation for multiple interactions
-simulation_result = child.simulate_development(
-    num_interactions=100,
-    callback=lambda info: print(f"Progress: {info['interaction']}/{info['total']}")
-)
-```
-
-## Architectural Components
-
-### The Mother Component
-
-The Mother component functions as a nurturing caregiver that:
-- Communicates through a structured output format
-- Responds realistically (not omnisciently) to the child's state
-- Has configurable personality traits and parenting styles
-- Provides verbal responses, emotional states, non-verbal cues, and teaching elements
-
-### The Neural Child's Mind
-
-The child's mind consists of:
-- A network of interconnected neural components representing psychological functions
-- Specialized components for emotions, language, memory, and consciousness
-- Dynamic activation patterns based on interactions
-- Developmental metrics tracking growth over time
-- Stage-based progression from prenatal to adulthood
-
-### The Dashboard Interface
-
-A comprehensive visualization system featuring:
-- Real-time display of the child's mental state and development
-- Interactive chat interface (available after sufficient development)
-- System controls for training, saving/loading states
-- Metrics tracking (vocabulary size, emotional development, training time)
-- Neural network activation visualization
-
-## Learning and Development Process
-
-NeuralChild follows a psychological development framework with:
-
-1. **Developmental Stages**:
-   - Prenatal: Neural architecture formation
-   - Infancy: Babbling, basic recognition
-   - Early childhood: Rapid vocabulary acquisition
-   - Middle childhood: Grammar emergence
-   - Adolescence: Abstract thinking development
-   - Various adult stages: Refinement and specialization
-
-2. **Language Acquisition**:
-   - Word-emotion associations
-   - Context-based understanding
-   - Progression from single words to complex sentences
-   - Both explicit teaching and passive absorption
-
-3. **Emotional Development**:
-   - Emotional contagion from the Mother
-   - Association of emotions with experiences
-   - Increasing emotional stability over time
-   - Development of complex emotional responses
-
-## Configuration
-
-NeuralChild is highly configurable through JSON configuration files:
-
-```json
-{
-  "mother": {
-    "personality_traits": {
-      "openness": 0.7,
-      "conscientiousness": 0.8,
-      "extraversion": 0.6,
-      "agreeableness": 0.9,
-      "neuroticism": 0.2
-    },
-    "parenting_style": "authoritative",
-    "teaching_style": "socratic"
-  },
-  "development": {
-    "time_acceleration": 1000,
-    "learning_rate_multiplier": 1.0,
-    "vocabulary_acquisition_rate": 0.8,
-    "emotional_development_rate": 0.7
-  }
-}
-```
-
-## Technical Considerations
-
-- Processing is done on the CPU rather than GPU (psychological networks are smaller)
-- Development is simulated at an accelerated rate
-- Language development uses simplified models compared to biological reality
-- The modular architecture allows for extensions with additional components
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgements
-
-NeuralChild is inspired by various theories of developmental psychology, cognitive science, and artificial intelligence research.
+This project is licensed under the MIT License - see the LICENSE file for details. 
