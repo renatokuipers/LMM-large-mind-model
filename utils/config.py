@@ -238,7 +238,7 @@ class LLMConfig(BaseModel):
     base_url: str = "http://192.168.2.12:1234"
     model: str = "qwen2.5-7b-instruct"
     temperature: float = Field(0.7, ge=0.0, le=1.0)
-    max_tokens: int = Field(50, gt=0)
+    max_tokens: int = Field(1000, gt=0)
 
 # Default LLM configuration
 DEFAULT_LLM_CONFIG = LLMConfig()
