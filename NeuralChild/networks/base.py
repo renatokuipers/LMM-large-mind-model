@@ -11,11 +11,11 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import ValidationError
 
-from models.network_models import (
+from ..models.network_models import (
     BaseNetwork, BaseNetworkConfig, Connection, ConnectionType,
     ActivationFunction, NetworkState
 )
-import config
+from .. import config
 
 # Configure logging
 logger = logging.getLogger(__name__)
