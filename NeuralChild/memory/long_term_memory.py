@@ -517,6 +517,14 @@ class LongTermMemory:
             "total_memory_count": len(self.memories)
         }
     
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """Get statistics about the memory system"""
+        return {
+            "total_items": len(self.memories),
+            "by_domain": {domain.value: len(memories) for domain, memories in self.domain_index.items()},
+            "important_count": len(self.important_memories)
+        }
+    
     def save_state(self, filepath: Optional[Path] = None) -> None:
         """Save the state of long-term memory to disk"""
         if filepath is None:
