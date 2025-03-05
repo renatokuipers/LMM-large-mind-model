@@ -1,1 +1,0 @@
-# Interpretation of sensory information

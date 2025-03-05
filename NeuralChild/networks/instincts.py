@@ -1,1 +1,0 @@
-# Hardwired responses to stimuli

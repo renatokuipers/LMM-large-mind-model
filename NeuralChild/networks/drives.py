@@ -1,1 +1,0 @@
-# Core motivational forces (needs, safety, attachment)

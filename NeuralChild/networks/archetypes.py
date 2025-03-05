@@ -1,1 +1,0 @@
-# Deep patterns forming personality foundations
