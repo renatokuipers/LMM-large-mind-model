@@ -132,8 +132,14 @@ class BaseNetwork:
         # Process inputs to determine activation level
         processing_result = self.process_inputs()
         
-        # Calculate new activation level
-        internal_stimulation = sum(processing_result.values()) / max(1, len(processing_result))
+        # Calculate internal stimulation - safely handle dictionary or numeric values
+        if isinstance(processing_result, dict):
+            valid_values = [v for v in processing_result.values() if isinstance(v, (int, float))]
+            internal_stimulation = sum(valid_values) / max(1, len(valid_values)) if valid_values else 0.0
+        else:
+            internal_stimulation = float(processing_result) if isinstance(processing_result, (int, float)) else 0.0
+        
+        # Combine with external stimulation
         total_stimulation = (internal_stimulation + external_stimulation) / 2
         
         # Update activation level
