@@ -1,1 +1,0 @@
-# A Dash dashboard (with the dash library) in darkmode showing the results of the neural network model with metrics, development progress and a chatbot (when the LMM model is trained enough).
