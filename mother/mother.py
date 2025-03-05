@@ -253,7 +253,8 @@ Remember that you are not omniscient - you can only respond based on what you ca
         # Save interaction history
         history_path = directory / "interaction_history.json"
         with open(history_path, "w") as f:
-            json.dump([interaction.dict() for interaction in self.interaction_history], f, indent=2)
+            # Use model_dump() instead of dict()
+            json.dump([interaction.model_dump() for interaction in self.interaction_history], f, indent=2)
     
     def load_interaction_history(self, directory: Path):
         """Load the interaction history from a directory.

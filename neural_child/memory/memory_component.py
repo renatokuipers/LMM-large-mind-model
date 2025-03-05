@@ -32,7 +32,8 @@ class MemoryComponent(NeuralComponent):
         memory_capacity: int = 10000,
         embedding_api_url: str = "http://192.168.2.12:1234/v1/embeddings",
         embedding_model: str = "text-embedding-nomic-embed-text-v1.5@q4_k_m",
-        embedding_dimension: int = 384
+        embedding_dimension: int = 384,
+        device: str = "cpu"  # Add this parameter
     ):
         """Initialize the memory component.
         
@@ -47,6 +48,9 @@ class MemoryComponent(NeuralComponent):
             embedding_dimension: Dimension of embedding vectors (default: 384 for Nomic embedding model)
         """
         super().__init__(input_size=input_size, hidden_size=hidden_size, output_size=output_size, name=name)
+        
+        # Add device attribute
+        self.device = device
         
         # Memory development metrics
         self.working_memory_capacity = 0.1  # Initial capacity (scales with age)

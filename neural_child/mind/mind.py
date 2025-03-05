@@ -71,7 +71,7 @@ class Mind:
         mother_personality: MotherPersonalityConfig = DEFAULT_MOTHER_PERSONALITY,
         llm_config: LLMConfig = DEFAULT_LLM_CONFIG,
         device: str = "cpu",
-        base_path: Path = Path("data/neural_child"),
+        base_path: Optional[Path] = Path("data/neural_child"),
         load_existing: bool = False
     ):
         """
@@ -87,13 +87,22 @@ class Mind:
         """
         self.config = config
         self.device = device
-        self.base_path = base_path
-        self.models_path = base_path / "models"
-        self.interactions_path = base_path / "interactions"
-        self.development_path = base_path / "development"
-        self.lmm_path = base_path / "lmm"
         
-        # Create directories if they don't exist
+        # Handle None base_path gracefully
+        if base_path is None:
+            # Use a temporary directory for in-memory testing
+            import tempfile
+            self.base_path = Path(tempfile.mkdtemp())
+        else:
+            self.base_path = base_path
+            
+        # Define paths
+        self.models_path = self.base_path / "models"
+        self.interactions_path = self.base_path / "interactions"
+        self.development_path = self.base_path / "development"
+        self.lmm_path = self.base_path / "lmm"
+        
+        # Create directories
         for path in [self.models_path, self.interactions_path, self.development_path, self.lmm_path]:
             path.mkdir(parents=True, exist_ok=True)
             
@@ -700,25 +709,25 @@ class Mind:
         Returns:
             List of floats representing tensor data
         """
-        # Simplified implementation - in reality, you'd need a more sophisticated
-        # approach to handle complex nested structures and text
-        result = []
+        # Create a consistent-sized vector regardless of input data
+        result = np.zeros(self.cognitive_component.input_size, dtype=np.float32)
+        
+        # Fill in values from input_data where possible
+        idx = 0
         
         # Extract numeric values
         for key, value in input_data.items():
-            if isinstance(value, (int, float)):
-                result.append(float(value))
+            if isinstance(value, (int, float)) and idx < len(result):
+                result[idx] = float(value)
+                idx += 1
             elif isinstance(value, dict):
                 # For dictionaries like emotional states, extract values
                 for subkey, subvalue in value.items():
-                    if isinstance(subvalue, (int, float)):
-                        result.append(float(subvalue))
+                    if isinstance(subvalue, (int, float)) and idx < len(result):
+                        result[idx] = float(subvalue)
+                        idx += 1
         
-        # Pad to ensure consistent size
-        while len(result) < 32:  # Minimum input size
-            result.append(0.0)
-        
-        return result[:64]  # Limit to maximum size
+        return result.tolist()
     
     def _prepare_output_tensor(self, output_data: Dict[str, Any]) -> List[float]:
         """
@@ -732,24 +741,25 @@ class Mind:
         Returns:
             List of floats representing tensor data
         """
-        # Similar simplified implementation as input tensor preparation
-        result = []
+        # Create a consistent-sized vector regardless of output data
+        result = np.zeros(self.cognitive_component.output_size, dtype=np.float32)
+        
+        # Fill in values from output_data where possible
+        idx = 0
         
         # Extract numeric values
         for key, value in output_data.items():
-            if isinstance(value, (int, float)):
-                result.append(float(value))
+            if isinstance(value, (int, float)) and idx < len(result):
+                result[idx] = float(value)
+                idx += 1
             elif isinstance(value, dict):
                 # For dictionaries like emotional states, extract values
                 for subkey, subvalue in value.items():
-                    if isinstance(subvalue, (int, float)):
-                        result.append(float(subvalue))
+                    if isinstance(subvalue, (int, float)) and idx < len(result):
+                        result[idx] = float(subvalue)
+                        idx += 1
         
-        # Pad to ensure consistent size
-        while len(result) < 32:  # Minimum output size
-            result.append(0.0)
-        
-        return result[:64]  # Limit to maximum size
+        return result.tolist()
     
     def save(self) -> None:
         """Save the entire Mind state, including all neural components."""
