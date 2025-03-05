@@ -1,2 +1,78 @@
-create_project_layout.bat
-__pycache__
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+env/
+venv/
+ENV/
+.env
+.venv
+.python-version
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-workspace
+*.sublime-project
+.spyderproject
+.spyproject
+.ropeproject
+.project
+.pydevproject
+
+# NeuralChild specific
+*.json
+!sample_config.json
+!package.json
+neural_child_states/
+log/
+logs/
+*.log
+traces/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local development specific
+*.pkl
+.DS_Store
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Node dependencies (for dashboard)
+node_modules/
+npm-debug.log
+
+# Documentation
+_build/
