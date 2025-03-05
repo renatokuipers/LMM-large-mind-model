@@ -789,9 +789,13 @@ def control_training(
         button_id = None
     else:
         button_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    # Return current state if no button was clicked and not initialized
+    if not button_id and not initialized:
+        return False, True, True, True, True, False, False, False, "Status: Not initialized", "Age: N/A", "Milestone Progress: N/A"
     
     # Initialize neural child
-    if button_id == "initialize-btn" and not initialized:
+    if button_id == "initialize-btn":
         try:
             neural_child = NeuralChild(development_speed_multiplier=speed)
             mother = Mother(llm_client=llm_client)
@@ -807,12 +811,14 @@ def control_training(
             training_state.update_metrics(neural_child)
             
             logger.info("Neural child initialized successfully")
+            
+            # Return updated state with initialization
+            return True, False, True, True, False, True, False, False, status_text, age_text, milestone_text
+            
         except Exception as e:
             logger.error(f"Error initializing neural child: {str(e)}")
-            status_text = f"Status: Error initializing - {str(e)}"
-            age_text = "Age: N/A"
-            milestone_text = "Milestone Progress: N/A"
-    
+            return False, True, True, True, True, False, False, False, f"Status: Error initializing - {str(e)}", "Age: N/A", "Milestone Progress: N/A"
+
     # Load state
     elif button_id == "load-btn" and state_to_load:
         try:
