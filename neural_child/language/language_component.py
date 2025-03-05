@@ -469,6 +469,22 @@ class LanguageComponent(NeuralComponent):
             "comprehension_level": self.comprehension_level
         }
     
+    def get_top_words(self, n: int = 10) -> List[Tuple[str, int]]:
+        """Get the top N most frequent words in the vocabulary.
+        
+        Args:
+            n: Number of top words to return
+            
+        Returns:
+            List of tuples of (word, frequency) for the top N words
+        """
+        # If vocabulary is empty, return an empty list
+        if not self.vocabulary:
+            return []
+        
+        # Return top N most common words
+        return self.word_frequency.most_common(n)
+    
     def save(self, directory: Path):
         """Save the component to a directory.
         

@@ -31,7 +31,8 @@ class MemoryComponent(NeuralComponent):
         name: str = "memory_component",
         memory_capacity: int = 10000,
         embedding_api_url: str = "http://192.168.2.12:1234/v1/embeddings",
-        embedding_model: str = "text-embedding-nomic-embed-text-v1.5@q4_k_m"
+        embedding_model: str = "text-embedding-nomic-embed-text-v1.5@q4_k_m",
+        embedding_dimension: int = 384
     ):
         """Initialize the memory component.
         
@@ -43,6 +44,7 @@ class MemoryComponent(NeuralComponent):
             memory_capacity: Maximum number of memories to store
             embedding_api_url: URL for the embedding API
             embedding_model: Model to use for embeddings
+            embedding_dimension: Dimension of embedding vectors (default: 384 for Nomic embedding model)
         """
         super().__init__(input_size=input_size, hidden_size=hidden_size, output_size=output_size, name=name)
         
@@ -55,7 +57,7 @@ class MemoryComponent(NeuralComponent):
         # Memory storage
         self.episodic_memories = []
         self.semantic_memories = {}
-        self.procedural_memories = []
+        self.procedural_memories = {}
         
         # Working memory (short-term)
         self.working_memory = deque(maxlen=5)
@@ -68,7 +70,7 @@ class MemoryComponent(NeuralComponent):
         self.embedding_model = embedding_model
         
         # Episodic memory index for similarity search
-        self.embedding_dimension = 384  # Default dimension for text embeddings
+        self.embedding_dimension = embedding_dimension  # Dimension for text embeddings
         self.episodic_index = faiss.IndexFlatL2(self.embedding_dimension)
         
         # Tracking memory development
@@ -196,11 +198,27 @@ class MemoryComponent(NeuralComponent):
             # Add to episodic memory
             self.episodic_memories.append(experience_with_metadata)
             
-            # Create embedding for the memory
-            embedding = self._create_memory_embedding(experience_with_metadata)
-            
-            # Add to FAISS index
-            self.episodic_index.add(np.array([embedding], dtype=np.float32))
+            try:
+                # Create embedding for the memory
+                embedding = self._create_memory_embedding(experience_with_metadata)
+                
+                # Verify embedding dimension
+                if len(embedding) != self.embedding_dimension:
+                    # Ensure correct dimension
+                    if len(embedding) > self.embedding_dimension:
+                        embedding = embedding[:self.embedding_dimension]
+                    else:
+                        padding = np.zeros(self.embedding_dimension - len(embedding), dtype=np.float32)
+                        embedding = np.concatenate([embedding, padding])
+                
+                # Add to FAISS index
+                self.episodic_index.add(np.array([embedding], dtype=np.float32))
+            except Exception as e:
+                print(f"Error adding memory to FAISS index: {e}")
+                # If there was an error adding to the index, consider rebuilding it
+                if len(self.episodic_memories) > 1:  # Only if we have at least one other memory
+                    print("Attempting to rebuild the index...")
+                    self._rebuild_episodic_index()
             
             # Limit episodic memory size
             if len(self.episodic_memories) > self.memory_capacity:
@@ -252,7 +270,7 @@ class MemoryComponent(NeuralComponent):
             memory: Memory dictionary containing content to embed
             
         Returns:
-            Numpy array containing the embedding vector
+            Numpy array containing the embedding vector with dimension matching self.embedding_dimension
         """
         # Extract relevant content from the memory
         content_parts = []
@@ -329,14 +347,14 @@ class MemoryComponent(NeuralComponent):
             # Convert to numpy array
             embedding_np = np.array(embedding, dtype=np.float32)
             
-            # If the embedding dimension doesn't match input_size, resize it
-            if len(embedding_np) != self.input_size:
-                if len(embedding_np) > self.input_size:
+            # Ensure the embedding dimension matches self.embedding_dimension
+            if len(embedding_np) != self.embedding_dimension:
+                if len(embedding_np) > self.embedding_dimension:
                     # Truncate if too large
-                    embedding_np = embedding_np[:self.input_size]
+                    embedding_np = embedding_np[:self.embedding_dimension]
                 else:
                     # Pad with zeros if too small
-                    padding = np.zeros(self.input_size - len(embedding_np), dtype=np.float32)
+                    padding = np.zeros(self.embedding_dimension - len(embedding_np), dtype=np.float32)
                     embedding_np = np.concatenate([embedding_np, padding])
             
             return embedding_np
@@ -349,8 +367,8 @@ class MemoryComponent(NeuralComponent):
             seed = hash(content_text) % 10000
             np.random.seed(seed)
             
-            # Generate a random embedding
-            embedding = np.random.randn(self.input_size).astype(np.float32)
+            # Generate a random embedding with the correct dimension
+            embedding = np.random.randn(self.embedding_dimension).astype(np.float32)
             
             # Normalize the embedding
             embedding = embedding / (np.linalg.norm(embedding) + 1e-8)
@@ -363,13 +381,26 @@ class MemoryComponent(NeuralComponent):
         self.episodic_index = faiss.IndexFlatL2(self.embedding_dimension)
         
         # Add all memories to index
-        embeddings = []
-        for memory in self.episodic_memories:
-            embedding = self._create_memory_embedding(memory)
-            embeddings.append(embedding)
-        
-        if embeddings:
-            self.episodic_index.add(np.array(embeddings, dtype=np.float32))
+        if len(self.episodic_memories) > 0:
+            embeddings = []
+            for memory in self.episodic_memories:
+                try:
+                    embedding = self._create_memory_embedding(memory)
+                    # Verify embedding dimension
+                    if len(embedding) != self.embedding_dimension:
+                        # Ensure correct dimension
+                        if len(embedding) > self.embedding_dimension:
+                            embedding = embedding[:self.embedding_dimension]
+                        else:
+                            padding = np.zeros(self.embedding_dimension - len(embedding), dtype=np.float32)
+                            embedding = np.concatenate([embedding, padding])
+                    embeddings.append(embedding)
+                except Exception as e:
+                    print(f"Error creating embedding for memory during index rebuild: {e}")
+            
+            if embeddings:
+                embeddings_array = np.array(embeddings, dtype=np.float32)
+                self.episodic_index.add(embeddings_array)
     
     def _extract_semantic_information(self, experience: Dict[str, Any]):
         """Extract semantic information from an experience.
@@ -585,25 +616,46 @@ class MemoryComponent(NeuralComponent):
         # Extract actions to search for
         actions = content.get("actions", [])
         
-        for action in actions:
-            if action in self.procedural_memories:
-                memory = self.procedural_memories[action]
-                
-                # Apply memory strength filter
-                if memory.get("memory_strength", 0.0) > 0.2:
-                    retrieved_memories.append({
-                        "action": action,
-                        "success_count": memory["success_count"],
-                        "failure_count": memory["failure_count"],
-                        "contexts": memory["contexts"],
-                        "memory_strength": memory["memory_strength"]
-                    })
+        if isinstance(self.procedural_memories, dict):
+            # Dictionary-based retrieval
+            for action in actions:
+                if action in self.procedural_memories:
+                    memory = self.procedural_memories[action]
                     
-                    # Boost memory strength (rehearsal effect)
-                    memory["memory_strength"] = min(1.0, memory.get("memory_strength", 0.0) + self.rehearsal_boost)
-                    
-                    if len(retrieved_memories) >= limit:
-                        break
+                    # Apply memory strength filter
+                    if memory.get("memory_strength", 0.0) > 0.2:
+                        retrieved_memories.append({
+                            "action": action,
+                            "success_count": memory.get("success_count", 0),
+                            "failure_count": memory.get("failure_count", 0),
+                            "contexts": memory.get("contexts", []),
+                            "memory_strength": memory.get("memory_strength", 0.0)
+                        })
+                        
+                        # Boost memory strength (rehearsal effect)
+                        memory["memory_strength"] = min(1.0, memory.get("memory_strength", 0.0) + self.rehearsal_boost)
+                        
+                        if len(retrieved_memories) >= limit:
+                            break
+        elif isinstance(self.procedural_memories, list):
+            # List-based retrieval
+            for memory in self.procedural_memories:
+                if "action" in memory and memory["action"] in actions:
+                    # Apply memory strength filter
+                    if memory.get("memory_strength", 0.0) > 0.2:
+                        retrieved_memories.append({
+                            "action": memory["action"],
+                            "success_count": memory.get("success_count", 0),
+                            "failure_count": memory.get("failure_count", 0),
+                            "contexts": memory.get("contexts", []),
+                            "memory_strength": memory.get("memory_strength", 0.0)
+                        })
+                        
+                        # Boost memory strength (rehearsal effect)
+                        memory["memory_strength"] = min(1.0, memory.get("memory_strength", 0.0) + self.rehearsal_boost)
+                        
+                        if len(retrieved_memories) >= limit:
+                            break
         
         return retrieved_memories
     
@@ -617,9 +669,13 @@ class MemoryComponent(NeuralComponent):
         for concept, memory in self.semantic_memories.items():
             memory["memory_strength"] = max(0.0, memory.get("memory_strength", 0.0) - self.decay_rate)
         
-        # Decay procedural memories
-        for action, memory in self.procedural_memories.items():
-            memory["memory_strength"] = max(0.0, memory.get("memory_strength", 0.0) - self.decay_rate)
+        # Decay procedural memories - handle whether it's a list or a dictionary
+        if isinstance(self.procedural_memories, dict):
+            for action, memory in self.procedural_memories.items():
+                memory["memory_strength"] = max(0.0, memory.get("memory_strength", 0.0) - self.decay_rate)
+        elif isinstance(self.procedural_memories, list):
+            for memory in self.procedural_memories:
+                memory["memory_strength"] = max(0.0, memory.get("memory_strength", 0.0) - self.decay_rate)
     
     def _consolidate_memories(self):
         """Consolidate memories (strengthen important ones, remove weak ones)."""
@@ -643,10 +699,16 @@ class MemoryComponent(NeuralComponent):
         }
         
         # Consolidate procedural memories
-        self.procedural_memories = {
-            action: memory for action, memory in self.procedural_memories.items()
-            if memory.get("memory_strength", 0.0) > 0.1
-        }
+        if isinstance(self.procedural_memories, dict):
+            self.procedural_memories = {
+                action: memory for action, memory in self.procedural_memories.items()
+                if memory.get("memory_strength", 0.0) > 0.1
+            }
+        elif isinstance(self.procedural_memories, list):
+            self.procedural_memories = [
+                memory for memory in self.procedural_memories
+                if memory.get("memory_strength", 0.0) > 0.1
+            ]
     
     def _update_memory_development(self, age_months: float, developmental_stage: str):
         """Update memory development metrics based on age and developmental stage.
@@ -754,13 +816,12 @@ class MemoryComponent(NeuralComponent):
             "decay_rate": self.decay_rate,
             "rehearsal_boost": self.rehearsal_boost,
             "emotional_significance_threshold": self.emotional_significance_threshold,
-            "novelty_threshold": self.novelty_threshold
+            "novelty_threshold": self.novelty_threshold,
+            "embedding_dimension": self.embedding_dimension
         }
         
-        # Save additional state
-        additional_state_path = directory / f"{self.name}_additional_state.json"
-        with open(additional_state_path, "w") as f:
-            json.dump(additional_state, f, indent=2)
+        with open(directory / f"{self.name}_additional_state.json", "w") as f:
+            json.dump(additional_state, f)
         
         # Save FAISS index
         faiss.write_index(self.episodic_index, str(directory / f"{self.name}_episodic_index.faiss"))
@@ -786,14 +847,53 @@ class MemoryComponent(NeuralComponent):
                 self.memory_capacity = additional_state["memory_capacity"]
                 self.episodic_memories = additional_state["episodic_memories"]
                 self.semantic_memories = additional_state["semantic_memories"]
-                self.procedural_memories = additional_state["procedural_memories"]
+                
+                # Handle procedural memories, ensuring they're stored as a dictionary
+                if "procedural_memories" in additional_state:
+                    if isinstance(additional_state["procedural_memories"], list):
+                        # Convert to dictionary if it's a list
+                        proc_memories = {}
+                        for memory in additional_state["procedural_memories"]:
+                            if "action" in memory:
+                                proc_memories[memory["action"]] = memory
+                        self.procedural_memories = proc_memories
+                    else:
+                        # Use as is if it's already a dictionary
+                        self.procedural_memories = additional_state["procedural_memories"]
+                else:
+                    # Initialize as empty dictionary if missing
+                    self.procedural_memories = {}
                 self.working_memory = deque(additional_state["working_memory"], maxlen=5)
                 self.decay_rate = additional_state["decay_rate"]
                 self.rehearsal_boost = additional_state["rehearsal_boost"]
                 self.emotional_significance_threshold = additional_state["emotional_significance_threshold"]
                 self.novelty_threshold = additional_state["novelty_threshold"]
+                # Load embedding_dimension if it exists, otherwise keep the default
+                if "embedding_dimension" in additional_state:
+                    self.embedding_dimension = additional_state["embedding_dimension"]
         
         # Load FAISS index
         index_path = directory / f"{self.name}_episodic_index.faiss"
-        if index_path.exists():
-            self.episodic_index = faiss.read_index(str(index_path)) 
+        try:
+            if index_path.exists():
+                self.episodic_index = faiss.read_index(str(index_path))
+                
+                # Verify index dimension matches expected dimension
+                if self.episodic_index.d != self.embedding_dimension:
+                    print(f"Warning: Loaded index dimension ({self.episodic_index.d}) doesn't match expected dimension ({self.embedding_dimension})")
+                    # Reset the index to the correct dimension and rebuild
+                    self.episodic_index = faiss.IndexFlatL2(self.embedding_dimension)
+                    # And rebuild it from memories
+                    self._rebuild_episodic_index()
+            else:
+                # If no index file exists, initialize a new one and build it
+                self.episodic_index = faiss.IndexFlatL2(self.embedding_dimension)
+                if self.episodic_memories:
+                    self._rebuild_episodic_index()
+        except Exception as e:
+            print(f"Error loading FAISS index: {e}. Initializing a new index.")
+            # If there's an error loading the index, initialize a new one
+            self.episodic_index = faiss.IndexFlatL2(self.embedding_dimension)
+            # And rebuild it from memories if any exist
+            if self.episodic_memories:
+                self._rebuild_episodic_index() 
