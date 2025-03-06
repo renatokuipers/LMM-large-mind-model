@@ -1,4 +1,3 @@
-# llm_module.py
 import requests
 import json
 from typing import List, Dict, Union
@@ -11,10 +10,12 @@ class Message:
 
 class LLMClient:
     def __init__(self, base_url: str = "http://192.168.2.12:1234"):
-        """Initialize the LLM client with the base URL of the API."""
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url
         self.headers = {"Content-Type": "application/json"}
 
+    # -------------------------
+    # Chat Completion Methods
+    # -------------------------
     def chat_completion(
         self,
         messages: List[Message],
@@ -23,7 +24,6 @@ class LLMClient:
         max_tokens: int = -1,
         stream: bool = False
     ) -> Union[str, requests.Response]:
-        """Send a chat completion request to the API."""
         endpoint = f"{self.base_url}/v1/chat/completions"
         payload = {
             "model": model,
@@ -34,65 +34,96 @@ class LLMClient:
         }
         response = requests.post(endpoint, headers=self.headers, json=payload)
         response.raise_for_status()
+
         if stream:
             return response
-        else:
-            return response.json()["choices"][0]["message"]["content"]
+        return response.json()["choices"][0]["message"]["content"]
 
+    # -------------------------
+    # Structured JSON Completion
+    # -------------------------
     def structured_completion(
         self,
         messages: List[Message],
         json_schema: Dict,
         model: str = "qwen2.5-7b-instruct",
         temperature: float = 0.7,
-        max_tokens: int = 50,
-    ) -> Dict:
-        """Send a structured completion request to the API."""
+        max_tokens: int = -1,
+        stream: bool = False
+    ) -> Union[Dict, requests.Response]:
         endpoint = f"{self.base_url}/v1/chat/completions"
         payload = {
             "model": model,
             "messages": [{"role": msg.role, "content": msg.content} for msg in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": json_schema
             },
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False
+            "stream": stream
         }
         response = requests.post(endpoint, headers=self.headers, json=payload)
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return json.loads(content)
+        if stream:
+            return response
+        else:
+            return response.json()["choices"][0]["message"]["content"]
 
-def process_stream(response: requests.Response) -> str:
-    """Process a streaming response."""
-    accumulated_text = ""
-    for line in response.iter_lines():
-        if line:
-            try:
-                json_response = json.loads(line.decode('utf-8').replace('data: ', ''))
-                if json_response.get("choices") and json_response["choices"][0].get("delta"):
-                    delta = json_response["choices"][0]["delta"]
-                    if "content" in delta:
-                        accumulated_text += delta["content"]
-            except json.JSONDecodeError:
-                continue
-    return accumulated_text
+    # -------------------------
+    # Embedding Methods
+    # -------------------------
+    def get_embedding(
+        self,
+        texts: Union[str, List[str]],
+        embedding_model: str = "text-embedding-nomic-embed-text-v1.5@q4_k_m"
+    ) -> Union[List[float], List[List[float]]]:
+        """Generate embeddings for given input text(s)."""
+        endpoint = f"{self.base_url}/v1/embeddings"
+        payload = {
+            "model": embedding_model,
+            "input": texts
+        }
+        response = requests.post(endpoint, headers=self.headers, json=payload)
+        response.raise_for_status()
+        embeddings_data = response.json()["data"]
 
+        # Handle single or multiple embeddings
+        if isinstance(texts, str):
+            return embeddings[0]["embedding"]
+        else:
+            return [item["embedding"] for item in response.json()["data"]]
+
+    # -------------------------
+    # Streaming Helper
+    # -------------------------
+    def process_stream(self, response: requests.Response) -> str:
+        accumulated_text = ""
+        for line in response.iter_lines():
+            if line:
+                try:
+                    json_response = json.loads(line.decode('utf-8').replace('data: ', ''))
+                    chunk = json_response.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    accumulated_text += chunk
+                except json.JSONDecodeError:
+                    continue
+        return accumulated_text
+
+# -------------------------
+# Usage Example (Embedding)
+# -------------------------
 if __name__ == "__main__":
     client = LLMClient()
-    messages = [
-        Message(role="system", content="Always answer in rhymes."),
-        Message(role="user", content="Introduce yourself.")
-    ]
-    response = client.chat_completion(messages, stream=False)
-    print("Non-streaming response:", response)
-    stream_response = client.chat_completion(messages, stream=True)
-    streamed_text = process_stream(stream_response)
-    print("Streamed response:", streamed_text)
 
-    joke_schema = {
+    # Chat completion usage example:
+    messages = [
+        Message(role="system", content="Always speak in rhymes."),
+        Message(role="user", content="Tell me about your day.")
+    ]
+    chat_response = client.chat_completion(messages)
+    print("\n\nChat Response:", chat_response)
+
+    json_schema = {
         "name": "joke_response",
         "strict": "true",
         "schema": {
@@ -107,5 +138,11 @@ if __name__ == "__main__":
         Message(role="system", content="You are a helpful jokester."),
         Message(role="user", content="Tell me a joke.")
     ]
-    structured_response = client.structured_completion(messages, joke_schema)
-    print("Structured response:", structured_response)
+
+    structured_response = client.structured_completion(messages, json_schema)
+    print("\n\nStructured Response:", structured_response)
+
+    # Embedding usage example:
+    embedding_response = client.get_embedding(["I feel happy today!"])
+    print("\n\nEmbedding Response:", embedding_response)
+
