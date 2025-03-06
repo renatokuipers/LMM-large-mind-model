@@ -335,7 +335,7 @@ class Mind:
                     {
                         "type": "vocabulary",
                         "content": "hello",
-                        "complexity": 0.1
+                        "importance": 0.8
                     }
                 ]
             }
@@ -539,13 +539,13 @@ class Mind:
             # Cognitive training
             if isinstance(self.cognitive_component, NeuralComponent):
                 cognitive_input = torch.tensor(
-                    self._prepare_input_tensor(data["cognitive"]["input"]), 
+                    self._prepare_input_tensor(data["cognitive"]["input"], "cognitive"), 
                     dtype=torch.float32,
                     device=self.device
                 )
                 
                 cognitive_target = torch.tensor(
-                    self._prepare_output_tensor(data["cognitive"]["output"]),
+                    self._prepare_output_tensor(data["cognitive"]["output"], "cognitive"),
                     dtype=torch.float32,
                     device=self.device
                 )
@@ -560,13 +560,13 @@ class Mind:
             # Emotional training
             if isinstance(self.emotional_component, NeuralComponent):
                 emotional_input = torch.tensor(
-                    self._prepare_input_tensor(data["emotional"]["input"]),
+                    self._prepare_input_tensor(data["emotional"]["input"], "emotional"),
                     dtype=torch.float32,
                     device=self.device
                 )
                 
                 emotional_target = torch.tensor(
-                    self._prepare_output_tensor(data["emotional"]["output"]),
+                    self._prepare_output_tensor(data["emotional"]["output"], "emotional"),
                     dtype=torch.float32,
                     device=self.device
                 )
@@ -581,13 +581,13 @@ class Mind:
             # Language training
             if isinstance(self.language_component, NeuralComponent):
                 language_input = torch.tensor(
-                    self._prepare_input_tensor(data["language"]["input"]),
+                    self._prepare_input_tensor(data["language"]["input"], "language"),
                     dtype=torch.float32,
                     device=self.device
                 )
                 
                 language_target = torch.tensor(
-                    self._prepare_output_tensor(data["language"]["output"]),
+                    self._prepare_output_tensor(data["language"]["output"], "language"),
                     dtype=torch.float32,
                     device=self.device
                 )
@@ -602,13 +602,13 @@ class Mind:
             # Memory training
             if isinstance(self.memory_component, NeuralComponent):
                 memory_input = torch.tensor(
-                    self._prepare_input_tensor(data["memory"]["input"]),
+                    self._prepare_input_tensor(data["memory"]["input"], "memory"),
                     dtype=torch.float32,
                     device=self.device
                 )
                 
                 memory_target = torch.tensor(
-                    self._prepare_output_tensor(data["memory"]["output"]),
+                    self._prepare_output_tensor(data["memory"]["output"], "memory"),
                     dtype=torch.float32,
                     device=self.device
                 )
@@ -623,13 +623,13 @@ class Mind:
             # Social training
             if isinstance(self.social_component, NeuralComponent):
                 social_input = torch.tensor(
-                    self._prepare_input_tensor(data["social"]["input"]),
+                    self._prepare_input_tensor(data["social"]["input"], "social"),
                     dtype=torch.float32,
                     device=self.device
                 )
                 
                 social_target = torch.tensor(
-                    self._prepare_output_tensor(data["social"]["output"]),
+                    self._prepare_output_tensor(data["social"]["output"], "social"),
                     dtype=torch.float32,
                     device=self.device
                 )
@@ -697,7 +697,7 @@ class Mind:
         # Update parameters
         self.meta_optimizer.step()
     
-    def _prepare_input_tensor(self, input_data: Dict[str, Any]) -> List[float]:
+    def _prepare_input_tensor(self, input_data: Dict[str, Any], component_name: str = None) -> List[float]:
         """
         Convert input data dictionary to a tensor.
         This is a simplified implementation - in a real system, this would
@@ -705,12 +705,26 @@ class Mind:
         
         Args:
             input_data: Dictionary of input data
+            component_name: Name of the component to prepare input for (to use the correct size)
             
         Returns:
             List of floats representing tensor data
         """
-        # Create a consistent-sized vector regardless of input data
-        result = np.zeros(self.cognitive_component.input_size, dtype=np.float32)
+        # Get the appropriate component size based on component_name
+        if component_name == "language":
+            tensor_size = self.language_component.input_size
+        elif component_name == "emotional":
+            tensor_size = self.emotional_component.input_size
+        elif component_name == "memory":
+            tensor_size = self.memory_component.input_size
+        elif component_name == "social":
+            tensor_size = self.social_component.input_size
+        else:
+            # Default to cognitive component size
+            tensor_size = self.cognitive_component.input_size
+            
+        # Create a consistent-sized vector based on the component
+        result = np.zeros(tensor_size, dtype=np.float32)
         
         # Fill in values from input_data where possible
         idx = 0
@@ -729,7 +743,7 @@ class Mind:
         
         return result.tolist()
     
-    def _prepare_output_tensor(self, output_data: Dict[str, Any]) -> List[float]:
+    def _prepare_output_tensor(self, output_data: Dict[str, Any], component_name: str = None) -> List[float]:
         """
         Convert output data dictionary to a tensor.
         This is a simplified implementation - in a real system, this would
@@ -737,12 +751,26 @@ class Mind:
         
         Args:
             output_data: Dictionary of output data
+            component_name: Name of the component to prepare output for (to use the correct size)
             
         Returns:
             List of floats representing tensor data
         """
-        # Create a consistent-sized vector regardless of output data
-        result = np.zeros(self.cognitive_component.output_size, dtype=np.float32)
+        # Get the appropriate component size based on component_name
+        if component_name == "language":
+            tensor_size = self.language_component.output_size
+        elif component_name == "emotional":
+            tensor_size = self.emotional_component.output_size
+        elif component_name == "memory":
+            tensor_size = self.memory_component.output_size
+        elif component_name == "social":
+            tensor_size = self.social_component.output_size
+        else:
+            # Default to cognitive component size
+            tensor_size = self.cognitive_component.output_size
+            
+        # Create a consistent-sized vector based on the component
+        result = np.zeros(tensor_size, dtype=np.float32)
         
         # Fill in values from output_data where possible
         idx = 0

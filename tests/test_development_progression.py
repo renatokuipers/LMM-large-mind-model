@@ -162,9 +162,6 @@ class TestDevelopmentProgression(unittest.TestCase):
         initial_age = development.age_months
         initial_stage = development.current_stage
         
-        # Simulate time passing
-        time.sleep(0.2)  # Sleep for 200ms
-        
         # Update development
         update = development.update(mind_state)
         

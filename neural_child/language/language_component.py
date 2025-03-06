@@ -39,7 +39,7 @@ class LanguageComponent(NeuralComponent):
         super().__init__(input_size, hidden_size, output_size, name)
         
         # Language development metrics
-        self.receptive_language_development = 0.0  # Understanding language
+        self.receptive_language_development = 0.2  # Understanding language
         self.expressive_language_development = 0.0  # Producing language
         
         # Vocabulary
@@ -213,7 +213,7 @@ class LanguageComponent(NeuralComponent):
                 
                 # Add words to vocabulary based on importance and receptive language development
                 for token in tokens:
-                    if random.random() < importance * self.receptive_language_development:
+                    if random.random() < importance * max(0.3, self.receptive_language_development):
                         self.vocabulary.add(token)
                         self.word_frequency[token] += 3  # Boost frequency for taught words
     
@@ -227,20 +227,20 @@ class LanguageComponent(NeuralComponent):
         # Receptive language develops earlier than expressive language
         if age_months <= 12:
             # First year: beginning of receptive language
-            self.receptive_language_development = min(0.3, age_months * 0.025)
-            self.expressive_language_development = min(0.1, max(0.0, (age_months - 6) * 0.016))
+            self.receptive_language_development = min(0.5, max(0.2, age_months * 0.04))  # Faster growth, minimum of 0.2
+            self.expressive_language_development = min(0.3, max(0.1, (age_months - 3) * 0.025))  # Start earlier, minimum of 0.1
         elif age_months <= 36:
             # 1-3 years: rapid development of receptive and expressive language
-            self.receptive_language_development = min(0.6, 0.3 + (age_months - 12) * 0.0125)
-            self.expressive_language_development = min(0.5, 0.1 + (age_months - 12) * 0.0167)
+            self.receptive_language_development = min(0.7, 0.5 + (age_months - 12) * 0.02)  # Faster growth
+            self.expressive_language_development = min(0.6, 0.3 + (age_months - 12) * 0.025)  # Faster growth
         elif age_months <= 72:
             # 3-6 years: continued development
-            self.receptive_language_development = min(0.8, 0.6 + (age_months - 36) * 0.0055)
-            self.expressive_language_development = min(0.7, 0.5 + (age_months - 36) * 0.0055)
+            self.receptive_language_development = min(0.9, 0.7 + (age_months - 36) * 0.01)  # Faster growth
+            self.expressive_language_development = min(0.8, 0.6 + (age_months - 36) * 0.01)  # Faster growth
         else:
             # After 6 years: refinement
-            self.receptive_language_development = min(1.0, 0.8 + (age_months - 72) * 0.001)
-            self.expressive_language_development = min(1.0, 0.7 + (age_months - 72) * 0.0015)
+            self.receptive_language_development = min(1.0, 0.9 + (age_months - 72) * 0.002)  # Faster growth
+            self.expressive_language_development = min(1.0, 0.8 + (age_months - 72) * 0.003)  # Faster growth
         
         # Grammar development
         if age_months <= 18:

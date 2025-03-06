@@ -128,8 +128,29 @@ class NeuralComponent(nn.Module, ABC):
         # Create optimizer
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         
+        # Ensure inputs and targets have batch dimension
+        if len(inputs.shape) == 1:
+            inputs = inputs.unsqueeze(0)  # Add batch dimension
+            
+        if len(targets.shape) == 1:
+            targets = targets.unsqueeze(0)  # Add batch dimension
+        
         # Forward pass
         outputs = self.forward(inputs)
+        
+        # Make sure targets match the output size
+        if outputs.shape != targets.shape:
+            # Resize targets to match outputs
+            if len(outputs.shape) == len(targets.shape):
+                # Create a new target tensor with the right size
+                new_targets = torch.zeros_like(outputs)
+                # Copy the values from the original targets where possible
+                min_size = min(outputs.shape[1], targets.shape[1])
+                new_targets[:, :min_size] = targets[:, :min_size]
+                targets = new_targets
+            else:
+                # If shapes are completely different, raise an error
+                raise ValueError(f"Target shape {targets.shape} cannot be adapted to match output shape {outputs.shape}")
         
         # Compute loss
         loss_fn = nn.MSELoss()

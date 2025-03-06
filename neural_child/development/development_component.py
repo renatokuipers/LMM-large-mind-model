@@ -19,7 +19,7 @@ class DevelopmentComponent:
     def __init__(
         self,
         initial_age_months: float = 0.0,
-        development_speed: float = 1.0,
+        development_speed: float = 10.0,
         development_stages: List[DevelopmentStageConfig] = DEVELOPMENT_STAGES,
         name: str = "development_component"
     ):
@@ -154,26 +154,27 @@ class DevelopmentComponent:
                 if category in mind_state["developmental_metrics"]:
                     for metric in self.developmental_metrics[category]:
                         if metric in mind_state["developmental_metrics"][category]:
-                            # Update metric with a weighted average (80% current, 20% new)
+                            # Update metric with a weighted average (70% current, 30% new)
                             self.developmental_metrics[category][metric] = (
-                                0.8 * self.developmental_metrics[category][metric] +
-                                0.2 * mind_state["developmental_metrics"][category][metric]
+                                0.7 * self.developmental_metrics[category][metric] +
+                                0.3 * mind_state["developmental_metrics"][category][metric]
                             )
         
-        # Add some random variation to simulate natural development
+        # Apply age-based progression for each metric
         for category in self.developmental_metrics:
             for metric in self.developmental_metrics[category]:
-                # Small random adjustment
-                adjustment = random.uniform(-0.01, 0.01)
-                self.developmental_metrics[category][metric] = max(
-                    0.0, min(1.0, self.developmental_metrics[category][metric] + adjustment)
+                # Apply a small random increase to simulate development
+                self.developmental_metrics[category][metric] = min(
+                    1.0,
+                    self.developmental_metrics[category][metric] + 
+                    random.uniform(0.005, 0.02)
                 )
                 
                 # Age-based progression
                 age_factor = min(1.0, self.age_months / 360.0)  # Max out at 30 years
                 self.developmental_metrics[category][metric] = max(
                     self.developmental_metrics[category][metric],
-                    age_factor * 0.5  # Age alone can bring metrics up to 0.5
+                    age_factor * 0.6
                 )
     
     def _check_milestones(self) -> Dict[str, List[str]]:

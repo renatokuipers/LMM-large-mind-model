@@ -550,6 +550,11 @@ class CognitiveComponent(NeuralComponent):
         # Save state
         state = {
             "name": self.name,
+            "activation_level": self.activation_level,
+            "confidence": self.confidence,
+            "training_progress": self.training_progress,
+            "experience_count": self.experience_count,
+            "developmental_metrics": self.developmental_metrics,
             "cognitive_development": self.cognitive_development,
             "attention_span_seconds": self.attention_span_seconds,
             "attention_decay_rate": self.attention_decay_rate,
@@ -589,6 +594,11 @@ class CognitiveComponent(NeuralComponent):
             with open(state_path, "r") as f:
                 state = json.load(f)
                 self.name = state["name"]
+                self.activation_level = state["activation_level"]
+                self.confidence = state["confidence"]
+                self.training_progress = state["training_progress"] 
+                self.experience_count = state["experience_count"]
+                self.developmental_metrics = state["developmental_metrics"]
                 self.cognitive_development = state["cognitive_development"]
                 self.attention_span_seconds = state["attention_span_seconds"]
                 self.attention_decay_rate = state["attention_decay_rate"]
@@ -606,21 +616,18 @@ class CognitiveComponent(NeuralComponent):
                 self.learning_history = state["learning_history"]
     
     def process(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Process inputs and return cognitive outputs.
+        """Process inputs through the cognitive component.
         
         Args:
-            inputs: Dictionary containing input data such as:
-                - mother_utterance: Text from the mother
-                - mother_emotional_state: Emotional state of the mother
-                - context: Contextual information
-                - teaching_elements: Any explicit teaching content
-                
+            inputs: Dictionary containing input data
+            
         Returns:
-            Dictionary containing cognitive outputs such as:
-                - understanding_level: How well the input was understood (0.0 to 1.0)
-                - attention_focus: What the child is focusing on
-                - cognitive_response: Generated cognitive response
-                - novelty: How novel the input is (0.0 to 1.0)
+            Dictionary containing processed output
         """
-        # Process the input data
-        return self.process_input(inputs) 
+        # Process input through the main processing method
+        output = self.process_input(inputs)
+        
+        # Update component activation level
+        self.update_activation(output.get("attention_level", 0.5))
+        
+        return output 

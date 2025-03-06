@@ -19,8 +19,8 @@ class EmotionalComponent(NeuralComponent):
     
     def __init__(
         self,
-        input_size: int = 16,
-        hidden_size: int = 32,
+        input_size: int = 128,
+        hidden_size: int = 64,
         output_size: int = 8,
         name: str = "emotional_component"
     ):
