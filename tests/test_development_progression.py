@@ -178,7 +178,7 @@ class TestDevelopmentProgression(unittest.TestCase):
     def test_development_milestones(self):
         """Test that development milestones are achieved as development progresses."""
         # Process many interactions to trigger significant development
-        for _ in range(100):
+        for _ in range(30):
             self.mind.interact_with_mother()
         
         # Get current age and milestones

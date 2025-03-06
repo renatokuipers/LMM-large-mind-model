@@ -91,7 +91,7 @@ class TestMindIntegration(unittest.TestCase):
         initial_vocab = initial_status["vocabulary_size"]
         
         # Process several interactions to trigger development
-        for _ in range(5):
+        for _ in range(20):
             self.mind.interact_with_mother()
         
         # Get updated state
@@ -108,7 +108,7 @@ class TestMindIntegration(unittest.TestCase):
     def test_save_load_mind(self):
         """Test saving and loading the entire Mind state."""
         # Process a few interactions to change state
-        for _ in range(3):
+        for _ in range(10):
             self.mind.interact_with_mother()
         
         # Get current state info
@@ -139,7 +139,7 @@ class TestMindIntegration(unittest.TestCase):
     def test_mind_components_coherence(self):
         """Test that mind components maintain coherent state after interactions."""
         # Process a few interactions
-        for _ in range(3):
+        for _ in range(10):
             self.mind.interact_with_mother()
         
         # Get component activations from mind_state
