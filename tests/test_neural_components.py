@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import os
 import sys
+from unittest.mock import patch, MagicMock
 
 # Add the parent directory to sys.path to import project modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,6 +15,19 @@ from neural_child.emotion.emotional_component import EmotionalComponent
 from neural_child.language.language_component import LanguageComponent
 from neural_child.memory.memory_component import MemoryComponent
 from neural_child.social.social_component import SocialComponent
+
+
+# Mock data for language component
+MOCK_LANGUAGE_OUTPUT = {
+    "child_utterance": "ma-ma",
+    "comprehension": 0.35,
+    "vocabulary_size": 10,
+    "language_development": {
+        "verbal_production": 0.2,
+        "verbal_comprehension": 0.4,
+        "phonological_awareness": 0.15
+    }
+}
 
 
 class TestNeuralComponents(unittest.TestCase):
@@ -27,11 +41,50 @@ class TestNeuralComponents(unittest.TestCase):
         torch.manual_seed(42)
         np.random.seed(42)
         
+        # Setup LLM client mock patcher
+        self.llm_client_patcher = patch('llm_module.LLMClient')
+        self.mock_llm_client = self.llm_client_patcher.start()
+        
+        # Configure the mock client
+        mock_instance = self.mock_llm_client.return_value
+        mock_instance.chat_completion.return_value = "Mock language response for child."
+        mock_instance.structured_completion.return_value = MOCK_LANGUAGE_OUTPUT
+        
+        # Setup embedding API mocks
+        self.embedding_patcher = patch('requests.post')
+        self.mock_post = self.embedding_patcher.start()
+        
+        # Configure embedding API mock to return a consistent embedding
+        mock_embedding = np.random.randn(384).astype(np.float32).tolist()
+        mock_response = {
+            "data": [
+                {
+                    "embedding": mock_embedding,
+                    "index": 0,
+                    "object": "embedding"
+                }
+            ],
+            "model": "text-embedding-nomic-embed-text-v1.5@q4_k_m",
+            "object": "list",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5}
+        }
+        
+        self.mock_post.return_value = MagicMock(
+            json=lambda: mock_response,
+            status_code=200,
+            raise_for_status=lambda: None
+        )
+        
         self.cognitive = CognitiveComponent(device=self.device)
         self.emotional = EmotionalComponent()
         self.language = LanguageComponent()
         self.memory = MemoryComponent()
         self.social = SocialComponent(device=self.device)
+    
+    def tearDown(self):
+        # Stop all patchers
+        self.llm_client_patcher.stop()
+        self.embedding_patcher.stop()
     
     def test_component_initialization(self):
         """Test that all components initialize correctly with expected activation levels."""

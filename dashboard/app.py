@@ -484,6 +484,11 @@ def training_loop():
     
     try:
         while not stop_training_event.is_set():
+            # Immediate check to ensure we should still be running
+            if dashboard_state.training_status != "running":
+                print("Training status changed to non-running state. Exiting training loop.")
+                break
+                
             # Check if we've reached target age (if set)
             if dashboard_state.target_age_months is not None:
                 if mind.mind_state.age_months >= dashboard_state.target_age_months:
@@ -497,6 +502,9 @@ def training_loop():
                 
                 # Add to interaction history
                 dashboard_state.interaction_history.add_interaction(interaction)
+                
+                # Update dashboard state from mind to refresh developmental metrics
+                dashboard_state.update_from_mind(mind)
                 
                 # Reset consecutive error counter on success
                 consecutive_errors = 0
@@ -558,6 +566,10 @@ def training_loop():
                         dashboard_state.training_status = "stopped"
                         break
             
+            # Check one more time before sleeping if we should exit
+            if stop_training_event.is_set() or dashboard_state.training_status != "running":
+                break
+                
             # Sleep briefly to prevent maxing out CPU
             time.sleep(0.01)
         
@@ -568,6 +580,13 @@ def training_loop():
         training_error = f"Error in training loop: {str(e)}"
         traceback.print_exc()
         dashboard_state.training_status = "stopped"
+    finally:
+        # Ensure we properly mark training as stopped when exiting the loop
+        if dashboard_state.training_status == "running":
+            dashboard_state.training_status = "stopped"
+        
+        # Always make sure the stop event is set when we exit
+        stop_training_event.set()
 
 def start_training():
     """Start the training process in a background thread."""
@@ -575,19 +594,29 @@ def start_training():
     
     if dashboard_state.training_status == "running":
         print("Training already running")
-        return
+        return False
     
     # Reset error state
     training_error = None
     
     try:
+        # Ensure any existing training thread is completely stopped
+        if training_thread is not None and training_thread.is_alive():
+            print("Waiting for previous training thread to complete...")
+            stop_training_event.set()
+            training_thread.join(timeout=5.0)  # Wait up to 5 seconds for thread to end
+            if training_thread.is_alive():
+                print("Warning: Previous training thread did not terminate properly")
+                training_error = "Warning: Could not properly terminate previous training session"
+                return False
+        
         # Initialize Mind if needed
         if mind is None:
             print("Mind not initialized. Initializing...")
             success = initialize_mind()
             if not success:
                 training_error = "Failed to initialize Mind. Cannot start training."
-                return
+                return False
         
         # Ensure device consistency before starting
         ensure_device_consistency()
@@ -597,8 +626,8 @@ def start_training():
             print("WARNING: CUDA is available but using CPU. This might be due to a previous error recovery.")
             training_error = "WARNING: CUDA is available but using CPU. Training will be slower."
         
-        # Reset stop event
-        stop_training_event.clear()
+        # Create a fresh stop event
+        stop_training_event = threading.Event()
         
         # Create and start training thread
         training_thread = threading.Thread(target=training_loop)
@@ -608,16 +637,18 @@ def start_training():
         # Update status
         dashboard_state.training_status = "running"
         print("Training started")
+        return True
         
     except Exception as e:
         print(f"Error starting training: {e}")
         training_error = f"Error starting training: {str(e)}"
         traceback.print_exc()
         dashboard_state.training_status = "stopped"
+        return False
 
 def stop_training():
     """Stop the training process."""
-    global stop_training_event, dashboard_state
+    global stop_training_event, dashboard_state, training_thread
     
     if dashboard_state.training_status != "running":
         print("Training not running")
@@ -626,8 +657,21 @@ def stop_training():
     # Set stop event
     stop_training_event.set()
     
-    # Update status
+    # Update status immediately to prevent any automatic restarts
     dashboard_state.training_status = "stopped"
+    print("Training stopping (waiting for thread to exit)...")
+    
+    # Attempt to join the thread with a timeout
+    if training_thread is not None and training_thread.is_alive():
+        try:
+            training_thread.join(timeout=5.0)
+            if training_thread.is_alive():
+                print("Warning: Training thread did not exit cleanly")
+            else:
+                print("Training thread exited cleanly")
+        except Exception as e:
+            print(f"Error joining thread: {e}")
+    
     print("Training stopped")
 
 def create_checkpoint(name=None):
@@ -1444,6 +1488,7 @@ app.layout = html.Div(
                     id="interval-update",
                     interval=dashboard_state.update_interval_ms,
                     n_intervals=0,
+                    max_intervals=-1,  # Run indefinitely
                 ),
                 toast_container,
                 error_message_container,
@@ -1515,6 +1560,7 @@ def update_content(mode):
     prevent_initial_call=True,
 )
 def control_training(btn_start, btn_stop, current_status):
+    global mind, training_thread, stop_training_event
     ctx = dash.callback_context
     
     if not ctx.triggered:
@@ -1522,21 +1568,34 @@ def control_training(btn_start, btn_stop, current_status):
     
     button_id = ctx.triggered[0]["prop_id"].split(".")[0]
     
+    # Log the action for troubleshooting
+    print(f"Control training: {button_id} clicked, current status: {current_status}")
+    
     if button_id == "btn-start-training" and current_status != "running":
+        # Ensure we don't already have an active training process
+        if training_thread is not None and training_thread.is_alive() and not stop_training_event.is_set():
+            print("Warning: Training thread is already running but status was not 'running'")
+            # Fix the inconsistency
+            return "running"
+            
         # Initialize Mind if needed
-        global mind
         if mind is None:
             initialize_mind()
         
-        # Start training
-        start_training()
-        return "running"
+        # Start training - returns True if successful
+        success = start_training()
+        if success:
+            return "running"
+        # If start_training failed, maintain current status
+        return current_status
     
     elif button_id == "btn-stop-training" and current_status == "running":
         # Stop training
         stop_training()
+        # Force the status to stopped
         return "stopped"
     
+    # No change needed
     return current_status
 
 # Callback to update training controls appearance
@@ -1844,6 +1903,10 @@ def update_child_status(n_intervals):
     # Get current status
     status = mind.get_status()
     
+    # Make sure dashboard state is updated with latest mind state
+    if dashboard_state.training_status == "running":
+        dashboard_state.update_from_mind(mind)
+    
     # Extract key info
     age_months = status.get("age_months", 0)
     dev_stage = status.get("developmental_stage", "Unknown")
@@ -2113,6 +2176,12 @@ def update_inference_history(session_id, n_intervals):
     [Input("interval-update", "n_intervals")],
 )
 def update_language_graph(n_intervals):
+    global mind
+    
+    # Ensure dashboard state is updated with latest mind state if training
+    if mind is not None and dashboard_state.training_status == "running":
+        dashboard_state.update_from_mind(mind)
+    
     df = dashboard_state.developmental_data.to_dataframe()
     
     if df.empty:
@@ -2192,6 +2261,12 @@ def update_language_graph(n_intervals):
     [Input("interval-update", "n_intervals")],
 )
 def update_cognitive_graph(n_intervals):
+    global mind
+    
+    # Ensure dashboard state is updated with latest mind state if training
+    if mind is not None and dashboard_state.training_status == "running":
+        dashboard_state.update_from_mind(mind)
+    
     df = dashboard_state.developmental_data.to_dataframe()
     
     if df.empty:
@@ -2274,6 +2349,12 @@ def update_cognitive_graph(n_intervals):
     [Input("interval-update", "n_intervals")],
 )
 def update_emotional_graph(n_intervals):
+    global mind
+    
+    # Ensure dashboard state is updated with latest mind state if training
+    if mind is not None and dashboard_state.training_status == "running":
+        dashboard_state.update_from_mind(mind)
+    
     df = dashboard_state.developmental_data.to_dataframe()
     
     if df.empty:
@@ -2346,6 +2427,12 @@ def update_emotional_graph(n_intervals):
     [Input("interval-update", "n_intervals")],
 )
 def update_social_graph(n_intervals):
+    global mind
+    
+    # Ensure dashboard state is updated with latest mind state if training
+    if mind is not None and dashboard_state.training_status == "running":
+        dashboard_state.update_from_mind(mind)
+    
     df = dashboard_state.developmental_data.to_dataframe()
     
     if df.empty:
@@ -2428,6 +2515,12 @@ def update_social_graph(n_intervals):
     [Input("interval-update", "n_intervals")],
 )
 def update_overall_graph(n_intervals):
+    global mind
+    
+    # Ensure dashboard state is updated with latest mind state if training
+    if mind is not None and dashboard_state.training_status == "running":
+        dashboard_state.update_from_mind(mind)
+    
     df = dashboard_state.developmental_data.to_dataframe()
     
     if df.empty:
@@ -2731,13 +2824,13 @@ def update_inference_activation(session_id):
     [Input("interval-update", "n_intervals")],
 )
 def update_status_info(n_intervals):
-    global mind
+    """Update the status information in the footer.
+    This callback must not modify any training state."""
+    # Get current timestamp
+    now = datetime.now().strftime("%H:%M:%S")
     
-    if mind is None:
-        return "Status: Mind not initialized"
-    
-    # Get basic status info
-    return f"Status: Age {mind.mind_state.age_months:.1f} months | Stage: {mind.mind_state.developmental_stage}"
+    # Return the status info
+    return f"Last update: {now} | Status: {dashboard_state.training_status}"
 
 # Callback for training status in footer
 @callback(

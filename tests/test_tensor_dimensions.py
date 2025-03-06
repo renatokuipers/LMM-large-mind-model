@@ -3,12 +3,48 @@ import torch
 import numpy as np
 import os
 import sys
+from pathlib import Path
+import tempfile
+from unittest.mock import patch, MagicMock
 
 # Add the parent directory to sys.path to import project modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from neural_child.mind.mind import Mind
-from utils.config import DEFAULT_NEURAL_CHILD_CONFIG
+from utils.config import NeuralChildConfig, DEFAULT_NEURAL_CHILD_CONFIG
+
+
+# Mock embedding response
+MOCK_EMBEDDING = np.random.randn(384).astype(np.float32).tolist()
+MOCK_EMBEDDING_RESPONSE = {
+    "data": [
+        {
+            "embedding": MOCK_EMBEDDING,
+            "index": 0,
+            "object": "embedding"
+        }
+    ],
+    "model": "text-embedding-nomic-embed-text-v1.5@q4_k_m",
+    "object": "list",
+    "usage": {"prompt_tokens": 5, "total_tokens": 5}
+}
+
+# Mock mother response
+MOCK_MOTHER_RESPONSE = {
+    "verbal_response": "Hello my sweet child!",
+    "emotional_state": {
+        "joy": 0.8,
+        "trust": 0.9,
+        "anticipation": 0.4
+    },
+    "teaching_elements": [
+        {
+            "concept": "greeting",
+            "examples": ["hello", "hi"],
+            "explanation": "We say hello to greet people"
+        }
+    ]
+}
 
 
 class TestTensorDimensions(unittest.TestCase):
@@ -23,14 +59,45 @@ class TestTensorDimensions(unittest.TestCase):
         torch.manual_seed(42)
         np.random.seed(42)
         
-        # Initialize mind with default config
-        self.config = DEFAULT_NEURAL_CHILD_CONFIG.model_copy()
+        # Create temporary directory
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base_path = Path(self.temp_dir.name)
+        
+        # Setup LLM client mock patcher
+        self.llm_client_patcher = patch('llm_module.LLMClient')
+        self.mock_llm_client = self.llm_client_patcher.start()
+        
+        # Configure the mock client
+        mock_instance = self.mock_llm_client.return_value
+        mock_instance.chat_completion.return_value = "Mock child response."
+        mock_instance.structured_completion.return_value = MOCK_MOTHER_RESPONSE
+        
+        # Setup embedding API mock
+        self.embedding_patcher = patch('requests.post')
+        self.mock_post = self.embedding_patcher.start()
+        
+        # Configure the mock response
+        self.mock_post.return_value = MagicMock(
+            json=lambda: MOCK_EMBEDDING_RESPONSE,
+            status_code=200,
+            raise_for_status=lambda: None
+        )
+        
+        # Initialize mind
         self.mind = Mind(
-            config=self.config,
+            config=DEFAULT_NEURAL_CHILD_CONFIG,
             device=self.device,
-            base_path=None,
+            base_path=self.base_path,
             load_existing=False
         )
+    
+    def tearDown(self):
+        # Clean up temporary directory
+        self.temp_dir.cleanup()
+        
+        # Stop all patchers
+        self.llm_client_patcher.stop()
+        self.embedding_patcher.stop()
     
     def test_cognitive_network_dimensions(self):
         """Test cognitive network input/output dimensions."""
