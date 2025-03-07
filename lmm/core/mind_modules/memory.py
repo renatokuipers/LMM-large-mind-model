@@ -96,7 +96,7 @@ class MemoryModule(MindModule):
     
     def _store_memory(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Store a new memory.
+        Store a memory.
         
         Args:
             parameters: Dictionary with memory parameters
@@ -130,29 +130,45 @@ class MemoryModule(MindModule):
         if content_hash in self.recent_content_hash:
             return {"success": False, "operation": "store", "error": "Duplicate content"}
         
-        # Store memory with advanced manager
-        memory_id = self.memory_manager.add_memory(
-            content=content,
-            memory_type=memory_type,
-            importance=importance,
-            context_tags=context_tags,
-            related_memories=related_memories,
-            metadata=metadata
-        )
-        
-        # Add to recent content hash (with limited size)
-        self.recent_content_hash.add(content_hash)
-        if len(self.recent_content_hash) > 100:
-            self.recent_content_hash.pop()
-        
-        logger.info(f"Stored memory ID {memory_id} of type {memory_type}")
-        
-        return {
-            "success": True,
-            "operation": "store",
-            "memory_id": memory_id,
-            "memory_type": memory_type
-        }
+        try:
+            # Store memory with advanced manager
+            memory_id = self.memory_manager.add_memory(
+                content=content,
+                memory_type=memory_type,
+                importance=importance,
+                context_tags=context_tags,
+                related_memories=related_memories,
+                metadata=metadata
+            )
+            
+            # Add to recent content hash (with limited size)
+            self.recent_content_hash.add(content_hash)
+            if len(self.recent_content_hash) > 100:
+                self.recent_content_hash.pop()
+            
+            logger.info(f"Stored memory ID {memory_id} of type {memory_type}")
+            
+            return {
+                "success": True,
+                "operation": "store",
+                "memory_id": memory_id,
+                "memory_type": memory_type
+            }
+        except ValueError as e:
+            logger.error(f"Vector dimension error while storing memory: {str(e)}")
+            return {
+                "success": False,
+                "operation": "store",
+                "error": f"Vector store error: {str(e)}",
+                "content_preview": content[:50] + "..." if len(content) > 50 else content
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error storing memory: {str(e)}")
+            return {
+                "success": False,
+                "operation": "store",
+                "error": f"Unexpected error: {str(e)}"
+            }
     
     def _retrieve_memory(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -224,47 +240,60 @@ class MemoryModule(MindModule):
         if not query:
             return {"success": False, "operation": "search", "error": "Empty query"}
         
-        # Search memories with enhanced retrieval
-        memories = self.memory_manager.search_memories(
-            query=query,
-            memory_type=memory_type,
-            min_importance=min_importance,
-            context_tags=context_tags,
-            min_activation=min_activation,
-            limit=limit,
-            retrieval_strategy=retrieval_strategy
-        )
-        
-        # Convert to dictionary format
-        memory_dicts = []
-        for memory in memories:
-            memory_dict = {
-                "id": memory.vector_store_id,
-                "content": memory.content,
-                "type": memory.memory_type.value,
-                "importance": memory.importance.value,
-                "created_at": memory.created_at.isoformat(),
-                "metadata": memory.metadata
-            }
+        try:
+            # Search memories with enhanced retrieval
+            memories = self.memory_manager.search_memories(
+                query=query,
+                memory_type=memory_type,
+                min_importance=min_importance,
+                context_tags=context_tags,
+                min_activation=min_activation,
+                limit=limit,
+                retrieval_strategy=retrieval_strategy
+            )
             
-            # Include reconstruction information if available
-            if memory.metadata.get("reconstructed"):
-                memory_dict["reconstructed"] = True
-                memory_dict["confidence"] = memory.metadata.get("confidence", 0.5)
-            
-            # Include retrieval scores
-            if "retrieval_score" in memory.metadata:
-                memory_dict["retrieval_score"] = memory.metadata["retrieval_score"]
+            # Convert to dictionary format
+            memory_dicts = []
+            for memory in memories:
+                memory_dict = {
+                    "id": memory.vector_store_id,
+                    "content": memory.content,
+                    "type": memory.memory_type.value,
+                    "importance": memory.importance.value,
+                    "created_at": memory.created_at.isoformat(),
+                    "metadata": memory.metadata
+                }
                 
-            memory_dicts.append(memory_dict)
-        
-        return {
-            "success": True,
-            "operation": "search",
-            "memories": memory_dicts,
-            "count": len(memory_dicts),
-            "retrieval_strategy": retrieval_strategy
-        }
+                # Add retrieval score if available
+                if hasattr(memory, 'retrieval_score'):
+                    memory_dict["retrieval_score"] = memory.retrieval_score
+                
+                memory_dicts.append(memory_dict)
+            
+            return {
+                "success": True,
+                "operation": "search",
+                "memories": memory_dicts,
+                "count": len(memory_dicts)
+            }
+        except ValueError as e:
+            logger.error(f"Vector dimension error while searching memories: {str(e)}")
+            return {
+                "success": False,
+                "operation": "search",
+                "error": f"Vector store error: {str(e)}",
+                "memories": [],
+                "count": 0
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error searching memories: {str(e)}")
+            return {
+                "success": False,
+                "operation": "search",
+                "error": f"Unexpected error: {str(e)}",
+                "memories": [],
+                "count": 0
+            }
     
     def _associate_memories(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """

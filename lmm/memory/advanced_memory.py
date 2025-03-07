@@ -223,135 +223,133 @@ class AdvancedMemoryManager:
         Returns:
             List of matching Memory objects
         """
-        # Step 1: Basic vector search from base memory manager
-        base_results = self.base_manager.search_memories(
-            query=query,
-            memory_type=memory_type,
-            min_importance=min_importance,
-            limit=limit * 2  # Get more results for reranking
-        )
-        
-        # Extract memory IDs from base results
-        base_memory_ids = [memory.vector_store_id for memory in base_results if memory.vector_store_id is not None]
-        
-        # Step A: Context-based filtering
-        context_memory_ids = set()
-        if context_tags:
-            # Find memories that match any of the context tags
-            for tag in context_tags:
-                context_memory_ids.update(self.context_tags.get(tag, set()))
-        
-        # Step B: Graph-based memory association ("spreading activation")
-        graph_memory_ids = set()
-        if base_memory_ids and retrieval_strategy in ["graph", "combined"]:
-            # Find memories that are connected to the base results
-            for memory_id in base_memory_ids:
-                if self.memory_graph.has_node(memory_id):
-                    # Get neighbors up to 2 steps away
-                    neighbors = set()
-                    for neighbor in self.memory_graph.neighbors(memory_id):
-                        neighbors.add(neighbor)
-                        # Second-degree neighbors with decreasing relevance
-                        for second_neighbor in self.memory_graph.neighbors(neighbor):
-                            if second_neighbor != memory_id:
-                                neighbors.add(second_neighbor)
-                    
-                    graph_memory_ids.update(neighbors)
-        
-        # Step 3: Combine results based on retrieval strategy
-        candidate_memory_ids = set()
-        
-        if retrieval_strategy == "vector":
-            candidate_memory_ids = set(base_memory_ids)
-        elif retrieval_strategy == "graph":
-            candidate_memory_ids = graph_memory_ids
-        elif retrieval_strategy == "context":
-            candidate_memory_ids = context_memory_ids if context_tags else set(base_memory_ids)
-        else:  # "combined"
-            # Union of all approaches with priority to context-matching memories
-            candidate_memory_ids = set(base_memory_ids).union(graph_memory_ids)
-            if context_tags and context_memory_ids:
-                # Prioritize context matches
-                candidate_memory_ids = context_memory_ids.intersection(candidate_memory_ids) or candidate_memory_ids
-        
-        # Step 4: Filter by activation level
-        if min_activation > 0:
-            candidate_memory_ids = {
-                memory_id for memory_id in candidate_memory_ids 
-                if self.activations.get(memory_id, 0.0) >= min_activation
-            }
-        
-        # Step 5: Retrieve and score memories
-        scored_memories = []
-        for memory_id in candidate_memory_ids:
-            memory = self.base_manager.retrieve_memory(memory_id)
-            if memory:
-                # Calculate combined score using multiple factors
-                vector_score = next((m.metadata.get("similarity", 0.0) for m in base_results 
-                                    if m.vector_store_id == memory_id), 0.0)
+        try:
+            # Step 1: Basic vector search from base memory manager
+            base_results = self.base_manager.search_memories(
+                query=query,
+                memory_type=memory_type,
+                min_importance=min_importance,
+                limit=limit * 2  # Get more results for reranking
+            )
+            
+            # Extract memory IDs from base results
+            base_memory_ids = [memory.vector_store_id for memory in base_results if memory.vector_store_id is not None]
+            
+            # Step A: Context-based filtering
+            context_memory_ids = set()
+            if context_tags:
+                # Find memories that match any of the context tags
+                for tag in context_tags:
+                    context_memory_ids.update(self.context_tags.get(tag, set()))
+            
+            # Step B: Graph-based memory association ("spreading activation")
+            graph_memory_ids = set()
+            if base_memory_ids and retrieval_strategy in ["graph", "combined"]:
+                # Find memories that are connected to the base results
+                for memory_id in base_memory_ids:
+                    if self.memory_graph.has_node(memory_id):
+                        # Get neighbors up to 2 steps away
+                        for neighbor in self.memory_graph.neighbors(memory_id):
+                            graph_memory_ids.add(neighbor)
+                            
+                            # Second-order connections (with decreasing importance)
+                            if random.random() < 0.3:  # Only explore some second-order connections
+                                for second_neighbor in self.memory_graph.neighbors(neighbor):
+                                    if random.random() < 0.5:  # Further probability filter
+                                        graph_memory_ids.add(second_neighbor)
+            
+            # Step C: Combine results based on strategy
+            final_memory_ids = set()
+            
+            if retrieval_strategy == "vector":
+                final_memory_ids = set(base_memory_ids)
+            elif retrieval_strategy == "graph":
+                final_memory_ids = graph_memory_ids
+            elif retrieval_strategy == "context":
+                final_memory_ids = context_memory_ids.intersection(set(base_memory_ids)) if context_memory_ids else set(base_memory_ids)
+            else:  # combined
+                # Start with vector results
+                final_memory_ids = set(base_memory_ids)
                 
-                activation_score = self.activations.get(memory_id, 0.0)
-                strength_score = self.strengths.get(memory_id, 0.0)
+                # Add graph results with higher activation
+                for memory_id in graph_memory_ids:
+                    if self.activations.get(memory_id, 0) >= min_activation:
+                        final_memory_ids.add(memory_id)
                 
-                # Context score
-                context_score = 0.0
-                if context_tags and memory_id in context_memory_ids:
-                    context_score = 0.3
+                # Filter by context if available
+                if context_memory_ids:
+                    # If we have context tags, prefer memories that match both vector and context
+                    context_matches = context_memory_ids.intersection(final_memory_ids)
+                    if context_matches:
+                        # If we have matches, prefer them, but keep some others
+                        non_context_matches = final_memory_ids - context_memory_ids
+                        # Keep all context matches and some non-context matches
+                        final_memory_ids = context_matches.union(set(list(non_context_matches)[:limit//2]))
+            
+            # Convert IDs back to Memory objects and rank
+            final_memories = []
+            all_memories = self.base_manager.get_memories(list(final_memory_ids))
+            
+            # Add retrieval scores based on various factors
+            for memory in all_memories:
+                # Base score from vector similarity (if available)
+                base_score = 0.5  # Default
+                for base_memory in base_results:
+                    if base_memory.vector_store_id == memory.vector_store_id:
+                        if hasattr(base_memory, 'retrieval_score'):
+                            base_score = base_memory.retrieval_score
+                        break
                 
-                # Graph connectedness score
-                graph_score = 0.0
-                if self.memory_graph.has_node(memory_id):
-                    # More connected nodes get higher scores
-                    graph_score = min(0.3, len(list(self.memory_graph.neighbors(memory_id))) * 0.05)
+                # Adjust score based on graph connections
+                graph_bonus = 0.1 if memory.vector_store_id in graph_memory_ids else 0.0
                 
-                # Recency score (boost recent memories)
-                recency_score = 0.0
-                if memory_id in self.access_history and self.access_history[memory_id]:
-                    latest_access = max(self.access_history[memory_id])
-                    time_diff = (datetime.now() - latest_access).total_seconds()
-                    recency_score = max(0.0, 0.3 - min(0.3, time_diff / 86400))  # Decay over 24 hours
+                # Adjust score based on context matches
+                context_bonus = 0.2 if memory.vector_store_id in context_memory_ids else 0.0
                 
-                # Combined score with weights
-                combined_score = (
-                    0.4 * vector_score +
-                    0.2 * activation_score +
-                    0.1 * strength_score +
-                    0.1 * context_score +
-                    0.1 * graph_score +
-                    0.1 * recency_score
-                )
+                # Adjust score based on recency (recent memories are easier to retrieve)
+                age_days = (datetime.now() - memory.created_at).days
+                recency_factor = 1.0 / (1.0 + (age_days / 30))  # Decay over 30 days
+                recency_bonus = 0.15 * recency_factor
                 
-                # Add score to memory metadata for return
-                memory.metadata["retrieval_score"] = combined_score
-                memory.metadata["vector_score"] = vector_score
-                memory.metadata["activation_score"] = activation_score
-                memory.metadata["strength_score"] = strength_score
-                memory.metadata["context_score"] = context_score
-                memory.metadata["graph_score"] = graph_score
-                memory.metadata["recency_score"] = recency_score
+                # Adjust score based on memory importance
+                importance_bonus = 0.0
+                if memory.importance == MemoryImportance.HIGH:
+                    importance_bonus = 0.15
+                elif memory.importance == MemoryImportance.CRITICAL:
+                    importance_bonus = 0.25
                 
-                # Increase memory activation (simulation of retrieval practice effect)
-                self.activations[memory_id] = min(float(MemoryActivation.HIGH), 
-                                                activation_score + 0.1)
+                # Final score (capped at 1.0)
+                final_score = min(1.0, base_score + graph_bonus + context_bonus + recency_bonus + importance_bonus)
                 
-                # Record access for consolidation
-                self.access_history[memory_id].append(datetime.now())
+                # Add score to memory object
+                memory.retrieval_score = final_score
                 
-                scored_memories.append((combined_score, memory))
-        
-        # Sort by combined score
-        scored_memories.sort(reverse=True, key=lambda x: x[0])
-        
-        # Get top memories
-        top_memories = [memory for _, memory in scored_memories[:limit]]
-        
-        # Update working memory with top results
-        for memory in top_memories:
-            if memory.vector_store_id is not None:
-                self._update_working_memory(memory.vector_store_id)
-        
-        logger.debug(f"Retrieved {len(top_memories)} memories via {retrieval_strategy} strategy")
-        return top_memories
+                # Only include memories with sufficient activation
+                activation = self.activations.get(memory.vector_store_id, 0)
+                if activation >= min_activation:
+                    final_memories.append(memory)
+            
+            # Sort by final score
+            final_memories.sort(key=lambda x: getattr(x, 'retrieval_score', 0), reverse=True)
+            
+            # Limit results
+            final_memories = final_memories[:limit]
+            
+            # Update memory activations for retrieved memories
+            for memory in final_memories:
+                self._activate_memory(memory.vector_store_id)
+            
+            return final_memories
+            
+        except ValueError as e:
+            logger.error(f"Vector dimension error in search_memories: {str(e)}")
+            # Return empty results in case of vector store error
+            return []
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in search_memories: {str(e)}")
+            # Return empty results in case of other errors
+            return []
     
     def consolidate_memories(self, force: bool = False) -> int:
         """

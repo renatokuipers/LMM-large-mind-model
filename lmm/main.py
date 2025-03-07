@@ -149,19 +149,43 @@ class LargeMindsModel:
         })
         
         # Process thought generation and reasoning
-        thought_result = self.thought_module.process({
-            "operation": "generate_thought",
-            "content": message,
-            "context": {
-                "language_understanding": language_result,
-                "social_understanding": social_result,
-                "consciousness_state": consciousness_result
-            },
-            "emotional_state": emotional_state.get("state", {}),
-            "memory_activations": [m.get("id") for m in relevant_memories],
-            "consciousness_state": consciousness_result,
-            "developmental_stage": current_stage
-        })
+        try:
+            thought_result = self.thought_module.process({
+                "operation": "generate_thought",
+                "content": message,
+                "context": {
+                    "language_understanding": language_result,
+                    "social_understanding": social_result,
+                    "consciousness_state": consciousness_result
+                },
+                "emotional_state": emotional_state.get("state", {}),
+                "memory_activations": [m.get("id") for m in relevant_memories],
+                "consciousness_state": consciousness_result,
+                "developmental_stage": current_stage
+            })
+            
+            if not thought_result.get("success", False):
+                logger.warning(f"Thought generation failed: {thought_result.get('error', 'Unknown error')}")
+                thought_result = {
+                    "success": False, 
+                    "thought": {
+                        "content": "Failed to generate thought",
+                        "type": "analytical",
+                        "complexity": 0.1,
+                        "certainty": 0.1
+                    }
+                }
+        except Exception as e:
+            logger.error(f"Error in thought processing: {str(e)}")
+            thought_result = {
+                "success": False, 
+                "thought": {
+                    "content": "Error in thought processing",
+                    "type": "analytical",
+                    "complexity": 0.1,
+                    "certainty": 0.1
+                }
+            }
         
         # Generate response from mother based on developmental stage
         try:
@@ -203,49 +227,56 @@ class LargeMindsModel:
             self.memory_module.process(response_memory)
             
             # Perform reflection on the interaction
-            reflection_result = self.thought_module.process({
-                "operation": "reflect",
-                "content": f"User: {message}\nLMM: {response}",
-                "context": {
-                    "language_understanding": language_result,
-                    "social_understanding": social_result,
+            try:
+                reflection_result = self.thought_module.process({
+                    "operation": "reflect",
+                    "content": f"User: {message}\nLMM: {response}",
+                    "context": {
+                        "language_understanding": language_result,
+                        "social_understanding": social_result,
+                        "consciousness_state": consciousness_result,
+                        "thought_state": thought_result
+                    },
+                    "emotional_state": emotional_state.get("state", {}),
+                    "memory_activations": [m.get("id") for m in relevant_memories],
                     "consciousness_state": consciousness_result,
-                    "thought_state": thought_result
-                },
-                "emotional_state": emotional_state.get("state", {}),
-                "memory_activations": [m.get("id") for m in relevant_memories],
-                "consciousness_state": consciousness_result,
-                "developmental_stage": current_stage
-            })
-            
-            # Store insights from reflection if available
-            if reflection_result.get("success") and reflection_result.get("insights"):
-                insights = reflection_result.get("insights", [])
-                for insight in insights[:3]:  # Store up to 3 insights
-                    insight_memory = {
-                        "operation": "store",
-                        "parameters": {
-                            "content": f"Insight: {insight}",
-                            "memory_type": MemoryType.SEMANTIC.value,
-                            "importance": MemoryImportance.HIGH.value,
-                            "context_tags": ["reflection", "insight"],
-                            "metadata": {
-                                "interaction_number": self.interaction_count,
-                                "source": "thought_reflection"
-                            }
-                        },
-                        "developmental_stage": current_stage
-                    }
-                    self.memory_module.process(insight_memory)
+                    "developmental_stage": current_stage
+                })
                 
-                # Update consciousness with meta-thoughts
-                meta_thoughts = reflection_result.get("meta_thoughts", [])
-                if meta_thoughts:
-                    self.consciousness_module.process({
-                        "operation": "update_metacognition",
-                        "input": meta_thoughts[0] if meta_thoughts else "",
-                        "developmental_stage": current_stage
-                    })
+                # Store insights from reflection if available
+                if reflection_result.get("success") and reflection_result.get("insights"):
+                    insights = reflection_result.get("insights", [])
+                    for insight in insights[:3]:  # Store up to 3 insights
+                        insight_memory = {
+                            "operation": "store",
+                            "parameters": {
+                                "content": f"Insight: {insight}",
+                                "memory_type": MemoryType.SEMANTIC.value,
+                                "importance": MemoryImportance.HIGH.value,
+                                "context_tags": ["reflection", "insight"],
+                                "metadata": {
+                                    "interaction_number": self.interaction_count,
+                                    "source": "thought_reflection"
+                                }
+                            },
+                            "developmental_stage": current_stage
+                        }
+                        self.memory_module.process(insight_memory)
+                    
+                    # Update consciousness with meta-thoughts
+                    meta_thoughts = reflection_result.get("meta_thoughts", [])
+                    if meta_thoughts:
+                        try:
+                            self.consciousness_module.process({
+                                "operation": "update_metacognition",
+                                "input": meta_thoughts[0] if meta_thoughts else "",
+                                "developmental_stage": current_stage
+                            })
+                        except Exception as e:
+                            logger.error(f"Error updating consciousness with meta-thoughts: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error in thought reflection: {str(e)}")
+                # Continue execution despite reflection errors
             
             # Store interaction in memory for potential semantic memory formation
             self._store_interaction_memory(message, response, current_stage)
@@ -1226,20 +1257,20 @@ class LargeMindsModel:
             avg_score = sum(memory.get("retrieval_score", 0.0) for memory in retrieved_memories) / len(retrieved_memories)
         
         # Store retrieval stats for visualization
-        if hasattr(self, "_retrieval_stats"):
-            self._retrieval_stats["counts"].append(len(retrieved_memories))
-            self._retrieval_stats["scores"].append(avg_score)
-            self._retrieval_stats["timestamps"].append(datetime.now())
-            self._retrieval_stats["queries"].append(query)
+        if hasattr(self, "retrieval_stats"):
+            self.retrieval_stats["counts"].append(len(retrieved_memories))
+            self.retrieval_stats["scores"].append(avg_score)
+            self.retrieval_stats["timestamps"].append(datetime.now())
+            self.retrieval_stats["queries"].append(query)
             
             # Limit history size
-            if len(self._retrieval_stats["counts"]) > 100:
-                self._retrieval_stats["counts"] = self._retrieval_stats["counts"][-100:]
-                self._retrieval_stats["scores"] = self._retrieval_stats["scores"][-100:]
-                self._retrieval_stats["timestamps"] = self._retrieval_stats["timestamps"][-100:]
-                self._retrieval_stats["queries"] = self._retrieval_stats["queries"][-100:]
+            if len(self.retrieval_stats["counts"]) > 100:
+                self.retrieval_stats["counts"] = self.retrieval_stats["counts"][-100:]
+                self.retrieval_stats["scores"] = self.retrieval_stats["scores"][-100:]
+                self.retrieval_stats["timestamps"] = self.retrieval_stats["timestamps"][-100:]
+                self.retrieval_stats["queries"] = self.retrieval_stats["queries"][-100:]
         else:
-            self._retrieval_stats = {
+            self.retrieval_stats = {
                 "counts": [len(retrieved_memories)],
                 "scores": [avg_score],
                 "timestamps": [datetime.now()],
@@ -1253,7 +1284,14 @@ class LargeMindsModel:
         Returns:
             Dictionary with memory retrieval statistics
         """
-        return self._retrieval_stats
+        if not hasattr(self, "retrieval_stats"):
+            self.retrieval_stats = {
+                "counts": [],
+                "scores": [],
+                "timestamps": [],
+                "queries": []
+            }
+        return self.retrieval_stats
         
     def process_cognitive_query(self, query: str, depth: int = 3) -> Dict[str, Any]:
         """
@@ -1274,76 +1312,90 @@ class LargeMindsModel:
         current_stage = self.stage_manager.get_current_stage()
         
         # Initial thought generation
-        thought_result = self.thought_module.process({
-            "operation": "generate_thought",
-            "content": query,
-            "developmental_stage": current_stage
-        })
-        
-        if not thought_result.get("success"):
-            return {"success": False, "error": "Failed to generate initial thought"}
-        
-        thought = thought_result.get("thought", {})
-        thought_content = thought.get("content", "")
-        
-        # Retrieve memories based on the thought
-        memory_result = self.memory_module.process({
-            "operation": "search",
-            "parameters": {
-                "query": thought_content,
-                "limit": 5,
-                "min_activation": 0.3,
-                "retrieval_strategy": "semantic"
-            },
-            "developmental_stage": current_stage
-        })
-        
-        relevant_memories = memory_result.get("memories", [])
-        
-        # Generate insights through reflection
-        reflection_result = self.thought_module.process({
-            "operation": "reflect",
-            "content": thought_content,
-            "context": {"relevant_memories": relevant_memories},
-            "memory_activations": [m.get("id") for m in relevant_memories],
-            "developmental_stage": current_stage
-        })
-        
-        insights = reflection_result.get("insights", [])
-        patterns = reflection_result.get("patterns", [])
-        meta_thoughts = reflection_result.get("meta_thoughts", [])
-        
-        # Recursive cognitive exploration if depth allows
-        deeper_insights = []
-        if depth > 1 and insights:
-            # Use the most significant insight to explore deeper
-            primary_insight = insights[0] if insights else ""
-            if primary_insight:
-                deeper_result = self.process_cognitive_query(primary_insight, depth - 1)
-                deeper_insights = deeper_result.get("insights", [])
-        
-        # Update consciousness with the highest-level insight
-        if meta_thoughts:
-            self.consciousness_module.process({
-                "operation": "update_metacognition",
-                "input": meta_thoughts[0] if meta_thoughts else "",
+        try:
+            thought_result = self.thought_module.process({
+                "operation": "generate_thought",
+                "content": query,
                 "developmental_stage": current_stage
             })
-        
-        # Build result structure
-        result = {
-            "success": True,
-            "query": query,
-            "initial_thought": thought,
-            "insights": insights,
-            "patterns": patterns,
-            "meta_thoughts": meta_thoughts,
-            "deeper_insights": deeper_insights,
-            "relevant_memories": relevant_memories,
-            "depth_reached": depth
-        }
-        
-        return result
+            
+            if not thought_result.get("success"):
+                logger.warning(f"Failed to generate initial thought: {thought_result.get('error', 'Unknown error')}")
+                return {"success": False, "error": "Failed to generate initial thought"}
+            
+            thought = thought_result.get("thought", {})
+            thought_content = thought.get("content", "")
+            
+            # Retrieve memories based on the thought
+            memory_result = self.memory_module.process({
+                "operation": "search",
+                "parameters": {
+                    "query": thought_content,
+                    "limit": 5,
+                    "min_activation": 0.3,
+                    "retrieval_strategy": "semantic"
+                },
+                "developmental_stage": current_stage
+            })
+            
+            relevant_memories = memory_result.get("memories", [])
+            
+            # Generate insights through reflection
+            reflection_result = self.thought_module.process({
+                "operation": "reflect",
+                "content": thought_content,
+                "context": {"relevant_memories": relevant_memories},
+                "memory_activations": [m.get("id") for m in relevant_memories],
+                "developmental_stage": current_stage
+            })
+            
+            insights = reflection_result.get("insights", [])
+            patterns = reflection_result.get("patterns", [])
+            meta_thoughts = reflection_result.get("meta_thoughts", [])
+            
+            # Recursive cognitive exploration if depth allows
+            deeper_insights = []
+            if depth > 1 and insights:
+                # Use the most significant insight to explore deeper
+                primary_insight = insights[0] if insights else ""
+                if primary_insight:
+                    deeper_result = self.process_cognitive_query(primary_insight, depth - 1)
+                    deeper_insights = deeper_result.get("insights", [])
+            
+            # Update consciousness with the highest-level insight
+            if meta_thoughts:
+                try:
+                    self.consciousness_module.process({
+                        "operation": "update_metacognition",
+                        "input": meta_thoughts[0] if meta_thoughts else "",
+                        "developmental_stage": current_stage
+                    })
+                except Exception as e:
+                    logger.error(f"Error updating consciousness with meta-thoughts: {str(e)}")
+            
+            # Build result structure
+            result = {
+                "success": True,
+                "query": query,
+                "initial_thought": thought,
+                "insights": insights,
+                "patterns": patterns,
+                "meta_thoughts": meta_thoughts,
+                "deeper_insights": deeper_insights,
+                "relevant_memories": relevant_memories,
+                "depth_reached": depth
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in cognitive query processing: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Cognitive processing error: {str(e)}",
+                "query": query,
+                "depth_attempted": depth
+            }
         
     def launch_dashboard(self, port: int = 8050) -> Any:
         """

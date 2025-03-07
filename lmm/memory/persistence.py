@@ -53,12 +53,12 @@ class MemoryManager:
     retention and forgetting.
     """
     
-    def __init__(self, vector_store_dimension: int = 1024):
+    def __init__(self, vector_store_dimension: Optional[int] = None):
         """
         Initialize the Memory Manager.
         
         Args:
-            vector_store_dimension: Dimension of the embedding vectors
+            vector_store_dimension: Dimension of the embedding vectors (if None, auto-detected)
         """
         config = get_config()
         self.vector_store = VectorStore(dimension=vector_store_dimension)

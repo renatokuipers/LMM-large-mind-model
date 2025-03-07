@@ -26,21 +26,45 @@ class VectorStore:
     using FAISS, with support for GPU acceleration if available.
     """
     
-    def __init__(self, dimension: int = 1024, use_gpu: Optional[bool] = None):
+    def __init__(self, dimension: Optional[int] = None, use_gpu: Optional[bool] = None):
         """
         Initialize the vector store.
         
         Args:
-            dimension: Dimension of the embedding vectors
+            dimension: Dimension of the embedding vectors (if None, auto-detected on first use)
             use_gpu: Whether to use GPU acceleration (if None, uses config value)
         """
         config = get_config()
-        self.dimension = dimension
+        self.dimension = dimension  # May be None, will initialize index on first use
         self.use_gpu = use_gpu if use_gpu is not None else config.memory.use_gpu
         self.gpu_device = config.memory.gpu_device
+        self.index = None  # Will be initialized on first use if dimension is None
+        self.is_initialized = False
         
-        # Initialize FAISS index
-        self.index = faiss.IndexFlatL2(self.dimension)
+        # If dimension is provided, initialize the index immediately
+        if self.dimension is not None:
+            self._initialize_index(self.dimension)
+        
+        # Initialize metadata storage
+        self.metadata: List[Dict[str, Any]] = []
+        
+        # Initialize LLM client for embeddings
+        self.llm_client = LLMClient()
+        
+        if self.dimension is not None:
+            logger.info(f"Initialized vector store with dimension {self.dimension}")
+        else:
+            logger.info("Vector store initialized, index will be created on first use")
+    
+    def _initialize_index(self, dimension: int) -> None:
+        """
+        Initialize the FAISS index with the specified dimension.
+        
+        Args:
+            dimension: Dimension of the embedding vectors
+        """
+        self.dimension = dimension
+        self.index = faiss.IndexFlatL2(dimension)
         
         # Move index to GPU if requested and available
         if self.use_gpu:
@@ -52,14 +76,9 @@ class VectorStore:
                 logger.warning(f"Failed to use GPU for vector operations: {e}")
                 logger.info("Falling back to CPU for vector operations")
                 self.use_gpu = False
-        
-        # Initialize metadata storage
-        self.metadata: List[Dict[str, Any]] = []
-        
-        # Initialize LLM client for embeddings
-        self.llm_client = LLMClient()
-        
-        logger.info(f"Initialized vector store with dimension {self.dimension}")
+                
+        self.is_initialized = True
+        logger.info(f"Index initialized with dimension {dimension}")
     
     def add(
         self, 
@@ -81,6 +100,16 @@ class VectorStore:
         # Generate embedding if not provided
         if embedding is None:
             embedding = self.llm_client.get_embedding(text)
+        
+        # Check if index is initialized, if not, initialize with this embedding's dimension
+        if not self.is_initialized:
+            self._initialize_index(len(embedding))
+        
+        # Verify embedding dimension
+        if len(embedding) != self.dimension:
+            error_msg = f"Embedding dimension mismatch: expected {self.dimension}, got {len(embedding)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
         # Convert embedding to numpy array
         embedding_np = np.array([embedding], dtype=np.float32)
@@ -119,12 +148,33 @@ class VectorStore:
         Returns:
             List of dictionaries with search results
         """
+        # Check if index is initialized
+        if not self.is_initialized:
+            # We need to initialize with an embedding, so get one from the query
+            embedding = self.llm_client.get_embedding(query)
+            self._initialize_index(len(embedding))
+            query_embedding = embedding
+        
         # Generate query embedding if not provided
         if query_embedding is None:
             query_embedding = self.llm_client.get_embedding(query)
         
+        # Verify query embedding dimension
+        if len(query_embedding) != self.dimension:
+            error_msg = f"Query embedding dimension mismatch: expected {self.dimension}, got {len(query_embedding)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
         # Convert query embedding to numpy array
         query_np = np.array([query_embedding], dtype=np.float32)
+        
+        # Limit k to the number of items in the index
+        k = min(k, self.index.ntotal) if self.index.ntotal > 0 else k
+        
+        # Handle empty index case
+        if self.index.ntotal == 0:
+            logger.warning("Search on empty index, returning empty results")
+            return []
         
         # Search FAISS index
         distances, indices = self.index.search(query_np, k)

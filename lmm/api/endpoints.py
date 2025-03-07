@@ -47,12 +47,18 @@ class LMMAPIHandler:
         
         try:
             # Extract message from request
+            if request_data is None:
+                return {"error": "Invalid request data"}
+                
             message = request_data.get("message", "")
             if not message:
-                return {"error": "No message provided"}
+                return {"error": "Empty message"}
+            
+            # Extract streaming parameter (default to False)
+            stream = request_data.get("stream", False)
             
             # Process interaction
-            response = self.lmm.interact(message)
+            response = self.lmm.interact(message, stream=stream)
             
             # Return response
             return {
@@ -82,6 +88,12 @@ class LMMAPIHandler:
             
             # Return status
             return {
+                "status": {
+                    "development": dev_status,
+                    "memory": memory_status
+                },
+                "development": dev_status,
+                "memory": memory_status,
                 "developmental_status": dev_status,
                 "memory_status": memory_status,
                 "timestamp": datetime.now().isoformat()
@@ -109,11 +121,22 @@ class LMMAPIHandler:
             if not query:
                 return {"error": "No query provided"}
             
-            # Get limit from request (default to 5)
+            # Get additional parameters from request
             limit = request_data.get("limit", 5)
+            memory_type = request_data.get("memory_type", None)
+            min_activation = request_data.get("min_activation", 0.0)
+            context_tags = request_data.get("context_tags", None)
+            retrieval_strategy = request_data.get("retrieval_strategy", "combined")
             
             # Recall memories
-            memories = self.lmm.recall_memories(query, limit=limit)
+            memories = self.lmm.recall_memories(
+                query=query, 
+                limit=limit,
+                memory_type=memory_type,
+                min_activation=min_activation,
+                context_tags=context_tags,
+                retrieval_strategy=retrieval_strategy
+            )
             
             # Return memories
             return {
@@ -431,6 +454,8 @@ class LMMAPIHandler:
             
             # Return response
             return {
+                "status": "success",
+                "message": f"Developmental stage set to: {stage}",
                 "success": True,
                 "stage": stage,
                 "timestamp": datetime.now().isoformat()

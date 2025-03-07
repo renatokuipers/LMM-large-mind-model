@@ -147,8 +147,29 @@ class ThoughtModule(MindModule):
         Returns:
             Dictionary with operation results
         """
+        # Type checking for input_data
+        if not isinstance(input_data, dict):
+            logger.error("Input data must be a dictionary")
+            return {"success": False, "error": "Input data must be a dictionary"}
+        
         operation = input_data.get("operation", "generate_thought")
+        
+        # Type checking for operation
+        if not isinstance(operation, str):
+            logger.error("Operation must be a string")
+            return {"success": False, "error": "Operation must be a string"}
+            
         stage = input_data.get("developmental_stage", DevelopmentalStage.PRENATAL.value)
+        
+        # Type checking for stage
+        if not isinstance(stage, str):
+            logger.error("Developmental stage must be a string")
+            return {"success": False, "error": "Developmental stage must be a string"}
+            
+        # Validate stage is a valid developmental stage
+        if stage not in [ds.value for ds in DevelopmentalStage]:
+            logger.warning(f"Unknown developmental stage: {stage}, defaulting to PRENATAL")
+            stage = DevelopmentalStage.PRENATAL.value
         
         # Update developmental parameters
         self._update_developmental_parameters(stage)
@@ -161,10 +182,27 @@ class ThoughtModule(MindModule):
         
         try:
             if operation == "generate_thought":
+                # Type checking for required fields
+                content = input_data.get("content", "")
+                if not isinstance(content, str):
+                    raise TypeError("Content must be a string")
+                
+                context = input_data.get("context", {})
+                if not isinstance(context, dict):
+                    raise TypeError("Context must be a dictionary")
+                    
                 results = self._generate_thought(input_data)
             elif operation == "analyze_thought":
+                thought_id = input_data.get("thought_id")
+                if not thought_id or not isinstance(thought_id, str):
+                    raise TypeError("thought_id must be a non-empty string")
+                
                 results = self._analyze_thought(input_data)
             elif operation == "associate_thoughts":
+                thought_ids = input_data.get("thought_ids", [])
+                if not isinstance(thought_ids, list) or len(thought_ids) < 2:
+                    raise TypeError("thought_ids must be a list with at least two elements")
+                
                 results = self._associate_thoughts(input_data)
             elif operation == "reflect":
                 results = self._reflect_on_thoughts(input_data)
@@ -177,6 +215,9 @@ class ThoughtModule(MindModule):
             if results.get("thought"):
                 self._update_thought_history(results["thought"])
             
+        except TypeError as e:
+            logger.error(f"Type error in thought processing: {str(e)}")
+            results["error"] = str(e)
         except Exception as e:
             logger.error(f"Error in thought processing: {str(e)}")
             results["error"] = str(e)
@@ -268,28 +309,108 @@ class ThoughtModule(MindModule):
         }
     
     def _reflect_on_thoughts(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Reflect on recent thoughts and generate insights."""
-        # Get recent thoughts to reflect on
-        recent_thoughts = list(self.current_thoughts)
-        if not recent_thoughts:
-            return {"success": False, "error": "No recent thoughts to reflect on"}
+        """
+        Reflect on recent thoughts and generate insights.
         
-        # Analyze patterns and generate insights
-        patterns = []
-        insights = []
-        for thought in recent_thoughts:
-            patterns.extend(self._identify_patterns(thought))
+        This method analyzes recent thoughts to identify patterns, generate
+        insights, and produce meta-thoughts about the thinking process itself.
+        It implements the reflective cognitive capacity of the thought module.
+        
+        Args:
+            input_data: Dictionary with input parameters
+                - content: Optional specific content to reflect on
+                - context: Current context
+                
+        Returns:
+            Dictionary with reflection results
+        """
+        # Extract parameters
+        content = input_data.get("content", "")
+        context = input_data.get("context", {})
+        
+        # Determine what to reflect on - either the specific content or recent thoughts
+        thoughts_to_reflect_on = []
+        
+        if content:
+            # Create a temporary thought object for the content to analyze
+            temp_thought = ThoughtContent(
+                id=f"temp_{datetime.now().timestamp()}",
+                content=content,
+                type=self._determine_thought_type(content, context),
+                processes=self._determine_cognitive_processes(
+                    self._determine_thought_type(content, context),
+                    content
+                ),
+                context=context,
+                complexity=self._calculate_thought_complexity(
+                    content,
+                    self._determine_cognitive_processes(
+                        self._determine_thought_type(content, context),
+                        content
+                    )
+                ),
+                certainty=0.5  # Default certainty
+            )
+            thoughts_to_reflect_on.append(temp_thought)
+        else:
+            # Use recent thoughts from the deque
+            thoughts_to_reflect_on = list(self.current_thoughts)
+        
+        # If no thoughts to reflect on, return error
+        if not thoughts_to_reflect_on:
+            return {
+                "success": False,
+                "error": "No thoughts available for reflection",
+                "operation": "reflect"
+            }
+        
+        # Analyze each thought for patterns and derive implications
+        all_patterns = []
+        all_implications = []
+        
+        for thought in thoughts_to_reflect_on:
+            # Identify patterns in the thought
+            patterns = self._identify_patterns(thought)
+            all_patterns.extend(patterns)
+            
+            # Derive implications from the thought
             implications = self._derive_implications(thought)
-            insights.extend(implications)
+            all_implications.extend(implications)
+        
+        # Find connections between thoughts if multiple thoughts
+        connections = []
+        if len(thoughts_to_reflect_on) > 1:
+            for i, thought1 in enumerate(thoughts_to_reflect_on[:-1]):
+                for thought2 in thoughts_to_reflect_on[i+1:]:
+                    # Find connections between these two thoughts
+                    thought_connections = self._find_connections(thought1, thought2)
+                    connections.extend(thought_connections)
         
         # Generate meta-thoughts about the patterns and insights
-        meta_thoughts = self._generate_meta_thoughts(patterns, insights)
+        meta_thoughts = self._generate_meta_thoughts(all_patterns, all_implications)
         
+        # Track significant insights in thought history
+        for insight in all_implications[:2]:  # Store top 2 implications
+            insight_thought = ThoughtContent(
+                id=f"insight_{datetime.now().timestamp()}",
+                content=f"Insight: {insight}",
+                type=ThoughtType.METACOGNITIVE,
+                processes=[CognitiveProcess.REFLECTION, CognitiveProcess.EVALUATION],
+                context={"source": "reflection", "derived_from": [t.id for t in thoughts_to_reflect_on]},
+                complexity=min(1.0, 0.3 + self.cognitive_capabilities["metacognition"] * 0.7),
+                certainty=0.6  # Moderate certainty for insights
+            )
+            self._update_current_thoughts(insight_thought)
+        
+        # Return reflection results
         return {
             "success": True,
-            "patterns": patterns,
-            "insights": insights,
-            "meta_thoughts": meta_thoughts
+            "operation": "reflect",
+            "patterns": all_patterns,
+            "insights": all_implications,
+            "connections": connections,
+            "meta_thoughts": meta_thoughts,
+            "thought_count": len(thoughts_to_reflect_on)
         }
     
     def _manage_attention(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -405,316 +526,351 @@ class ThoughtModule(MindModule):
         """
         Determine the most appropriate thought type based on content and context.
         
-        This uses natural language patterns, context cues, and developmental stage
-        to identify the most likely thought type.
+        This method analyzes the content and context to determine the most likely
+        thought type (analytical, creative, critical, etc.) based on keywords,
+        patterns, and cognitive indicators.
         
         Args:
             content: The thought content text
             context: Contextual information
             
         Returns:
-            The identified thought type
+            ThoughtType enum value representing the determined type
         """
-        # Get development level to calibrate sophistication
-        abstraction_level = self.cognitive_capabilities["abstraction"]
-        creativity_level = self.cognitive_capabilities["creativity"]
-        critical_level = self.cognitive_capabilities["critical_thinking"]
-        
-        # Prepare content for analysis
-        content_lower = content.lower()
-        
-        # Check context for explicit thought type request
-        if context.get("requested_thought_type"):
-            requested_type = context["requested_thought_type"]
-            try:
-                return ThoughtType(requested_type)
-            except ValueError:
-                logger.warning(f"Invalid requested thought type: {requested_type}")
-        
-        # Define pattern markers for each thought type
-        type_indicators = {
-            ThoughtType.ANALYTICAL: [
-                "analyze", "examine", "compare", "what if", "factor", "logic", "reason",
-                "therefore", "cause", "effect", "relationship", "calculate", "evaluate"
-            ],
-            ThoughtType.CREATIVE: [
-                "imagine", "create", "design", "invent", "novel", "unique", "different",
-                "could be", "might be", "visualize", "dream", "inspiration", "possibility"
-            ],
-            ThoughtType.CRITICAL: [
-                "critique", "problem", "flaw", "mistake", "error", "wrong", "better",
-                "improve", "should be", "however", "nevertheless", "evaluate", "question"
-            ],
-            ThoughtType.ABSTRACT: [
-                "concept", "theory", "principle", "generally", "abstract", "philosophical",
-                "meaning", "represent", "symbolize", "essence", "fundamental", "universal"
-            ],
-            ThoughtType.CONCRETE: [
-                "specifically", "example", "instance", "case", "practical", "tangible",
-                "real", "physical", "specific", "particular", "detailed", "exact", "precisely"
-            ],
-            ThoughtType.EMOTIONAL: [
-                "feel", "emotion", "happy", "sad", "angry", "afraid", "joy", "love", "hate",
-                "worried", "excited", "nervous", "mood", "attitude", "heart", "passion"
-            ],
-            ThoughtType.SOCIAL: [
-                "people", "person", "friend", "family", "relationship", "together", "community",
-                "group", "society", "interaction", "communicate", "share", "understand"
-            ],
-            ThoughtType.METACOGNITIVE: [
-                "thinking about", "reflect", "aware", "conscious", "metacognition", "my thought",
-                "my mind", "my understanding", "know that I", "realize that I", "notice that I"
-            ]
+        # Initialize scores for each thought type
+        type_scores = {
+            ThoughtType.ANALYTICAL: 0.0,
+            ThoughtType.CREATIVE: 0.0,
+            ThoughtType.CRITICAL: 0.0,
+            ThoughtType.ABSTRACT: 0.0,
+            ThoughtType.CONCRETE: 0.0,
+            ThoughtType.EMOTIONAL: 0.0,
+            ThoughtType.SOCIAL: 0.0,
+            ThoughtType.METACOGNITIVE: 0.0
         }
         
-        # Score each thought type based on indicators in content
-        type_scores = {thought_type: 0.0 for thought_type in ThoughtType}
+        # Define keyword indicators for each thought type
+        analytical_indicators = ["analyze", "examine", "evaluate", "logical", "reason", "evidence", 
+                                 "therefore", "consequently", "if...then", "deduce", "infer", "calculate",
+                                 "compare", "measure", "assess", "hypothesis", "theory", "data"]
         
-        for thought_type, indicators in type_indicators.items():
-            # Count occurrences of indicators
-            indicator_count = sum(1 for indicator in indicators if indicator in content_lower)
-            # Weight by indicator matches and list size
-            type_scores[thought_type] = indicator_count / max(1, len(indicators))
+        creative_indicators = ["imagine", "create", "novel", "innovative", "idea", "possibility", 
+                              "what if", "envision", "inspire", "invent", "original", "generate", 
+                              "design", "alternative", "unusual", "synthesis", "metaphor"]
         
-        # Apply cognitive capability modifiers
-        # Higher abstraction enables more abstract thought
-        type_scores[ThoughtType.ABSTRACT] *= (0.2 + 0.8 * abstraction_level)
-        # Higher creativity enables more creative thought
-        type_scores[ThoughtType.CREATIVE] *= (0.3 + 0.7 * creativity_level)
-        # Higher critical thinking enables more critical thought
-        type_scores[ThoughtType.CRITICAL] *= (0.3 + 0.7 * critical_level)
-        # Metacognition requires sufficient development
-        type_scores[ThoughtType.METACOGNITIVE] *= (0.1 + 0.9 * self.cognitive_capabilities["metacognition"])
+        critical_indicators = ["critique", "flaw", "weakness", "problem", "challenge", "however", 
+                               "but", "nevertheless", "questionable", "doubt", "uncertain", "skeptical",
+                               "evaluate", "analyze", "criticism", "drawback", "limitation"]
         
-        # Consider emotional state for emotional thought boost
-        if self.emotional_state:
-            emotion_intensity = sum(self.emotional_state.values()) / len(self.emotional_state)
-            type_scores[ThoughtType.EMOTIONAL] += 0.3 * emotion_intensity
+        abstract_indicators = ["concept", "abstract", "theoretical", "general", "universal", "principle", 
+                              "philosophy", "essence", "framework", "conceptualize", "metaphysical", 
+                              "symbolic", "representation", "meaning", "significance"]
         
-        # Identify top type (with random for ties)
-        if all(score == 0 for score in type_scores.values()):
-            # Default to concrete for very early development
-            if abstraction_level < 0.3:
-                return ThoughtType.CONCRETE
-            # Default to analytical for typical cases with no clear indicators
-            return ThoughtType.ANALYTICAL
+        concrete_indicators = ["specific", "exact", "precise", "physical", "tangible", "observable", 
+                               "concrete", "practical", "example", "instance", "observable", "direct",
+                               "hands-on", "explicit", "detailed", "factual", "real-world"]
         
-        # Get the thought type with the highest score
-        return max(type_scores.items(), key=lambda x: x[1])[0]
+        emotional_indicators = ["feel", "emotion", "happy", "sad", "angry", "afraid", "joy", "sorrow", 
+                                "love", "hate", "excitement", "worry", "anxiety", "pleasure", "peace",
+                                "stress", "frustration", "content", "hopeful", "fearful"]
+        
+        social_indicators = ["people", "relationship", "social", "community", "group", "culture", 
+                             "society", "interact", "communicate", "collaborate", "share", "understand",
+                             "empathy", "perspective", "others", "team", "together", "connection"]
+        
+        metacognitive_indicators = ["thinking about", "reflect", "awareness", "consciousness", 
+                                    "realize", "understand my", "my thought", "cognitive", "mental process",
+                                    "how I think", "introspection", "self-aware", "my mind", "meta"]
+        
+        # Convert content to lowercase for case-insensitive matching
+        content_lower = content.lower()
+        
+        # Check for indicators in content
+        for indicator in analytical_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.ANALYTICAL] += 1.0
+                
+        for indicator in creative_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.CREATIVE] += 1.0
+                
+        for indicator in critical_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.CRITICAL] += 1.0
+                
+        for indicator in abstract_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.ABSTRACT] += 1.0
+                
+        for indicator in concrete_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.CONCRETE] += 1.0
+                
+        for indicator in emotional_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.EMOTIONAL] += 1.0
+                
+        for indicator in social_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.SOCIAL] += 1.0
+                
+        for indicator in metacognitive_indicators:
+            if indicator in content_lower:
+                type_scores[ThoughtType.METACOGNITIVE] += 1.0
+        
+        # Consider context influence if provided
+        if context:
+            # Context about emotional states boosts emotional thought type
+            if "emotional_state" in context:
+                type_scores[ThoughtType.EMOTIONAL] += 0.5
+                
+            # Language understanding with complex concepts boosts analytical thought
+            if "language_understanding" in context:
+                complexity = context.get("language_understanding", {}).get("complexity", {}).get("level", 0)
+                if isinstance(complexity, (int, float)) and complexity > 0.6:
+                    type_scores[ThoughtType.ANALYTICAL] += 0.5
+                    type_scores[ThoughtType.ABSTRACT] += 0.3
+                
+            # Social understanding context boosts social thought
+            if "social_understanding" in context:
+                type_scores[ThoughtType.SOCIAL] += 0.5
+                
+            # Consciousness state with high self-awareness boosts metacognitive thought
+            if "consciousness_state" in context:
+                self_awareness = context.get("consciousness_state", {}).get("self_awareness", 0)
+                if isinstance(self_awareness, (int, float)) and self_awareness > 0.5:
+                    type_scores[ThoughtType.METACOGNITIVE] += 0.7
+        
+        # Apply development-based biases based on cognitive capabilities
+        if self.cognitive_capabilities["abstraction"] > 0.7:
+            type_scores[ThoughtType.ABSTRACT] += 0.3
+            
+        if self.cognitive_capabilities["creativity"] > 0.7:
+            type_scores[ThoughtType.CREATIVE] += 0.3
+            
+        if self.cognitive_capabilities["critical_thinking"] > 0.7:
+            type_scores[ThoughtType.CRITICAL] += 0.3
+            
+        if self.cognitive_capabilities["metacognition"] > 0.7:
+            type_scores[ThoughtType.METACOGNITIVE] += 0.3
+        
+        # Determine the thought type with the highest score
+        thought_type = max(type_scores.items(), key=lambda x: x[1])[0]
+        
+        # Default to ANALYTICAL if no clear winner
+        if type_scores[thought_type] == 0:
+            thought_type = ThoughtType.ANALYTICAL
+            
+        logger.debug(f"Determined thought type: {thought_type} with scores: {type_scores}")
+        
+        return thought_type
     
     def _determine_cognitive_processes(self, thought_type: ThoughtType, content: str) -> List[CognitiveProcess]:
         """
         Determine which cognitive processes are involved in a thought.
         
-        This analyzes the thought type and content to identify which cognitive
-        processes are being employed, considering developmental capabilities.
+        This method analyzes the thought type and content to identify
+        the cognitive processes (reasoning, problem-solving, etc.) that
+        are engaged in producing the thought.
         
         Args:
-            thought_type: Type of thought
-            content: Thought content
+            thought_type: The type of thought
+            content: The thought content
             
         Returns:
-            List of cognitive processes involved
+            List of CognitiveProcess enum values
         """
-        # Track matched processes
-        involved_processes = set()
+        # Initialize processes list
+        processes = []
         content_lower = content.lower()
         
-        # Process mapping to thought types (primary associations)
-        type_to_processes = {
-            ThoughtType.ANALYTICAL: {
-                CognitiveProcess.REASONING, 
-                CognitiveProcess.EVALUATION
-            },
-            ThoughtType.CREATIVE: {
-                CognitiveProcess.SYNTHESIS, 
-                CognitiveProcess.ABSTRACTION
-            },
-            ThoughtType.CRITICAL: {
-                CognitiveProcess.EVALUATION, 
-                CognitiveProcess.REFLECTION
-            },
-            ThoughtType.ABSTRACT: {
-                CognitiveProcess.ABSTRACTION, 
-                CognitiveProcess.REASONING
-            },
-            ThoughtType.CONCRETE: {
-                CognitiveProcess.PATTERN_RECOGNITION
-            },
-            ThoughtType.EMOTIONAL: {
-                CognitiveProcess.REFLECTION
-            },
-            ThoughtType.SOCIAL: {
-                CognitiveProcess.PATTERN_RECOGNITION, 
-                CognitiveProcess.REFLECTION
-            },
-            ThoughtType.METACOGNITIVE: {
-                CognitiveProcess.REFLECTION, 
-                CognitiveProcess.EVALUATION
-            }
-        }
-        
-        # Add primary processes for the thought type
-        involved_processes.update(type_to_processes.get(thought_type, set()))
-        
-        # Process indicator patterns
+        # Define process indicators (keywords that suggest cognitive processes)
         process_indicators = {
             CognitiveProcess.REASONING: [
-                "because", "therefore", "since", "so", "thus", "consequently",
-                "if", "then", "would", "could", "cause", "effect", "reason"
+                "because", "therefore", "since", "as a result", "consequently",
+                "if...then", "due to", "follows that", "reason", "logic", "cause",
+                "effect", "hence", "thus"
             ],
             CognitiveProcess.PROBLEM_SOLVING: [
-                "problem", "solution", "solve", "resolve", "address", "approach",
-                "method", "strategy", "tackle", "overcome", "challenge", "fix"
+                "solve", "solution", "problem", "issue", "challenge", "resolve",
+                "approach", "method", "strategy", "tackle", "address", "fix", 
+                "answer", "figure out", "determine"
             ],
             CognitiveProcess.DECISION_MAKING: [
-                "decide", "choice", "choose", "option", "alternative", "select",
-                "best", "worst", "better", "prefer", "decision", "consider"
+                "decide", "choice", "select", "option", "alternative", "choose",
+                "preference", "best", "worst", "better", "optimal", "decision",
+                "pros and cons", "weigh", "consider"
             ],
             CognitiveProcess.PATTERN_RECOGNITION: [
-                "pattern", "similar", "same", "different", "common", "trend",
-                "recurring", "recognize", "identify", "detect", "observe"
+                "pattern", "similarity", "recognize", "identify", "common", "repeat",
+                "consistent", "structure", "arrangement", "regular", "familiar",
+                "sequence", "detect", "notice"
             ],
             CognitiveProcess.ABSTRACTION: [
-                "abstract", "concept", "general", "universal", "principle",
-                "theory", "framework", "model", "represent", "symbolize"
+                "abstract", "general", "universal", "conceptual", "theoretical",
+                "principle", "essence", "fundamental", "core", "underlying",
+                "generalize", "remove detail", "simplify"
             ],
             CognitiveProcess.SYNTHESIS: [
-                "combine", "integrate", "merge", "blend", "incorporate",
-                "together", "connection", "relationship", "link", "network"
+                "combine", "integrate", "merge", "synthesize", "blend", "together",
+                "unify", "composite", "fusion", "connect", "link", "associate", 
+                "relationship", "composition"
             ],
             CognitiveProcess.EVALUATION: [
-                "evaluate", "assess", "judge", "rate", "rank", "compare",
-                "value", "worth", "quality", "effectiveness", "efficiency"
+                "evaluate", "assess", "judge", "value", "worth", "quality", "merit",
+                "effective", "efficient", "good", "bad", "measure", "rate", "score", 
+                "criteria", "standard"
             ],
             CognitiveProcess.REFLECTION: [
                 "reflect", "think about", "consider", "contemplate", "ponder",
-                "introspect", "examine", "review", "reconsider", "revisit"
+                "introspect", "examine", "review", "look back", "retrospective",
+                "self-awareness", "meta", "conscious"
             ]
         }
         
-        # Find secondary processes from content indicators
+        # Check content for process indicators
         for process, indicators in process_indicators.items():
-            if any(indicator in content_lower for indicator in indicators):
-                involved_processes.add(process)
+            for indicator in indicators:
+                if indicator in content_lower:
+                    processes.append(process)
+                    break  # Add process once if any indicator is found
         
-        # Limit processes by developmental capability
-        final_processes = []
-        
-        # Establish developmental gating for each process
-        process_requirements = {
-            CognitiveProcess.REASONING: {"abstraction": 0.2},
-            CognitiveProcess.PROBLEM_SOLVING: {"complexity": 0.3},
-            CognitiveProcess.DECISION_MAKING: {"complexity": 0.3, "critical_thinking": 0.2},
-            CognitiveProcess.PATTERN_RECOGNITION: {"complexity": 0.1},  # Available early
-            CognitiveProcess.ABSTRACTION: {"abstraction": 0.5},
-            CognitiveProcess.SYNTHESIS: {"creativity": 0.4, "complexity": 0.4},
-            CognitiveProcess.EVALUATION: {"critical_thinking": 0.4},
-            CognitiveProcess.REFLECTION: {"metacognition": 0.3}
-        }
-        
-        # Filter processes based on developmental capabilities
-        for process in involved_processes:
-            requirements = process_requirements.get(process, {})
+        # Add processes based on thought type if none found from indicators
+        if not processes:
+            # If no processes detected from indicators, add default processes based on thought type
+            type_to_default_processes = {
+                ThoughtType.ANALYTICAL: [CognitiveProcess.REASONING, CognitiveProcess.EVALUATION],
+                ThoughtType.CREATIVE: [CognitiveProcess.SYNTHESIS, CognitiveProcess.ABSTRACTION],
+                ThoughtType.CRITICAL: [CognitiveProcess.EVALUATION, CognitiveProcess.REASONING],
+                ThoughtType.ABSTRACT: [CognitiveProcess.ABSTRACTION, CognitiveProcess.SYNTHESIS],
+                ThoughtType.CONCRETE: [CognitiveProcess.PATTERN_RECOGNITION],
+                ThoughtType.EMOTIONAL: [CognitiveProcess.EVALUATION],
+                ThoughtType.SOCIAL: [CognitiveProcess.PATTERN_RECOGNITION, CognitiveProcess.EVALUATION],
+                ThoughtType.METACOGNITIVE: [CognitiveProcess.REFLECTION, CognitiveProcess.EVALUATION]
+            }
             
-            # Check if all requirements are met
-            meets_requirements = True
-            for capability, min_level in requirements.items():
-                if self.cognitive_capabilities.get(capability, 0) < min_level:
-                    meets_requirements = False
-                    break
+            # Get default processes for this thought type
+            processes = type_to_default_processes.get(thought_type, [CognitiveProcess.REASONING])
+        
+        # Always add REFLECTION for metacognitive thoughts
+        if thought_type == ThoughtType.METACOGNITIVE and CognitiveProcess.REFLECTION not in processes:
+            processes.append(CognitiveProcess.REFLECTION)
+        
+        # Limit processes based on developmental stage/cognitive capabilities
+        # This simulates cognitive limitations at earlier developmental stages
+        max_processes = 1
+        if self.cognitive_capabilities["complexity"] > 0.3:
+            max_processes = 2
+        if self.cognitive_capabilities["complexity"] > 0.6:
+            max_processes = 3
+        if self.cognitive_capabilities["complexity"] > 0.9:
+            max_processes = 4
             
-            if meets_requirements:
-                final_processes.append(process)
+        # Ensure we don't exceed max_processes
+        processes = processes[:max_processes]
         
-        # Default to pattern recognition if no processes identified (most basic)
-        if not final_processes:
-            return [CognitiveProcess.PATTERN_RECOGNITION]
-        
-        return final_processes
+        # Ensure we return at least one process
+        if not processes:
+            processes = [CognitiveProcess.REASONING]  # Default to reasoning
+            
+        logger.debug(f"Determined cognitive processes: {processes} for thought type: {thought_type}")
+            
+        return processes
     
     def _calculate_thought_complexity(self, content: str, processes: List[CognitiveProcess]) -> float:
         """
-        Calculate the complexity of a thought based on linguistic features and cognitive processes.
+        Calculate the complexity of a thought.
+        
+        This method evaluates the complexity of the thought based on content length,
+        vocabulary diversity, sentence structure, cognitive processes involved,
+        and the current developmental capabilities.
         
         Args:
-            content: Thought content
-            processes: Cognitive processes involved
+            content: The thought content
+            processes: List of cognitive processes involved
             
         Returns:
-            Complexity score (0.0-1.0)
+            Complexity score between 0.0 and 1.0
         """
-        # Get developmental capability cap
-        max_complexity = self.cognitive_capabilities["complexity"]
+        # Base complexity starts at 0.1 (minimum complexity)
+        complexity = 0.1
         
-        # Base complexity from linguistic features
-        linguistic_complexity = self._calculate_linguistic_complexity(content)
+        # 1. Content length factor (longer content tends to be more complex)
+        # Cap at 300 characters to avoid overweighting very long thoughts
+        max_length = 300
+        length_factor = min(len(content), max_length) / max_length
+        complexity += 0.15 * length_factor
         
-        # Process-based complexity
-        process_weights = {
-            CognitiveProcess.PATTERN_RECOGNITION: 0.2,  # Simpler
-            CognitiveProcess.REASONING: 0.5,
-            CognitiveProcess.PROBLEM_SOLVING: 0.6,
-            CognitiveProcess.DECISION_MAKING: 0.5,
-            CognitiveProcess.ABSTRACTION: 0.8,  # More complex
-            CognitiveProcess.SYNTHESIS: 0.7,
-            CognitiveProcess.EVALUATION: 0.6,
-            CognitiveProcess.REFLECTION: 0.7
+        # 2. Word variety/unique words factor
+        words = content.lower().split()
+        unique_words = set(words)
+        if words:  # Avoid division by zero
+            word_variety = len(unique_words) / len(words)
+            # Scale from 0-0.15 based on word variety
+            complexity += 0.15 * min(1.0, word_variety * 1.5)  # Scale up to give more weight
+        
+        # 3. Sentence length and structure
+        sentences = content.split('.')
+        valid_sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if valid_sentences:
+            # Average sentence length (longer sentences tend to be more complex)
+            avg_sentence_length = sum(len(s.split()) for s in valid_sentences) / len(valid_sentences)
+            # Scale from 0-0.10 based on average sentence length
+            sentence_length_factor = min(1.0, avg_sentence_length / 20)  # Cap at 20 words
+            complexity += 0.10 * sentence_length_factor
+            
+            # Sentence count (more sentences can indicate more complex thoughts)
+            sentence_count_factor = min(1.0, len(valid_sentences) / 5)  # Cap at 5 sentences
+            complexity += 0.05 * sentence_count_factor
+        
+        # 4. Cognitive processes complexity factor
+        # Some processes are more complex than others
+        process_complexity = {
+            CognitiveProcess.PATTERN_RECOGNITION: 0.3,  # Basic
+            CognitiveProcess.REASONING: 0.5,            # Moderate
+            CognitiveProcess.PROBLEM_SOLVING: 0.6,      # Moderate+
+            CognitiveProcess.DECISION_MAKING: 0.6,      # Moderate+
+            CognitiveProcess.EVALUATION: 0.7,           # Advanced
+            CognitiveProcess.ABSTRACTION: 0.8,          # Advanced+
+            CognitiveProcess.SYNTHESIS: 0.8,            # Advanced+
+            CognitiveProcess.REFLECTION: 0.9            # Highest
         }
         
-        # Calculate average process complexity
-        process_complexity = sum(process_weights.get(p, 0.5) for p in processes) / max(1, len(processes))
+        if processes:
+            # Average complexity of involved processes
+            avg_process_complexity = sum(process_complexity.get(p, 0.5) for p in processes) / len(processes)
+            # Scale from 0-0.25 based on process complexity
+            complexity += 0.25 * avg_process_complexity
+            
+            # Multiple processes add complexity
+            # Scale from 0-0.10 based on number of processes (max 4)
+            process_count_factor = min(1.0, (len(processes) - 1) / 3)
+            complexity += 0.10 * process_count_factor
         
-        # Combine linguistic and process complexity
-        combined_complexity = 0.6 * linguistic_complexity + 0.4 * process_complexity
+        # 5. Vocabulary complexity indicators
+        complex_terms = [
+            "therefore", "consequently", "nevertheless", "hypothesis", "theoretical",
+            "abstract", "concept", "framework", "paradigm", "methodology",
+            "correlation", "causation", "inference", "implication", "perspective",
+            "subsequently", "prerequisite", "underlying", "fundamental", "intrinsic"
+        ]
         
-        # Apply developmental cap (complexity can't exceed capability)
-        capped_complexity = min(combined_complexity, max_complexity)
+        # Count complex terms
+        complex_term_count = sum(1 for term in complex_terms if term in content.lower())
+        # Scale from 0-0.10 based on complex terms (max 5 terms)
+        complex_term_factor = min(1.0, complex_term_count / 5)
+        complexity += 0.10 * complex_term_factor
         
-        # Normalize to 0.0-1.0 range
-        return max(0.0, min(1.0, capped_complexity))
-
-    def _calculate_linguistic_complexity(self, content: str) -> float:
-        """Calculate linguistic complexity based on text features."""
-        if not content:
-            return 0.0
+        # 6. Developmental capability constraint
+        # Limit maximum complexity based on cognitive capabilities
+        max_complexity = 0.3 + (0.7 * self.cognitive_capabilities["complexity"])
+        complexity = min(complexity, max_complexity)
         
-        # Split into sentences and words
-        sentences = [s.strip() for s in content.split('.') if s.strip()]
-        words = [w.strip() for w in content.split() if w.strip()]
+        # Ensure within valid range [0.0, 1.0]
+        complexity = max(0.0, min(1.0, complexity))
         
-        if not sentences or not words:
-            return 0.0
-        
-        # Simple complexity metrics
-        avg_sentence_length = len(words) / len(sentences)
-        avg_word_length = sum(len(word) for word in words) / len(words)
-        
-        # Vocabulary richness (approximation)
-        unique_words = len(set(w.lower() for w in words))
-        lexical_diversity = unique_words / len(words)
-        
-        # Calculate various components of complexity
-        length_component = min(1.0, avg_sentence_length / 25.0)  # Cap at 25 words/sentence
-        word_length_component = min(1.0, avg_word_length / 8.0)  # Cap at 8 letters/word
-        diversity_component = min(1.0, lexical_diversity)
-        
-        # Look for complex structures
-        has_conjunctions = any(conj in content.lower() for conj in 
-                            ["and", "but", "or", "because", "however", "although", 
-                            "therefore", "nevertheless", "despite"])
-        has_conditionals = any(cond in content.lower() for cond in 
-                            ["if", "when", "unless", "until", "while"])
-        
-        structure_component = 0.3 * has_conjunctions + 0.4 * has_conditionals
-        
-        # Combine with weights
-        complexity = (
-            0.3 * length_component +
-            0.2 * word_length_component +
-            0.3 * diversity_component +
-            0.2 * structure_component
-        )
+        logger.debug(f"Calculated thought complexity: {complexity:.2f}")
         
         return complexity
     
@@ -776,126 +932,239 @@ class ThoughtModule(MindModule):
         """
         Apply relevant cognitive biases to thought content.
         
-        This simulates how cognitive biases influence thinking, with bias strength
-        varying by developmental stage and context.
+        This method modifies the thought content based on applicable cognitive
+        biases, taking into account the developmental stage and context.
+        
+        Args:
+            content: The original thought content
+            context: Contextual information
+            
+        Returns:
+            Modified thought content with biases applied
+        """
+        # Skip bias application for very early development
+        if self.cognitive_capabilities["complexity"] < 0.2:
+            return content
+            
+        # Original content (preserve for comparison)
+        original_content = content
+        
+        # Apply biases based on activation thresholds
+        for bias in self.cognitive_biases:
+            # Check if bias should be active in this context
+            should_apply = False
+            
+            # Check context tags if any are defined for this bias
+            if bias.contexts:
+                # If any context tag matches a key in the context dict, consider the bias
+                for context_tag in bias.contexts:
+                    if context_tag in context:
+                        should_apply = True
+                        break
+            else:
+                # If no contexts specified, bias is general and applies based on threshold
+                should_apply = True
+                
+            # Check activation threshold and apply with appropriate strength
+            if should_apply and random.random() < bias.activation_threshold:
+                # Calculate effective strength based on bias strength and developmental capabilities
+                effective_strength = bias.influence_strength
+                
+                # Apply bias based on type
+                if bias.name == "confirmation_bias":
+                    content = self._apply_confirmation_bias(content, context, effective_strength)
+                elif bias.name == "availability_heuristic":
+                    content = self._apply_availability_bias(content, context, effective_strength)
+                elif bias.name == "anchoring_bias":
+                    content = self._apply_anchoring_bias(content, context, effective_strength)
+                # Add more bias handlers as they're implemented
+        
+        # Log if content was modified
+        if content != original_content:
+            logger.debug(f"Applied cognitive biases, modified thought content")
+            
+        return content
+        
+    def _apply_confirmation_bias(self, content: str, context: Dict[str, Any], strength: float) -> str:
+        """
+        Apply confirmation bias to thought content.
+        
+        Confirmation bias is the tendency to search for, interpret, and recall
+        information in a way that confirms one's preexisting beliefs.
         
         Args:
             content: Original thought content
             context: Contextual information
+            strength: Bias strength factor
             
         Returns:
-            Modified thought content with bias effects
+            Modified thought content
         """
-        if not self.cognitive_biases:
+        # Skip if strength is too low or content is too short
+        if strength < 0.2 or len(content) < 10:
             return content
-        
-        # Create a modified copy of the content
-        modified_content = content
-        
-        # Identify active contexts
-        active_contexts = set(context.get("contexts", []))
-        
-        # Process each cognitive bias
-        for bias in self.cognitive_biases:
-            # Check if bias is active in current context
-            context_active = not bias.contexts or any(c in active_contexts for c in bias.contexts)
             
-            # Check if bias activation threshold is reached by random chance
-            activation_roll = random.random()
-            
-            if context_active and activation_roll <= bias.activation_threshold:
-                # Apply bias effects based on type
-                if bias.name == "confirmation_bias":
-                    modified_content = self._apply_confirmation_bias(modified_content, context, bias.influence_strength)
-                elif bias.name == "availability_heuristic":
-                    modified_content = self._apply_availability_bias(modified_content, context, bias.influence_strength)
-                elif bias.name == "anchoring_bias":
-                    modified_content = self._apply_anchoring_bias(modified_content, context, bias.influence_strength)
-                # Add more bias implementations as needed
+        # Look for existing beliefs/opinions in context
+        existing_beliefs = []
         
-        return modified_content
-
-    def _apply_confirmation_bias(self, content: str, context: Dict[str, Any], strength: float) -> str:
-        """Apply confirmation bias effects to content."""
-        # Extract existing beliefs from context
-        beliefs = context.get("beliefs", {})
-        if not beliefs:
+        # Check memory activations for beliefs
+        if "memory_activations" in context and isinstance(context["memory_activations"], list):
+            # Here we would ideally access the actual memory content
+            # For now, we'll just assume memories might reinforce existing beliefs
+            if context["memory_activations"]:
+                has_memories = True
+            else:
+                has_memories = False
+        else:
+            has_memories = False
+            
+        # Extract opinion indicators from content
+        opinion_markers = ["believe", "think", "feel", "opinion", "view", "stance", "position"]
+        has_opinions = any(marker in content.lower() for marker in opinion_markers)
+        
+        # If no clear opinions or beliefs to reinforce, return original content
+        if not (has_memories or has_opinions):
             return content
-        
-        # Find the strongest belief
-        strongest_belief = max(beliefs.items(), key=lambda x: x[1], default=(None, 0))
-        if not strongest_belief[0]:
-            return content
-        
-        # Add confirmatory language based on belief strength and bias strength
-        confirmation_phrases = [
-            f"This confirms my understanding about {strongest_belief[0]}.",
-            f"This aligns with what I already know about {strongest_belief[0]}.",
-            f"This is consistent with my existing knowledge about {strongest_belief[0]}.",
-            f"This makes sense given what I know about {strongest_belief[0]}."
-        ]
-        
-        # Only add confirmation if belief and bias are strong enough
-        if strongest_belief[1] * strength > 0.5 and random.random() < strength:
-            chosen_phrase = random.choice(confirmation_phrases)
             
-            # For more developed cognition, make the bias more subtle
-            if self.cognitive_capabilities["metacognition"] > 0.6:
-                # More nuanced expressions of confirmation bias
-                subtle_phrases = [
-                    f"I think this supports the view that {strongest_belief[0]}.",
-                    f"This seems to provide evidence for {strongest_belief[0]}.",
-                    f"I notice this relates to my understanding of {strongest_belief[0]}."
-                ]
-                chosen_phrase = random.choice(subtle_phrases)
+        # Apply confirmation bias modifications based on strength
+        if random.random() < strength:
+            # Reinforcement phrases
+            reinforcement_phrases = [
+                " This confirms what I already believed.",
+                " This aligns with my existing understanding.",
+                " This is consistent with what I've observed before.",
+                " This makes sense given what I already know.",
+                " This further validates my perspective.",
+                " I've seen evidence of this before."
+            ]
             
-            # Add the bias phrase
-            return f"{content} {chosen_phrase}"
+            # Add a reinforcement phrase (stronger bias = more likely)
+            if random.random() < strength:
+                selected_phrase = random.choice(reinforcement_phrases)
+                # Only add if not already ending with punctuation
+                if content[-1] not in ['.', '!', '?']:
+                    content += '.'
+                content += selected_phrase
+            
+            # Increase certainty words (stronger bias = more certainty)
+            certainty_patterns = [
+                (r'\bI think\b', 'I know'),
+                (r'\bmight be\b', 'is likely'),
+                (r'\bcould\b', 'probably would'),
+                (r'\bpossibly\b', 'definitely'),
+                (r'\bsometimes\b', 'usually'),
+                (r'\bperhaps\b', 'certainly')
+            ]
+            
+            # Apply certainty pattern replacements with probability based on strength
+            for pattern, replacement in certainty_patterns:
+                if pattern in content.lower() and random.random() < strength:
+                    import re
+                    content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
         
         return content
-
+        
     def _apply_availability_bias(self, content: str, context: Dict[str, Any], strength: float) -> str:
-        """Apply availability heuristic effects to content."""
-        # Get recently accessed memories
-        recent_memories = context.get("recent_memories", [])
-        if not recent_memories:
+        """
+        Apply availability heuristic/bias to thought content.
+        
+        The availability heuristic is a mental shortcut that relies on immediate examples 
+        that come to mind when evaluating a topic or decision.
+        
+        Args:
+            content: Original thought content
+            context: Contextual information
+            strength: Bias strength factor
+            
+        Returns:
+            Modified thought content
+        """
+        # Skip if strength is too low
+        if strength < 0.2:
             return content
+            
+        # Availability bias is applied only when evaluating probabilities/frequencies
+        # or when making predictions
+        probability_markers = ["likely", "probability", "chance", "frequency", "common", "rare", 
+                              "often", "seldom", "predict", "forecast", "expect", "anticipate"]
         
-        # Choose a recent memory to overweight in the thinking
-        memory = random.choice(recent_memories[:3])  # Focus on very recent ones
+        has_probability_content = any(marker in content.lower() for marker in probability_markers)
         
-        # Availability bias phrases
-        availability_phrases = [
-            f"This reminds me of a recent experience with {memory}.",
-            f"Like what happened with {memory}, this seems important.",
-            f"Based on my recent experience with {memory}, this seems likely.",
-            f"The {memory} situation makes me think this is common."
-        ]
-        
-        # Apply bias with probability based on strength
+        # If not dealing with probabilities or predictions, return original
+        if not has_probability_content:
+            return content
+            
+        # Apply availability bias with probability based on strength
         if random.random() < strength:
-            return f"{content} {random.choice(availability_phrases)}"
+            # For simplicity, assume most recent memories or experiences are "available"
+            # and thus perceived as more common
+            
+            # Phrases that reflect availability bias
+            availability_phrases = [
+                " This seems more common because I've encountered it recently.",
+                " I can think of several examples of this happening.",
+                " Based on my recent experiences, this happens frequently.",
+                " This stands out in my memory as being quite common.",
+                " I can easily recall instances of this."
+            ]
+            
+            # Add an availability bias phrase
+            selected_phrase = random.choice(availability_phrases)
+            if content[-1] not in ['.', '!', '?']:
+                content += '.'
+            content += selected_phrase
         
         return content
-
+        
     def _apply_anchoring_bias(self, content: str, context: Dict[str, Any], strength: float) -> str:
-        """Apply anchoring bias effects to content."""
-        # Look for anchoring values
-        anchor_value = context.get("initial_value") or context.get("first_mentioned_number")
-        if not anchor_value:
+        """
+        Apply anchoring bias to thought content.
+        
+        Anchoring is a cognitive bias where an individual relies too heavily on 
+        an initial piece of information (the "anchor") when making decisions.
+        
+        Args:
+            content: Original thought content
+            context: Contextual information 
+            strength: Bias strength factor
+            
+        Returns:
+            Modified thought content
+        """
+        # Skip if strength is too low
+        if strength < 0.2:
             return content
+            
+        # Anchoring bias is most relevant for quantitative judgments or
+        # when establishing value comparisons
         
-        # Anchoring bias phrases 
-        anchoring_phrases = [
-            f"Starting from {anchor_value}, this seems reasonable.",
-            f"Considering the initial {anchor_value}, I think this makes sense.",
-            f"With {anchor_value} as a reference point, this is my conclusion.",
-            f"Based on the {anchor_value} figure mentioned earlier, this follows."
-        ]
+        # First, check if we have any "anchor" values in the context or content
+        anchor_found = False
         
-        # Apply bias with probability based on strength
-        if random.random() < strength:
-            return f"{content} {random.choice(anchoring_phrases)}"
+        # Look for numbers in content that might serve as anchors
+        import re
+        number_pattern = r'\b\d+(?:\.\d+)?\b'
+        numbers = re.findall(number_pattern, content)
+        
+        # If we have numbers, they could serve as anchors
+        if numbers and random.random() < strength:
+            anchor_found = True
+            
+            # Anchoring bias phrases
+            anchoring_phrases = [
+                " This initial value seems like a reasonable starting point.",
+                " Starting from this reference point makes sense.",
+                " This provides a good baseline for comparison.",
+                " Taking this initial value into account is important.",
+                " I'm considering this number as an important reference."
+            ]
+            
+            # Add an anchoring bias phrase
+            if random.random() < strength:
+                selected_phrase = random.choice(anchoring_phrases)
+                if content[-1] not in ['.', '!', '?']:
+                    content += '.'
+                content += selected_phrase
         
         return content
     
@@ -915,85 +1184,111 @@ class ThoughtModule(MindModule):
     
     def _identify_patterns(self, thought: ThoughtContent) -> List[str]:
         """
-        Identify patterns in thought content and between thoughts.
+        Identify patterns in thought content.
         
-        This looks for repeating elements, common themes, and structural patterns
-        in the current thought and across recent thoughts.
+        This method analyzes the thought content to identify recurring patterns,
+        themes, or structures that could represent higher-level patterns of thinking.
         
         Args:
-            thought: The thought to analyze for patterns
+            thought: The thought to analyze
             
         Returns:
-            List of identified patterns as descriptive strings
+            List of identified pattern descriptions
         """
         patterns = []
         
-        # Pattern detection depends on metacognitive ability
-        pattern_detection_ability = self.cognitive_capabilities["metacognition"]
-        if pattern_detection_ability < 0.2:
-            return []  # Very limited pattern recognition at early stages
-        
-        # Get recent thoughts for comparison
-        recent_thoughts = list(self.current_thoughts)
-        
-        # 1. Look for recurring phrases in the current thought
+        # Skip pattern identification for very early developmental stages
+        if self.cognitive_capabilities["abstraction"] < 0.2:
+            return patterns
+            
         content = thought.content
-        words = [w.lower() for w in content.split() if len(w) > 3]  # Focus on significant words
+        thought_type = thought.type
+        processes = thought.processes
         
-        # Find repeated words
-        word_counts = {}
-        for word in words:
-            word_counts[word] = word_counts.get(word, 0) + 1
+        # 1. Look for cause-effect patterns
+        cause_effect_markers = ["because", "since", "as a result", "therefore", "consequently", 
+                               "leads to", "results in", "causes", "effect", "impact"]
+        has_cause_effect = any(marker in content.lower() for marker in cause_effect_markers)
         
-        # Identify repeated words as patterns
-        repeated_words = [word for word, count in word_counts.items() if count > 1]
-        if repeated_words and random.random() < pattern_detection_ability:
-            patterns.append(f"Repeated use of: {', '.join(repeated_words[:3])}")
+        if has_cause_effect:
+            patterns.append("Causal reasoning pattern: connecting causes and effects")
         
-        # 2. Compare with recent thoughts to find similarities
-        if recent_thoughts and len(recent_thoughts) > 1:
-            # Extract thought content from recent thoughts
-            recent_contents = [t.content for t in recent_thoughts if t.id != thought.id]
+        # 2. Look for comparison patterns
+        comparison_markers = ["better", "worse", "more", "less", "greater", "fewer", "same", 
+                                 "different", "contrast", "similarity", "like", "unlike", "compared to"]
+        has_comparison = any(marker in content.lower() for marker in comparison_markers)
+        
+        if has_comparison:
+            patterns.append("Comparative analysis pattern: evaluating similarities and differences")
+        
+        # 3. Look for conditional patterns
+        conditional_markers = ["if", "then", "would", "could", "might", "unless", "except", 
+                                  "assuming", "provided that", "in case", "otherwise"]
+        has_conditional = any(marker in content.lower() for marker in conditional_markers)
+        
+        if has_conditional:
+            patterns.append("Conditional reasoning pattern: exploring hypothetical scenarios")
+        
+        # 4. Look for categorization patterns
+        category_markers = ["type", "category", "group", "class", "kind", "sort", "classify", 
+                               "belongs to", "falls under", "example of", "instance of"]
+        has_categorization = any(marker in content.lower() for marker in category_markers)
+        
+        if has_categorization:
+            patterns.append("Categorization pattern: organizing concepts into groups")
+        
+        # 5. Look for sequential/procedural patterns
+        sequence_markers = ["first", "second", "next", "then", "finally", "afterward", 
+                               "subsequently", "following", "before", "after", "during", "while"]
+        has_sequence = any(marker in content.lower() for marker in sequence_markers)
+        
+        if has_sequence:
+            patterns.append("Sequential processing pattern: organizing steps or events in order")
+        
+        # 6. Pattern detection based on thought type
+        type_specific_patterns = {
+            ThoughtType.ANALYTICAL: "Analytical decomposition pattern: breaking down complex ideas",
+            ThoughtType.CREATIVE: "Divergent thinking pattern: generating novel connections",
+            ThoughtType.CRITICAL: "Evaluative assessment pattern: identifying strengths and weaknesses",
+            ThoughtType.ABSTRACT: "Abstraction pattern: moving from specific to general concepts",
+            ThoughtType.METACOGNITIVE: "Self-reflective pattern: examining own thought processes"
+        }
+        
+        if thought_type in type_specific_patterns and random.random() < 0.7:
+            patterns.append(type_specific_patterns[thought_type])
+        
+        # 7. Pattern detection based on cognitive processes
+        process_specific_patterns = {
+            CognitiveProcess.REASONING: "Logical inference pattern: drawing conclusions from premises",
+            CognitiveProcess.PROBLEM_SOLVING: "Solution-seeking pattern: identifying approaches to challenges",
+            CognitiveProcess.DECISION_MAKING: "Option evaluation pattern: weighing alternatives",
+            CognitiveProcess.ABSTRACTION: "Generalization pattern: extracting broader principles",
+            CognitiveProcess.SYNTHESIS: "Integration pattern: combining multiple elements into a whole",
+            CognitiveProcess.REFLECTION: "Introspective pattern: examining internal mental states"
+        }
+        
+        for process in processes:
+            if process in process_specific_patterns and random.random() < 0.6:
+                patterns.append(process_specific_patterns[process])
+                
+        # 8. Look for recurring themes based on context
+        context_dict = thought.context
+        if context_dict:
+            if "topic" in context_dict:
+                patterns.append(f"Thematic focus pattern: centered around {context_dict['topic']}")
             
-            # Compare current thought with previous thoughts
-            for prev_content in recent_contents:
-                prev_words = set(w.lower() for w in prev_content.split() if len(w) > 3)
-                current_words = set(words)
-                
-                # Find common significant words
-                common_words = current_words.intersection(prev_words)
-                if len(common_words) >= 3 and random.random() < pattern_detection_ability:
-                    patterns.append(f"Theme continuation with words: {', '.join(list(common_words)[:3])}")
-                    break  # Just note one thematic connection
+            if "problem" in context_dict:
+                patterns.append("Problem-centered pattern: organizing thoughts around a central issue")
         
-        # 3. Identify thought type patterns
-        if recent_thoughts and len(recent_thoughts) > 2:
-            # Count thought types
-            type_counts = {}
-            for t in recent_thoughts:
-                type_counts[t.type] = type_counts.get(t.type, 0) + 1
+        # Limit patterns based on metacognitive capacity
+        max_patterns = int(1 + 4 * self.cognitive_capabilities["metacognition"])
+        patterns = patterns[:max_patterns]
+        
+        # Log pattern identification
+        if patterns:
+            logger.debug(f"Identified patterns in thought: {patterns}")
             
-            # Check if current thought continues a pattern
-            if type_counts.get(thought.type, 0) > 1:
-                patterns.append(f"Continued pattern of {thought.type.value} thinking")
-        
-        # 4. More sophisticated patterns for higher metacognition
-        if pattern_detection_ability > 0.6:
-            # Check for cause-effect patterns
-            if "because" in content.lower() or "therefore" in content.lower():
-                patterns.append("Causal reasoning pattern")
-                
-            # Check for comparison patterns
-            if any(term in content.lower() for term in ["like", "unlike", "similar", "different", "compare"]):
-                patterns.append("Comparative reasoning pattern")
-                
-            # Check for hypothesis forming
-            if any(term in content.lower() for term in ["if", "might", "could", "possibly", "perhaps"]):
-                patterns.append("Hypothesis formation pattern")
-        
-        # Limit patterns to capability level
-        pattern_capacity = int(2 + 3 * pattern_detection_ability)
-        return patterns[:pattern_capacity]
+        return patterns
     
     def _derive_implications(self, thought: ThoughtContent) -> List[str]:
         """
@@ -1077,15 +1372,16 @@ class ThoughtModule(MindModule):
         
         return implications
     
-    def _find_connections(self, thought: ThoughtContent) -> List[str]:
+    def _find_connections(self, thought1: ThoughtContent, thought2: ThoughtContent) -> List[str]:
         """
-        Find connections between the given thought and other thoughts.
+        Find connections between two thoughts.
         
-        This identifies semantic, contextual, and structural connections
-        between the current thought and previous thoughts.
+        This method identifies semantic, contextual, and structural connections
+        between the two given thoughts.
         
         Args:
-            thought: The thought to find connections for
+            thought1: The first thought
+            thought2: The second thought
             
         Returns:
             List of connection descriptions
@@ -1098,45 +1394,51 @@ class ThoughtModule(MindModule):
             0.4 * self.cognitive_capabilities["creativity"]
         )
         
-        if connection_ability < 0.2 or not self.thought_history:
+        if connection_ability < 0.2:
             return []  # Limited ability to find connections
         
         # Current thought details
-        content = thought.content.lower()
-        content_words = set(w for w in content.split() if len(w) > 3)
+        content1 = thought1.content.lower()
+        content2 = thought2.content.lower()
         
         # 1. Look for existing associations in the graph
-        thought_id = thought.id
-        direct_associations = list(self.thought_associations.get(thought_id, set()))
+        thought_id1 = thought1.id
+        thought_id2 = thought2.id
+        direct_associations1 = list(self.thought_associations.get(thought_id1, set()))
+        direct_associations2 = list(self.thought_associations.get(thought_id2, set()))
         
-        if direct_associations:
+        if direct_associations1 or direct_associations2:
             # Describe direct associations
             associated_thoughts = []
-            for assoc_id in direct_associations:
+            for assoc_id in direct_associations1:
+                assoc_thought = next((t for t in self.thought_history if t.id == assoc_id), None)
+                if assoc_thought:
+                    associated_thoughts.append(assoc_thought)
+            
+            for assoc_id in direct_associations2:
                 assoc_thought = next((t for t in self.thought_history if t.id == assoc_id), None)
                 if assoc_thought:
                     associated_thoughts.append(assoc_thought)
             
             if associated_thoughts:
-                connections.append(f"Directly associated with {len(associated_thoughts)} previous thoughts")
+                connections.append(f"Directly associated with {len(associated_thoughts)} thoughts")
         
         # 2. Find semantic connections (word overlap)
         semantic_connections = []
         
-        for prev_thought in self.thought_history[-10:]:  # Recent thoughts
-            if prev_thought.id == thought_id:
+        for prev_content in self.thought_history[-10:]:
+            if prev_content.id == thought_id1 or prev_content.id == thought_id2:
                 continue  # Skip self
             
-            prev_content = prev_thought.content.lower()
-            prev_words = set(w for w in prev_content.split() if len(w) > 3)
+            prev_words = set(w for w in prev_content.content.split() if len(w) > 3)
             
             # Calculate word overlap
-            common_words = content_words.intersection(prev_words)
-            overlap_score = len(common_words) / max(1, min(len(content_words), len(prev_words)))
+            common_words = prev_words.intersection(set(w for w in content1.split() if len(w) > 3))
+            overlap_score = len(common_words) / max(1, min(len(prev_words), len(set(w for w in content1.split() if len(w) > 3))))
             
             if overlap_score > 0.3:  # Significant overlap
-                summary = prev_thought.content[:30] + "..." if len(prev_thought.content) > 30 else prev_thought.content
-                semantic_connections.append((prev_thought.id, overlap_score, summary))
+                summary = prev_content.content[:30] + "..." if len(prev_content.content) > 30 else prev_content.content
+                semantic_connections.append((prev_content.id, overlap_score, summary))
         
         # Sort and add top semantic connections
         if semantic_connections:
@@ -1147,43 +1449,36 @@ class ThoughtModule(MindModule):
                 connections.append(f"Semantic connection ({score:.2f}): \"{summary}\"")
         
         # 3. Find thought type connections
-        type_connections = []
-        
-        for prev_thought in self.thought_history[-10:]:
-            if prev_thought.id == thought_id:
-                continue
-            
-            if prev_thought.type == thought.type:
-                type_connections.append(prev_thought)
-        
-        if type_connections:
-            connections.append(f"Shares {thought.type.value} thought type with {len(type_connections)} recent thoughts")
+        if thought1.type == thought2.type:
+            connections.append(f"Shares {thought1.type.value} thought type")
         
         # 4. Process-based connections
         process_connections = []
         
-        for prev_thought in self.thought_history[-10:]:
-            if prev_thought.id == thought_id:
-                continue
-                
-            # Check for process overlap
-            common_processes = set(thought.processes).intersection(set(prev_thought.processes))
-            if common_processes and len(common_processes) >= 2:
-                process_str = ", ".join(p.value for p in common_processes)
-                process_connections.append((prev_thought.id, process_str))
+        for process in set(thought1.processes).intersection(set(thought2.processes)):
+            process_connections.append(process.value)
         
         if process_connections:
-            connections.append(f"Shares cognitive processes with {len(process_connections)} recent thoughts")
+            connections.append(f"Shares cognitive processes: {', '.join(process_connections)}")
         
         # 5. Contextual connections
-        if thought.context and thought.context.get("context_id"):
-            context_id = thought.context["context_id"]
-            context_thoughts = [t for t in self.thought_history if 
-                            t.id != thought_id and 
-                            t.context.get("context_id") == context_id]
+        if thought1.context and thought1.context.get("context_id"):
+            context_id1 = thought1.context["context_id"]
+            context_thoughts1 = [t for t in self.thought_history if 
+                            t.id != thought_id1 and 
+                            t.context.get("context_id") == context_id1]
             
-            if context_thoughts:
-                connections.append(f"Shares context with {len(context_thoughts)} other thoughts")
+            if context_thoughts1:
+                connections.append(f"Shares context with {len(context_thoughts1)} other thoughts")
+        
+        if thought2.context and thought2.context.get("context_id"):
+            context_id2 = thought2.context["context_id"]
+            context_thoughts2 = [t for t in self.thought_history if 
+                            t.id != thought_id2 and 
+                            t.context.get("context_id") == context_id2]
+            
+            if context_thoughts2:
+                connections.append(f"Shares context with {len(context_thoughts2)} other thoughts")
         
         # Limit connections based on capability
         max_connections = int(1 + 4 * connection_ability)
