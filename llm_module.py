@@ -131,7 +131,7 @@ if __name__ == "__main__":
             "properties": {
                 "joke": {"type": "string"}
             },
-            "required": ["joke"]
+            "required": ["joke"] 
         }
     }
     messages = [
