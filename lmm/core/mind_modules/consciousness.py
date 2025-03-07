@@ -76,6 +76,8 @@ class ConsciousnessModule(MindModule):
             return self._get_consciousness_state()
         elif operation == "introspect":
             return self._introspect(input_data.get("query"))
+        elif operation == "update_metacognition":
+            return self._update_metacognition(input_data)
         else:
             return {"success": False, "error": f"Unknown operation: {operation}"}
     
@@ -1210,4 +1212,42 @@ class ConsciousnessModule(MindModule):
             "recent_experiences_count": len(self.recent_experiences)
         })
         
-        return status 
+        return status
+    
+    def _update_metacognition(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update the metacognitive state with new insights.
+        
+        Args:
+            input_data: Dictionary with input parameters
+                - input: Metacognitive thought or insight
+                
+        Returns:
+            Dictionary with operation results
+        """
+        meta_thought = input_data.get("input", "")
+        if not meta_thought:
+            return {"success": False, "error": "No metacognitive input provided"}
+        
+        # Add to insights if meaningful
+        if len(meta_thought) > 10:  # Simple length check
+            self.insights.append({
+                "content": meta_thought,
+                "timestamp": datetime.now(),
+                "source": "thought_reflection"
+            })
+            
+            # Limit insights list size
+            if len(self.insights) > 20:
+                self.insights = self.insights[-20:]
+                
+            # Metacognition increases self-awareness
+            self.metacognition = min(1.0, self.metacognition + 0.01)
+            
+            return {
+                "success": True,
+                "message": "Metacognitive state updated",
+                "metacognition_level": self.metacognition
+            }
+        
+        return {"success": False, "error": "Metacognitive input too short or not meaningful"} 

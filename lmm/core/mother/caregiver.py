@@ -40,6 +40,7 @@ class MotherCaregiver:
         language_understanding: Optional[Dict[str, Any]] = None,
         social_understanding: Optional[Dict[str, Any]] = None,
         consciousness_state: Optional[Dict[str, Any]] = None,
+        thought_state: Optional[Dict[str, Any]] = None,
         memories: Optional[List[Dict[str, Any]]] = None,
         emotional_state: Optional[Dict[str, Any]] = None,
         stream: bool = False
@@ -53,6 +54,7 @@ class MotherCaregiver:
             language_understanding: Data from the language module
             social_understanding: Data from the social cognition module
             consciousness_state: Data from the consciousness module
+            thought_state: Data from the thought module
             memories: Relevant memories from the memory module
             emotional_state: Current emotional state from the emotion module
             stream: Whether to stream the response
@@ -90,6 +92,19 @@ class MotherCaregiver:
             context_elements.append(
                 f"Self-awareness level: {self_awareness:.2f}. "
                 f"Recent reflection: {reflection[:100] + '...' if len(reflection) > 100 else reflection}"
+            )
+            
+        # Add thought data if available
+        if thought_state:
+            thought = thought_state.get("thought", {})
+            thought_content = thought.get("content", "")
+            thought_type = thought.get("type", "unknown")
+            thought_complexity = thought.get("complexity", 0.0)
+            thought_certainty = thought.get("certainty", 0.0)
+            
+            context_elements.append(
+                f"Current thought: {thought_content[:100] + '...' if len(thought_content) > 100 else thought_content}. "
+                f"Type: {thought_type}. Complexity: {thought_complexity:.2f}. Certainty: {thought_certainty:.2f}."
             )
             
         # Add emotional state data if available
