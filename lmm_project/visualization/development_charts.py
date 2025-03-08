@@ -1,5 +1,3 @@
-# Empty placeholder files 
-
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Dict, List, Any, Optional, Tuple
@@ -499,4 +497,4 @@ class DevelopmentCharts:
                 return report_text
                 
         except Exception as e:
-            raise VisualizationError(f"Failed to generate development report: {e}") 
+            raise VisualizationError(f"Failed to generate development report: {e}")
