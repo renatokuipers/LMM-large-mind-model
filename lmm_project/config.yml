@@ -1,1 +1,47 @@
-development_mode: true 
+# LMM Configuration
+
+# General settings
+development_mode: true
+log_level: "INFO"
+
+# API endpoints
+llm_api_url: "http://192.168.2.12:1234"
+tts_api_url: "http://127.0.0.1:7860"
+
+# Mother LLM settings
+mother_voice: "af_bella"
+teaching_style: "socratic"
+mother_personality:
+  nurturing: 0.8
+  patient: 0.9
+  encouraging: 0.8
+  structured: 0.7
+  responsive: 0.9
+
+# Development settings
+default_development_rate: 0.01
+default_cycles: 100
+save_interval: 50
+
+# Module settings
+active_modules:
+  - perception
+  - attention
+  - memory
+  - language
+  - emotion
+  - consciousness
+  - executive
+  - social
+  - motivation
+  - temporal
+  - creativity
+  - self_regulation
+  - learning
+  - identity
+  - belief
+
+# Neural substrate settings
+default_activation_function: "sigmoid"
+default_learning_rate: 0.01
+hebbian_learning_enabled: true 
