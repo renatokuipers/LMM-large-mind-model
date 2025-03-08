@@ -238,7 +238,7 @@ def get_available_voices() -> List[str]:
     Returns:
     List of voice IDs
     """
-    return ["af_nicole", "af_heart"]
+    return ["af_nicole", "af_heart", "af_bella"]
 
 def tips_for_better_speech():
     """
@@ -265,9 +265,9 @@ def tips_for_better_speech():
 
 if __name__ == "__main__":
     # Example usage
-    # result = text_to_speech("This is another voice from this local Text-to-Speech model. It's more on the soft and ASMR side.")
-    #print(f"Audio saved to: {result['audio_path']}")
-    # print(f"Phoneme sequence: {result['phoneme_sequence']}")
+    result = text_to_speech("This is another voice from this local Text-to-Speech model. It's more on the soft and ASMR side.")
+    print(f"Audio saved to: {result['audio_path']}")
+    print(f"Phoneme sequence: {result['phoneme_sequence']}")
     
     # Test with different voice and speed (without auto-play)
     result = text_to_speech(
@@ -278,6 +278,3 @@ if __name__ == "__main__":
         auto_play=True
     )
     print(f"Audio saved to: {result['audio_path']}")
-    
-    # You can manually play it later if needed
-    # play_audio(result["audio_path"])
