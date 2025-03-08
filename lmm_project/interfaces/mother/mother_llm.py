@@ -7,7 +7,7 @@ from datetime import datetime
 
 from lmm_project.core.exceptions import MotherLLMError
 from lmm_project.utils.llm_client import LLMClient, Message
-from lmm_project.utils.tts_client import TTSClient
+from lmm_project.utils.tts_client import TTSClient, GenerateAudioRequest
 
 class MotherLLM(BaseModel):
     """
@@ -77,11 +77,15 @@ class MotherLLM(BaseModel):
             audio_path = None
             if self.tts_client:
                 try:
-                    tts_result = self.tts_client.generate_audio(
+                    # Create a proper request object
+                    audio_request = GenerateAudioRequest(
                         text=response_text,
                         voice=self.voice,
                         speed=1.0
                     )
+                    
+                    # Generate audio
+                    tts_result = self.tts_client.generate_audio(request=audio_request)
                     audio_path = tts_result.get("audio_path")
                 except Exception as e:
                     print(f"TTS generation failed: {e}")
