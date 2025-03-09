@@ -165,7 +165,7 @@ class MotherLLM(BaseModel):
             
             # Generate audio if TTS client is available
             audio_path = None
-            if self.tts_client:
+            if self.tts_client and modulated_response.strip():  # Only generate audio if there's actual text
                 try:
                     # Create a proper request object
                     audio_request = GenerateAudioRequest(

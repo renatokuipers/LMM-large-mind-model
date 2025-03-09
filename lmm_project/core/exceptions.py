@@ -1,3 +1,39 @@
+"""
+Custom exception classes for the LMM project.
+"""
+
+class LMMBaseException(Exception):
+    """Base exception class for all LMM exceptions"""
+    pass
+
+class StorageError(LMMBaseException):
+    """Exception raised when there is an error with storage operations"""
+    pass
+
+class ConfigurationError(LMMBaseException):
+    """Exception raised when there is an error with configuration"""
+    pass
+
+class InitializationError(LMMBaseException):
+    """Exception raised when there is an error during initialization"""
+    pass
+
+class ValidationError(LMMBaseException):
+    """Exception raised when there is an error with data validation"""
+    pass
+
+class CommunicationError(LMMBaseException):
+    """Exception raised when there is an error with communication between modules"""
+    pass
+
+class DevelopmentError(LMMBaseException):
+    """Exception raised when there is an error related to developmental progression"""
+    pass
+
+class ResourceNotFoundError(LMMBaseException):
+    """Exception raised when a required resource is not found"""
+    pass
+
 class LMMError(Exception):
     """Base exception for all LMM errors"""
     pass
@@ -24,14 +60,6 @@ class NeuralSubstrateError(LMMError):
 
 class MotherLLMError(LMMError):
     """Raised when there's an error in the Mother LLM interface"""
-    pass
-
-class DevelopmentError(LMMError):
-    """Raised when there's an error in the developmental process"""
-    pass
-
-class StorageError(LMMError):
-    """Raised when there's an error in storage operations"""
     pass
 
 class VisualizationError(LMMError):

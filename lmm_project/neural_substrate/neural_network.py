@@ -120,11 +120,20 @@ class NeuralNetwork(BaseModel):
         Returns:
         Dictionary of output neuron activations
         """
+        # Reset all neuron activations to ensure clean state
+        for neuron_id, neuron in self.neurons.items():
+            neuron.reset()
+            
         # Apply inputs to input neurons
-        for neuron_id, input_value in inputs.items():
-            if neuron_id in self.neurons:
-                self.neurons[neuron_id].activate(input_value)
-                
+        for i, input_id in enumerate(self.input_neurons):
+            if input_id in self.neurons:
+                # Use the input value directly as the activation for input neurons
+                input_key = f"input_{i}"
+                if input_key in inputs:
+                    input_value = inputs[input_key]
+                    # Set activation directly instead of using activate method
+                    self.neurons[input_id].activation = input_value
+                    
         # Propagate activations through the network
         for _ in range(steps):
             self._propagate_activations()
@@ -151,12 +160,16 @@ class NeuralNetwork(BaseModel):
             
             if source_id in self.neurons and target_id in self.neurons:
                 source_activation = self.neurons[source_id].activation
-                weighted_activation = synapse.transmit(source_activation)
-                neuron_inputs[target_id] += weighted_activation
+                # Only propagate if source has activation
+                if source_activation > 0.0:
+                    weighted_activation = synapse.transmit(source_activation)
+                    neuron_inputs[target_id] += weighted_activation
                 
-        # Apply inputs to neurons
+        # Apply inputs to neurons (except input neurons which should keep their direct inputs)
         for neuron_id, input_value in neuron_inputs.items():
-            if input_value != 0.0:  # Only update if there's input
+            # Skip input neurons to preserve their direct input values
+            if neuron_id not in self.input_neurons and input_value > 0.0:
+                # Use the activate method to apply the activation function
                 self.neurons[neuron_id].activate(input_value)
     
     def apply_hebbian_learning(self) -> None:

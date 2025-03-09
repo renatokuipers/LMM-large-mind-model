@@ -1,149 +1,195 @@
-from typing import Dict, List, Optional, Any, Type
-from pydantic import BaseModel, Field
-from datetime import datetime
+"""
+Mind - Core cognitive architecture controller
+"""
+
+import logging
+import time
+from typing import Dict, Any, Optional, List, TYPE_CHECKING, Union, Type
 import os
-import importlib
-import inspect
+import json
+from datetime import datetime
 
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.state_manager import StateManager
 from lmm_project.core.message import Message
 from lmm_project.core.exceptions import ModuleInitializationError
-from lmm_project.modules.base_module import BaseModule
 
-class Mind(BaseModel):
-    """The integrated mind that coordinates all cognitive modules"""
-    age: float = Field(default=0.0)
-    developmental_stage: str = Field(default="prenatal")
-    modules: Dict[str, BaseModule] = Field(default_factory=dict)
-    initialization_time: datetime = Field(default_factory=datetime.now)
-    event_bus: EventBus = Field(default_factory=EventBus)
-    state_manager: StateManager = Field(default_factory=StateManager)
+# Type annotations with strings to avoid circular imports
+if TYPE_CHECKING:
+    from lmm_project.modules.base_module import BaseModule
+
+logger = logging.getLogger(__name__)
+
+class Mind:
+    """
+    Central coordinator for all cognitive modules
     
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
-
+    The Mind integrates all cognitive modules, manages developmental progression,
+    and coordinates information flow between components.
+    """
+    
+    def __init__(
+        self, 
+        event_bus: EventBus,
+        state_manager: StateManager,
+        initial_age: float = 0.0,
+        developmental_stage: str = "prenatal"
+    ):
+        """
+        Initialize the Mind
+        
+        Args:
+            event_bus: Event bus for inter-module communication
+            state_manager: State manager for tracking system state
+            initial_age: Initial age of the mind
+            developmental_stage: Initial developmental stage
+        """
+        self.event_bus = event_bus
+        self.state_manager = state_manager
+        self.age = initial_age
+        self.developmental_stage = developmental_stage
+        self.modules: Dict[str, Any] = {}  # Use Any instead of BaseModule to avoid circular imports
+        self.creation_time = datetime.now()
+        
+        logger.info(f"Mind initialized at age {initial_age} in {developmental_stage} stage")
+        
     def initialize_modules(self):
-        """Initialize all cognitive modules"""
-        module_types = [
-            "perception", "attention", "memory", "language",
-            "emotion", "consciousness", "executive", "social",
-            "motivation", "temporal", "creativity", "self_regulation",
-            "learning", "identity", "belief"
-        ]
+        """
+        Initialize all cognitive modules
         
-        try:
-            for module_type in module_types:
-                module_path = f"lmm_project.modules.{module_type}"
-                module_id = f"{module_type}_001"
+        This method creates instances of all required cognitive modules and 
+        establishes connections between them.
+        """
+        logger.info("Initializing cognitive modules...")
+        
+        # Import modules here to avoid circular imports
+        from lmm_project.modules import get_module_classes
+        
+        module_classes = get_module_classes()
+        
+        # Create instances of all modules
+        for module_type, module_class in module_classes.items():
+            module_id = f"{module_type}_{int(time.time())}"
+            try:
+                module = module_class(
+                    module_id=module_id,
+                    event_bus=self.event_bus
+                )
+                self.modules[module_type] = module
+                logger.info(f"Initialized {module_type} module")
+            except Exception as e:
+                logger.error(f"Failed to initialize {module_type} module: {str(e)}")
                 
-                # Import the module's __init__ file
-                try:
-                    module_package = importlib.import_module(module_path)
-                    
-                    # Check if the module defines a get_module function
-                    if hasattr(module_package, "get_module"):
-                        module_instance = module_package.get_module(module_id, self.event_bus)
-                        self.modules[module_type] = module_instance
-                    else:
-                        # Create a minimal placeholder module
-                        from lmm_project.modules.base_module import BaseModule
-                        class PlaceholderModule(BaseModule):
-                            def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-                                return {"status": "placeholder", "data": input_data}
-                            
-                            def update_development(self, amount: float) -> float:
-                                self.development_level = min(1.0, self.development_level + amount)
-                                return self.development_level
-                                
-                        self.modules[module_type] = PlaceholderModule(
-                            module_id=module_id,
-                            module_type=module_type,
-                            is_active=True,
-                            development_level=0.0
-                        )
-                        
-                except (ImportError, AttributeError) as e:
-                    print(f"Warning: Could not initialize {module_type} module: {e}")
-                    
-            print(f"Initialized {len(self.modules)} cognitive modules")
-        except Exception as e:
-            raise ModuleInitializationError(f"Failed to initialize modules: {str(e)}")
-    
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process input through all relevant modules"""
-        results = {}
+        logger.info(f"Initialized {len(self.modules)} cognitive modules")
         
-        # Route input to perception module first
-        if "perception" in self.modules:
-            perception_results = self.modules["perception"].process_input(input_data)
-            
-            # Create a message from perception results
-            perception_message = Message(
-                sender="perception",
-                message_type="perception_results",
-                content=perception_results
-            )
-            
-            # Publish the message to the event bus
-            self.event_bus.publish(perception_message)
-            
-            # Store in results
-            results["perception"] = perception_results
-        
-        # Process the input through other modules as needed
-        # This is a simplified implementation - in reality, the module
-        # interactions would be more complex and based on the event_bus
-        
-        return results
-    
     def update_development(self, delta_time: float):
-        """Update the mind's developmental progress"""
-        # Update age
+        """
+        Update the mind's developmental progression
+        
+        Args:
+            delta_time: Amount of developmental time to add
+        """
+        # Update mind age
+        prev_age = self.age
         self.age += delta_time
         
-        # Determine developmental stage based on age
-        if self.age < 0.1:
-            self.developmental_stage = "prenatal"
-        elif self.age < 1.0:
-            self.developmental_stage = "infant"
-        elif self.age < 3.0:
-            self.developmental_stage = "child"
-        elif self.age < 6.0:
-            self.developmental_stage = "adolescent"
-        else:
-            self.developmental_stage = "adult"
+        # Update all modules with appropriate fraction of development
+        for module_type, module in self.modules.items():
+            # Different modules may develop at different rates
+            # Here we use a simple approach where all modules develop equally
+            module.update_development(delta_time)
             
-        # Update each module's development based on current stage
-        for module_name, module in self.modules.items():
-            # Different modules develop at different rates during different stages
-            # This is a simplified implementation
-            development_rate = 0.01 * delta_time
+        logger.debug(f"Mind development updated: age {prev_age:.2f} -> {self.age:.2f}")
+        
+    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process input through the complete cognitive pipeline
+        
+        Args:
+            input_data: Dictionary containing input data
             
-            # Adjust rate based on developmental stage and module type
-            if self.developmental_stage == "infant":
-                if module_name in ["perception", "attention"]:
-                    development_rate *= 2.0
-            elif self.developmental_stage == "child":
-                if module_name in ["language", "memory"]:
-                    development_rate *= 1.5
-            elif self.developmental_stage == "adolescent":
-                if module_name in ["social", "identity"]:
-                    development_rate *= 1.8
-                    
-            # Update the module's development
-            module.update_development(development_rate)
+        Returns:
+            Dictionary containing processing results
+        """
+        results = {}
         
-        # Update state
-        self.state_manager.update_state({
-            "age": self.age,
-            "developmental_stage": self.developmental_stage,
-            "module_development": {name: module.development_level for name, module in self.modules.items()}
-        })
+        # First, process through perception
+        if "perception" in self.modules:
+            results["perception"] = self.modules["perception"].process_input(input_data)
+            
+        # TODO: Implement full cognitive pipeline
         
+        return results
+        
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the mind
+        
+        Returns:
+            Dictionary containing mind state
+        """
+        modules_state = {}
+        for module_type, module in self.modules.items():
+            modules_state[module_type] = module.get_state()
+            
         return {
             "age": self.age,
-            "stage": self.developmental_stage,
-            "modules": {name: module.development_level for name, module in self.modules.items()}
+            "developmental_stage": self.developmental_stage,
+            "modules": modules_state,
+            "creation_time": self.creation_time.isoformat()
         }
+        
+    def save_state(self, state_dir: str) -> str:
+        """
+        Save the mind state to disk
+        
+        Args:
+            state_dir: Directory to save state in
+            
+        Returns:
+            Path to saved state file
+        """
+        # Ensure directory exists
+        os.makedirs(state_dir, exist_ok=True)
+        
+        # Create timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Get complete state
+        state = self.get_state()
+        
+        # Save to file
+        file_path = os.path.join(state_dir, f"mind_state_{timestamp}.json")
+        with open(file_path, "w") as f:
+            json.dump(state, f, indent=2)
+            
+        logger.info(f"Mind state saved to {file_path}")
+        return file_path
+        
+    def load_state(self, state_path: str) -> bool:
+        """
+        Load the mind state from disk
+        
+        Args:
+            state_path: Path to state file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Load state file
+            with open(state_path, "r") as f:
+                state = json.load(f)
+                
+            # Update mind properties
+            self.age = state.get("age", self.age)
+            self.developmental_stage = state.get("developmental_stage", self.developmental_stage)
+            
+            # Update module states
+            # Note: This would need more sophisticated logic in a real implementation
+            
+            logger.info(f"Mind state loaded from {state_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load mind state: {str(e)}")
+            return False

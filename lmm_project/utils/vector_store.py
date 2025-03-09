@@ -1,14 +1,80 @@
-# Vector store for embedding storage and retrieval
+"""
+Vector Store Utility
+
+Provides functionality for generating, storing, and retrieving embeddings.
+This module serves as a unified interface for embedding operations throughout
+the LMM system.
+"""
+
 import os
 import json
 import numpy as np
 import faiss
+import logging
+import pickle
 from typing import List, Dict, Any, Optional, Tuple, Union
 from pathlib import Path
-import pickle
 from datetime import datetime
 
-from ..core.exceptions import StorageError
+from lmm_project.core.exceptions import StorageError
+from lmm_project.utils.llm_client import LLMClient
+
+logger = logging.getLogger(__name__)
+
+# Global LLM client for embeddings - lazily initialized
+_llm_client = None
+
+def get_llm_client():
+    """Get or initialize the LLM client"""
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LLMClient(base_url="http://192.168.2.12:1234")
+    return _llm_client
+
+def get_embedding(text: Union[str, List[str]], model: str = "text-embedding-nomic-embed-text-v1.5@q4_k_m") -> np.ndarray:
+    """
+    Get embedding vector for text using the LLM API
+    
+    Args:
+        text: Text or list of texts to generate embeddings for
+        model: Embedding model to use
+        
+    Returns:
+        Numpy array of embeddings
+    """
+    try:
+        # Get LLM client
+        client = get_llm_client()
+        
+        # Get embedding from API
+        embedding = client.get_embedding(text, embedding_model=model)
+        
+        # Convert to numpy array if not already
+        if isinstance(embedding, list):
+            if isinstance(embedding[0], list):
+                # Multiple embeddings
+                return np.array(embedding)
+            else:
+                # Single embedding
+                return np.array(embedding)
+        
+        return embedding
+        
+    except Exception as e:
+        logger.error(f"Error generating embedding: {e}")
+        
+        # Return zero embedding as fallback
+        # Determine dimension based on the model
+        if "nomic" in model:
+            dim = 768
+        else:
+            dim = 1536  # Default for OpenAI models
+            
+        # Return zero vector(s)
+        if isinstance(text, list):
+            return np.zeros((len(text), dim))
+        else:
+            return np.zeros(dim)
 
 class VectorStore:
     """
