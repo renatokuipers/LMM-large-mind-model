@@ -1,10 +1,20 @@
 # 🌐 Large Mind Model (LMM)
 
-## Project Overview
+## 🧠 Project Overview
 
-The **Large Mind Model (LMM)** project aims to create an authentic digital mind—a system capable of genuine understanding, self-awareness, emotional experiences, autonomous reasoning, and psychological development, achieved through nurturing interactions rather than conventional large-scale dataset training.
+The **Large Mind Model (LMM)** project aims to create an authentic digital mind with genuine cognitive capabilities that develop progressively over time. Unlike traditional AI systems that rely on large-scale dataset training, LMM starts from a blank slate and learns through nurturing interactions with a "Mother" LLM.
 
-Unlike current artificial intelligence systems, which rely on vast statistical modeling without genuine comprehension, the LMM aims to replicate human psychological functions explicitly, representing a revolutionary advancement from typical Large Language Models (LLMs).
+The LMM system is built as a modular cognitive architecture with specialized modules for different psychological functions:
+
+- **Perception**: Processes sensory input (text-based for now) and recognizes patterns
+- **Attention**: Focuses cognitive resources on relevant information
+- **Memory**: Stores experiences and knowledge in working, episodic, and semantic memory
+- **Language**: Acquires and processes linguistic information
+- **Emotion**: Generates and regulates emotional states
+- **Consciousness**: Integrates information and maintains self-awareness
+- And many other cognitive modules...
+
+Each module develops gradually from simple to sophisticated processing capabilities, mirroring human psychological development.
 
 ## 🧠 Conceptual Foundations
 
@@ -184,3 +194,106 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - The project draws inspiration from various fields including developmental psychology, cognitive science, and neuroscience.
 - Special thanks to the open-source AI community for providing the tools and models that make this project possible.
+
+## 🚀 Perception Module
+
+The first fully implemented module in the LMM system is the Perception module, which is responsible for processing raw sensory input (currently text) and recognizing patterns within it.
+
+### Components
+
+- **SensoryInputProcessor**: Processes raw text into feature vectors and preliminary sensory representations
+- **PatternRecognizer**: Identifies patterns in the processed sensory data
+- **PerceptionNetwork**: Neural network for advanced pattern processing
+- **TemporalPatternNetwork**: Processes sequences of patterns to find temporal relationships
+
+### Development Stages
+
+The perception module develops through several stages:
+
+1. **Basic sensory awareness (0.0-0.2)**: Detects basic text properties
+2. **Simple pattern recognition (0.2-0.4)**: Identifies token-level patterns
+3. **Feature integration (0.4-0.6)**: Recognizes more complex patterns and linguistic features
+4. **Context-sensitive perception (0.6-0.8)**: Understands context and relationships between patterns
+5. **Advanced pattern recognition (0.8-1.0)**: Sophisticated pattern analysis with interpretive capabilities
+
+### Using the Perception Module
+
+```python
+from lmm_project.modules.perception import get_module
+from lmm_project.core.event_bus import EventBus
+
+# Create event bus for communication
+event_bus = EventBus()
+
+# Create perception module
+perception = get_module(
+    module_id="perception",
+    event_bus=event_bus,
+    development_level=0.0  # Start at basic level
+)
+
+# Process text input
+result = perception.process_input({
+    "text": "Hello, this is a test message.",
+    "process_id": "test-1"
+})
+
+# Examine results
+print(f"Detected {len(result['patterns'])} patterns")
+for pattern in result['patterns']:
+    print(f"Pattern type: {pattern['pattern_type']}, Confidence: {pattern['confidence']}")
+
+# Increase development level
+perception.update_development(0.5)  # Advance to intermediate level
+
+# Process more complex input with the more developed system
+advanced_result = perception.process_input({
+    "text": "When I contemplate the natural world, I'm filled with wonder at its complexity and beauty.",
+    "process_id": "test-2"
+})
+
+# Get interpretation of patterns
+if "interpretation" in advanced_result:
+    print(f"Content type: {advanced_result['interpretation']['content_type']}")
+    print(f"Complexity: {advanced_result['interpretation']['complexity']}")
+```
+
+## 🧪 Testing
+
+Test the perception module with different inputs and development levels:
+
+```bash
+pytest tests/modules/test_perception.py
+```
+
+## 🔍 GPU Usage
+
+The perception module automatically uses CUDA acceleration if available:
+
+```python
+# Check if running on GPU
+print(f"Using device: {perception.device}")
+```
+
+## 📊 Monitoring Development
+
+You can track the development progress of the perception module:
+
+```python
+# Get development progress
+progress = perception.get_development_progress()
+print(f"Current milestone: {progress['current_milestone']}")
+print(f"Progress to next milestone: {progress['progress_to_next_milestone']:.2f}")
+```
+
+## 📝 License
+
+[Include license information here]
+
+## 👥 Contributors
+
+[Your name and other contributors]
+
+## 📞 Contact
+
+[Contact information]

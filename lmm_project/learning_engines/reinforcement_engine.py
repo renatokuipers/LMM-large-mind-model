@@ -30,11 +30,7 @@ logger = logging.getLogger(__name__)
 
 class ReinforcementEngine(LearningEngine):
     """
-    Implementation of reinforcement learning mechanisms
-    
-    This engine applies reinforcement learning to modify neural connections
-    based on rewards and feedback, enabling the system to learn optimal
-    behaviors and associations through experience.
+    Reinforcement learning engine for learning from feedback.
     """
     
     def __init__(

@@ -8,31 +8,33 @@ meaningful sensory representations.
 """
 
 import re
-import torch
 import numpy as np
 from typing import Dict, List, Any, Optional, Union, Set, Tuple
 import uuid
 import logging
 from datetime import datetime
-from pydantic import ValidationError
+from collections import deque, Counter
+import string
+import torch
 
 # Add tokenization libraries
 import nltk
-from nltk.tokenize import word_tokenize, RegexpTokenizer, WordPunctTokenizer
-from nltk.tokenize.casual import TweetTokenizer
+from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.util import ngrams
+from nltk.corpus import stopwords
+from nltk.probability import FreqDist
 
 # Ensure NLTK data is downloaded
 try:
     nltk.data.find('tokenizers/punkt')
+    nltk.data.find('corpora/stopwords')
 except LookupError:
     nltk.download('punkt', quiet=True)
+    nltk.download('stopwords', quiet=True)
 
 from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.message import Message
-from lmm_project.modules.perception.models import SensoryInput, PerceptionResult, Pattern
-from lmm_project.utils.vector_store import get_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -43,406 +45,522 @@ class SensoryInputProcessor(BaseModule):
     This module is the first stage of perception, converting raw text
     into feature vectors and preliminary sensory representations.
     """
-    # Configuration
-    embedding_dimension: int = 768  # Updated to match actual embedding size
-    max_input_history: int = 20
-    tokenization_level: str = "basic"  # Options: primitive, basic, advanced, sophisticated
-    feature_cache: Dict[str, np.ndarray] = {}
-    
-    # Tokenizers for different developmental levels
-    tokenizers: Dict[str, Any] = {}
-    
-    # Input history
-    input_history: List[SensoryInput] = []
-    
-    # Device for tensor operations
-    device = None
-    
-    # Dimension reduction layer (for compatibility with pattern recognition)
-    dim_reduction = None
+    # Development stages for sensory processing
+    development_milestones = {
+        0.0: "Basic text detection",
+        0.2: "Simple tokenization",
+        0.4: "Feature extraction",
+        0.6: "Multi-level analysis",
+        0.8: "Context sensitivity",
+        1.0: "Advanced sensory processing"
+    }
     
     def __init__(
         self, 
         module_id: str,
         event_bus: Optional[EventBus] = None,
-        developmental_level: float = 0.0,
         **kwargs
     ):
-        """Initialize the sensory input processor"""
+        """
+        Initialize the sensory input processor
+        
+        Args:
+            module_id: Unique identifier for this module
+            event_bus: Event bus for communication
+        """
         super().__init__(
             module_id=module_id,
-            module_type="sensory_input_processor",
+            module_type="sensory_processor",
             event_bus=event_bus,
-            development_level=developmental_level,
             **kwargs
         )
         
-        # Initialize device for tensor operations
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"SensoryInputProcessor using device: {self.device}")
+        # Initialize sensory memory
+        self.recent_inputs = deque(maxlen=20)
+        self.input_history = []
         
-        # Initialize dimension reduction layer from 768 to 384
-        # This makes our embeddings compatible with pattern recognition
-        self.dim_reduction = torch.nn.Linear(768, 384).to(self.device)
-        # Initialize with simple weights that preserve some information
-        with torch.no_grad():
-            # Initialize to average pairs of dimensions
-            for i in range(384):
-                self.dim_reduction.weight[i, i*2] = 0.7
-                self.dim_reduction.weight[i, i*2+1] = 0.7
+        # Initialize frequency tracking
+        self.token_frequencies = Counter()
+        self.bigram_frequencies = Counter()
+        self.character_frequencies = Counter()
         
-        # Initialize tokenizers
-        self._initialize_tokenizers()
+        # Processing parameters that develop over time
+        self.max_tokens = 100  # Maximum tokens to process
+        self.token_threshold = 0.1  # Threshold for token significance
+        self.similarity_threshold = 0.7  # Threshold for similar inputs
         
-        # Subscribe to relevant events
+        # Get stopwords for filtering
+        try:
+            self.stopwords = set(stopwords.words('english'))
+        except:
+            self.stopwords = set(['the', 'and', 'a', 'to', 'of', 'in', 'is', 'it'])
+            
+        # Try to use GPU if available
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Subscribe to raw text input events
         if self.event_bus:
-            self.subscribe_to_message("raw_text_input", self._handle_raw_text)
+            self.subscribe_to_message("raw_text_input")
+        
+    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process raw input text into sensory representations
+        
+        Args:
+            input_data: Dictionary containing input data with text
             
-        # Set development-appropriate tokenization
-        self._adjust_tokenization_for_development()
+        Returns:
+            Dictionary with processed sensory data
+        """
+        # Validate input
+        process_id = input_data.get("process_id", str(uuid.uuid4()))
+        text = input_data.get("text", "")
+        
+        if not text:
+            logger.warning(f"Sensory processor received empty text input for process {process_id}")
+            return {
+                "process_id": process_id,
+                "status": "error",
+                "error": "Empty input text"
+            }
+            
+        # Log the incoming input
+        logger.debug(f"Processing sensory input: '{text[:50]}...' (process {process_id})")
+        
+        # Create response structure
+        timestamp = datetime.now()
+        result = {
+            "process_id": process_id,
+            "timestamp": timestamp.isoformat(),
+            "text": text,
+            "development_level": self.development_level,
+            "module_id": self.module_id
+        }
+        
+        # Extract features based on development level
+        features = self._extract_features(text)
+        
+        # Add features to result
+        result.update(features)
+        
+        # Store in recent inputs
+        self.recent_inputs.append({
+            "text": text,
+            "process_id": process_id,
+            "timestamp": timestamp,
+            "features": features
+        })
+        
+        # Track occurrence frequencies
+        self._update_frequencies(text)
+        
+        # Publish processed result if we have an event bus
+        if self.event_bus:
+            self.publish_message(
+                "sensory_processed",
+                {"result": result, "process_id": process_id}
+            )
+            
+        return result
     
-    def _initialize_tokenizers(self):
-        """Initialize the different tokenizers for various developmental levels"""
-        # Primitive tokenizer (character-level)
-        self.tokenizers["primitive"] = lambda text: list(text)
+    def _extract_features(self, text: str) -> Dict[str, Any]:
+        """
+        Extract features from text based on developmental level
         
-        # Basic tokenizer (simple space and punctuation splitting)
-        self.tokenizers["basic"] = RegexpTokenizer(r'\w+|[^\w\s]').tokenize
+        At lower developmental levels, only basic features are extracted.
+        As development progresses, more sophisticated features are extracted.
         
-        # Advanced tokenizer (NLTK's word_tokenize with better handling of contractions)
-        self.tokenizers["advanced"] = word_tokenize
-        
-        # Sophisticated tokenizer (handles social media text, emoticons, etc.)
-        tweet_tokenizer = TweetTokenizer(preserve_case=False)
-        self.tokenizers["sophisticated"] = tweet_tokenizer.tokenize
+        Args:
+            text: Input text to process
             
-    def _adjust_tokenization_for_development(self):
-        """Adjust tokenization approach based on developmental level"""
-        if self.development_level < 0.2:
-            # Very basic tokenization for earliest stages (character level)
-            self.tokenization_level = "primitive"
-        elif self.development_level < 0.5:
-            # Simple tokenization (word level without linguistic knowledge)
-            self.tokenization_level = "basic"
-        elif self.development_level < 0.8:
-            # More advanced tokenization with linguistic knowledge
-            self.tokenization_level = "advanced"
+        Returns:
+            Dictionary with extracted features
+        """
+        features = {}
+        
+        # Start with empty containers
+        basic_features = {}
+        intermediate_features = {}
+        advanced_features = {}
+        
+        # Level 0: Basic text properties (always extracted)
+        basic_features["length"] = len(text)
+        basic_features["has_letters"] = bool(re.search(r'[a-zA-Z]', text))
+        basic_features["has_numbers"] = bool(re.search(r'\d', text))
+        basic_features["has_special_chars"] = bool(re.search(r'[^\w\s]', text))
+        
+        # Count frequencies
+        letter_count = sum(c.isalpha() for c in text)
+        number_count = sum(c.isdigit() for c in text)
+        special_char_count = sum(not c.isalnum() and not c.isspace() for c in text)
+        
+        basic_features["letter_count"] = letter_count
+        basic_features["number_count"] = number_count
+        basic_features["special_char_count"] = special_char_count
+        basic_features["whitespace_count"] = text.count(' ') + text.count('\n') + text.count('\t')
+        
+        # Calculate character distribution
+        if text:
+            basic_features["letter_ratio"] = letter_count / len(text)
+            basic_features["number_ratio"] = number_count / len(text)
+            basic_features["special_ratio"] = special_char_count / len(text)
         else:
-            # Sophisticated tokenization for advanced development
-            self.tokenization_level = "sophisticated"
+            basic_features["letter_ratio"] = 0
+            basic_features["number_ratio"] = 0
+            basic_features["special_ratio"] = 0
             
-        logger.debug(f"Sensory tokenization set to: {self.tokenization_level}")
-        
-    def update_development(self, amount: float) -> float:
-        """Update the module's developmental level"""
-        prev_level = self.development_level
-        self.development_level = min(1.0, self.development_level + amount)
-        
-        # Check if we need to update tokenization approach
-        if abs(self.development_level - prev_level) > 0.1:
-            self._adjust_tokenization_for_development()
+        # Add some additional basic features even at level 0
+        # This provides better information for pattern recognition
+        if text:
+            # Simple token count (just splitting by whitespace)
+            simple_tokens = text.split()
+            basic_features["simple_token_count"] = len(simple_tokens)
             
-        return self.development_level
+            # Check for question or exclamation
+            basic_features["has_question_mark"] = '?' in text
+            basic_features["has_exclamation_mark"] = '!' in text
+            
+            # Add some character n-gram counts
+            char_bigrams = [text[i:i+2] for i in range(len(text)-1)]
+            char_bigram_counts = Counter(char_bigrams)
+            basic_features["common_char_bigrams"] = dict(char_bigram_counts.most_common(5))
+            
+            # Create a unique signature for the text
+            basic_features["text_signature"] = hash(text) % 10000
+        
+        # Level 1: Token-based features (dev level >= 0.2)
+        # But we'll extract some token features even at level 0 
+        # to support better pattern recognition
+        
+        # Tokenize text using our helper method
+        tokens = self._tokenize_text(text)
+        
+        # Extract token features
+        intermediate_features["token_count"] = len(tokens)
+        intermediate_features["unique_token_count"] = len(set(tokens))
+        
+        # Calculate token statistics
+        if tokens:
+            intermediate_features["avg_token_length"] = np.mean([len(t) for t in tokens])
+            intermediate_features["max_token_length"] = max(len(t) for t in tokens)
+            intermediate_features["min_token_length"] = min(len(t) for t in tokens)
+            intermediate_features["has_long_tokens"] = any(len(t) > 8 for t in tokens)
+            
+            # Get token frequency distribution
+            freq_dist = FreqDist(tokens)
+            most_common = freq_dist.most_common(5)
+            intermediate_features["most_common_tokens"] = most_common
+            intermediate_features["token_diversity"] = len(set(tokens)) / len(tokens) if tokens else 0
+            
+            # Add basic n-gram features even at low levels
+            if len(tokens) >= 2:
+                # Generate bigrams
+                token_bigrams = list(ngrams(tokens, 2))
+                intermediate_features["bigram_count"] = len(token_bigrams)
+                
+                # Get most common bigrams
+                if token_bigrams:
+                    bigram_freq = FreqDist(token_bigrams)
+                    intermediate_features["common_bigrams"] = bigram_freq.most_common(3)
+        else:
+            intermediate_features["avg_token_length"] = 0
+            intermediate_features["max_token_length"] = 0
+            intermediate_features["min_token_length"] = 0
+            intermediate_features["has_long_tokens"] = False
+            intermediate_features["most_common_tokens"] = []
+            intermediate_features["token_diversity"] = 0
+            intermediate_features["bigram_count"] = 0
+            intermediate_features["common_bigrams"] = []
+                
+        # Level 2: Linguistic features (dev level >= 0.4)
+        if self.development_level >= 0.4:
+            # Extract sentences
+            sentences = sent_tokenize(text)
+            
+            # Sentence features
+            advanced_features["sentence_count"] = len(sentences)
+            
+            if sentences:
+                advanced_features["avg_sentence_length"] = np.mean([len(s) for s in sentences])
+                advanced_features["max_sentence_length"] = max(len(s) for s in sentences)
+                
+                # Words per sentence
+                words_per_sentence = [len(self._tokenize_text(s)) for s in sentences]
+                advanced_features["avg_words_per_sentence"] = np.mean(words_per_sentence) if words_per_sentence else 0
+            else:
+                advanced_features["avg_sentence_length"] = 0
+                advanced_features["max_sentence_length"] = 0
+                advanced_features["avg_words_per_sentence"] = 0
+                
+            # Check for question marks and exclamation points
+            advanced_features["question_mark_count"] = text.count('?')
+            advanced_features["exclamation_mark_count"] = text.count('!')
+            advanced_features["is_question"] = text.strip().endswith('?')
+            advanced_features["is_exclamation"] = text.strip().endswith('!')
+                
+        # Level 3: Context-sensitive features (dev level >= 0.6)
+        if self.development_level >= 0.6:
+            # Check similarity to recent inputs
+            if self.recent_inputs:
+                similarities = []
+                for recent in self.recent_inputs:
+                    if recent.get("text") != text:  # Don't compare to self
+                        similarity = self._simple_similarity(text, recent.get("text", ""))
+                        similarities.append(similarity)
+                
+                if similarities:
+                    advanced_features["max_similarity_to_recent"] = max(similarities)
+                    advanced_features["avg_similarity_to_recent"] = np.mean(similarities)
+                    advanced_features["is_similar_to_recent"] = max(similarities) > self.similarity_threshold
+                else:
+                    advanced_features["max_similarity_to_recent"] = 0
+                    advanced_features["avg_similarity_to_recent"] = 0
+                    advanced_features["is_similar_to_recent"] = False
+            
+            # Word frequencies compared to historical frequencies
+            tokens = self._tokenize_text(text)
+            if tokens:
+                # Check for unusual words (not in frequent tokens)
+                unusual_tokens = [t for t in tokens if self.token_frequencies[t] < 3 and len(t) > 3]
+                advanced_features["unusual_token_count"] = len(unusual_tokens)
+                advanced_features["unusual_tokens"] = unusual_tokens[:5]  # Limit to 5
+                
+                # Calculate frequency novelty (how different from typical frequency)
+                if self.token_frequencies:
+                    token_freqs = {t: self.token_frequencies[t] for t in tokens}
+                    if token_freqs:
+                        avg_freq = np.mean(list(token_freqs.values()))
+                        advanced_features["frequency_novelty"] = 1.0 - min(avg_freq / 10, 1.0)
+                    else:
+                        advanced_features["frequency_novelty"] = 1.0
+                else:
+                    advanced_features["frequency_novelty"] = 0.5  # Default mid value
+            
+        # Level 4: Advanced analysis (dev level >= 0.8)
+        if self.development_level >= 0.8:
+            # More sophisticated linguistic analysis would go here
+            # This could include sentiment analysis, topic detection, etc.
+            
+            # For now, we'll add some simple additional features
+            tokens = self._tokenize_text(text)
+            
+            # Check for specific linguistic features
+            linguistic_features = {}
+            
+            # Question words
+            question_words = {"what", "who", "when", "where", "why", "how"}
+            linguistic_features["has_question_words"] = any(t.lower() in question_words for t in tokens)
+            
+            # Check for imperative sentences (commands)
+            # Simple approach: starts with verb
+            if tokens and tokens[0].lower() in {"do", "go", "be", "try", "make", "take", "get", "come", "give", "find", "look", "run", "turn", "put", "bring"}:
+                linguistic_features["likely_imperative"] = True
+            else:
+                linguistic_features["likely_imperative"] = False
+                
+            # Check for named entities (very simple approach)
+            # Look for capitalized words not at the start of sentences
+            sentence_starts = {s.split()[0] if s.split() else "" for s in sent_tokenize(text)}
+            capitalized_non_starters = [t for t in tokens if t[0].isupper() and t not in sentence_starts]
+            linguistic_features["potential_named_entities"] = capitalized_non_starters[:5]
+            
+            # Add to advanced features
+            advanced_features["linguistic_features"] = linguistic_features
+        
+        # Assemble features based on development level
+        features["basic_features"] = basic_features
+        
+        if self.development_level >= 0.2:
+            features["features"] = intermediate_features
+            
+        if self.development_level >= 0.4:
+            features["linguistic_features"] = advanced_features
+        
+        return features
     
     def _tokenize_text(self, text: str) -> List[str]:
         """
-        Tokenize text based on current developmental level
+        Tokenize text into words, handling various cases based on development level
         
-        The tokenization approach evolves with development:
-        - Primitive: Character-level tokens (early stage)
-        - Basic: Simple word splitting
-        - Advanced: More sophisticated word and sub-word tokenization
-        - Sophisticated: Advanced text handling including emoticons, slang, etc.
+        Args:
+            text: Input text to tokenize
+            
+        Returns:
+            List of tokens
         """
         if not text:
             return []
             
-        # Use the appropriate tokenizer based on developmental level
-        tokenizer = self.tokenizers.get(self.tokenization_level, self.tokenizers["basic"])
-        tokens = tokenizer(text.lower())
+        # Basic tokenization - always use NLTK for better tokenization
+        tokens = word_tokenize(text.lower())
         
-        # Add n-grams for more advanced developmental levels
-        if self.tokenization_level in ["advanced", "sophisticated"] and len(tokens) > 1:
-            # Add bigrams
-            bigrams_list = list(ngrams(tokens, 2))
-            bigram_tokens = [f"{t[0]}_{t[1]}" for t in bigrams_list]
+        # Filter based on development level
+        if self.development_level < 0.3:
+            # Basic level - keep most tokens but remove punctuation-only tokens
+            filtered_tokens = []
+            for token in tokens:
+                # Keep tokens that have at least one alphanumeric character
+                if any(c.isalnum() for c in token):
+                    filtered_tokens.append(token)
+            return filtered_tokens[:self.max_tokens]
             
-            # For sophisticated level, also add trigrams if we have enough tokens
-            if self.tokenization_level == "sophisticated" and len(tokens) > 2:
-                trigrams_list = list(ngrams(tokens, 3))
-                trigram_tokens = [f"{t[0]}_{t[1]}_{t[2]}" for t in trigrams_list]
-                tokens = tokens + bigram_tokens + trigram_tokens
-            else:
-                tokens = tokens + bigram_tokens
-                
-        # For primitive and basic levels, supplement with character-level insights
-        if self.tokenization_level in ["primitive", "basic"] and self.development_level > 0.1:
-            # Add some character-level tokens for longer words
-            for word in tokens[:]:  # Iterate over a copy to avoid modifying during iteration
-                if len(word) > 4:
-                    # Add first and last characters as tokens
-                    tokens.append(word[0])  # First character
-                    tokens.append(word[-1])  # Last character
-                    
-        return tokens
+        elif self.development_level < 0.6:
+            # Intermediate: filter out stopwords and very short tokens
+            filtered_tokens = [t for t in tokens if (t not in self.stopwords or t in {'?', '!'}) and len(t) > 1]
+            return filtered_tokens[:self.max_tokens]
+            
+        else:
+            # Advanced: keep more structure and context
+            # Just remove punctuation-only tokens except for meaningful punctuation
+            important_punct = {'?', '!', '.'}
+            filtered_tokens = [t for t in tokens if any(c.isalnum() for c in t) or t in important_punct]
+            return filtered_tokens[:self.max_tokens]
     
-    def _extract_linguistic_features(self, text: str, tokens: List[str]) -> Dict[str, Any]:
+    def _simple_similarity(self, text1: str, text2: str) -> float:
         """
-        Extract linguistic features based on developmental level
-        
-        As development progresses, more sophisticated features are extracted
-        """
-        features = {}
-        
-        # Basic features available at all levels
-        features["text_length"] = len(text)
-        features["token_count"] = len(tokens)
-        features["avg_token_length"] = sum(len(t) for t in tokens) / max(1, len(tokens))
-        
-        # More advanced features for higher developmental levels
-        if self.development_level >= 0.3:
-            # Add punctuation features
-            features["punctuation_ratio"] = sum(1 for c in text if c in '.,;:!?') / max(1, len(text))
-            features["question_mark_present"] = 1.0 if '?' in text else 0.0
-            features["exclamation_mark_present"] = 1.0 if '!' in text else 0.0
-            
-        # Even more features for advanced development
-        if self.development_level >= 0.6:
-            # Add capitalization features
-            features["uppercase_ratio"] = sum(1 for c in text if c.isupper()) / max(1, len(text))
-            features["starts_uppercase"] = 1.0 if text and text[0].isupper() else 0.0
-            
-            # Add token diversity
-            unique_tokens = set(tokens)
-            features["token_diversity"] = len(unique_tokens) / max(1, len(tokens))
-            
-        # Sophisticated features for highly developed perception
-        if self.development_level >= 0.8:
-            # Add character n-gram features
-            char_bigrams = [''.join(bg) for bg in ngrams(text.lower(), 2)] if len(text) > 1 else []
-            features["char_bigram_count"] = len(char_bigrams)
-            
-            # Add repetition detection
-            if tokens:
-                repeats = sum(1 for i in range(len(tokens)-1) if tokens[i] == tokens[i+1])
-                features["repetition_ratio"] = repeats / (len(tokens) - 1) if len(tokens) > 1 else 0
-                
-        return features
-    
-    def _get_text_embedding(self, text: str) -> np.ndarray:
-        """
-        Get embedding vector for text
-        
-        Uses vector_store utility to get embeddings for text.
-        Implements caching for efficiency.
-        """
-        # Check cache first
-        cache_key = f"{text[:50]}_{len(text)}"
-        if cache_key in self.feature_cache:
-            return self.feature_cache[cache_key]
-            
-        try:
-            # Get embedding from vector store utility
-            # In early development stages, add noise to the embedding
-            embedding = get_embedding(text)
-            
-            # Log embedding shape for debugging
-            if not hasattr(self, '_logged_embedding_shape'):
-                logger.info(f"Text embedding shape: {embedding.shape}")
-                self._logged_embedding_shape = True
-            
-            # Add developmental noise (less precise in early stages)
-            if self.development_level < 0.5:
-                noise_level = 0.2 * (1 - self.development_level * 2)
-                noise = np.random.normal(0, noise_level, size=embedding.shape)
-                embedding = embedding + noise
-                # Re-normalize
-                embedding = embedding / np.linalg.norm(embedding)
-                
-            # Cache the result
-            self.feature_cache[cache_key] = embedding
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"Failed to get embedding for text: {e}")
-            # Return a random embedding as fallback
-            return np.random.randn(self.embedding_dimension)
-    
-    def _reduce_embedding_dimension(self, embedding: np.ndarray) -> np.ndarray:
-        """
-        Reduce embedding dimension from 768 to 384 for compatibility with pattern recognition
-        """
-        # Convert to tensor, move to device, and process
-        with torch.no_grad():
-            tensor = torch.tensor(embedding, dtype=torch.float32).to(self.device)
-            reduced = self.dim_reduction(tensor).cpu().numpy()
-            return reduced
-    
-    def _extract_features(self, text: str) -> Dict[str, Any]:
-        """
-        Extract features from text input
-        
-        Returns a dictionary of features including:
-        - tokens: List of tokens from the text
-        - embedding: Vector representation of the text
-        - length: Length of the input
-        - linguistic_features: Extracted linguistic features
-        """
-        if not text:
-            # Create a zero embedding and its reduced version
-            empty_embedding = np.zeros(self.embedding_dimension)
-            empty_reduced = np.zeros(384)  # The reduced dimension is 384
-            return {
-                "tokens": [],
-                "embedding": empty_embedding,
-                "reduced_embedding": empty_reduced,  # Add reduced embedding for empty input
-                "length": 0,
-                "linguistic_features": {}
-            }
-        
-        # Get tokens
-        tokens = self._tokenize_text(text)
-        
-        # Get embedding
-        embedding = self._get_text_embedding(text)
-        
-        # Get reduced embedding for pattern recognition
-        reduced_embedding = self._reduce_embedding_dimension(embedding)
-        
-        # Extract linguistic features
-        linguistic_features = self._extract_linguistic_features(text, tokens)
-        
-        return {
-            "tokens": tokens,
-            "embedding": embedding,
-            "reduced_embedding": reduced_embedding,  # Add reduced embedding
-            "length": len(text),
-            "linguistic_features": linguistic_features
-        }
-    
-    def _record_input(self, sensory_input: SensoryInput):
-        """Record input in history, maintaining max size"""
-        self.input_history.append(sensory_input)
-        
-        # Maintain maximum history size
-        if len(self.input_history) > self.max_input_history:
-            self.input_history = self.input_history[-self.max_input_history:]
-            
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process raw input data into sensory representation
+        Calculate similarity between two texts
         
         Args:
-            input_data: Dictionary containing the raw input data
-                Must include 'text' key with the input text
-                
+            text1: First text
+            text2: Second text
+            
         Returns:
-            Dictionary with the processed sensory information
+            Similarity score (0-1)
         """
-        # Extract text from input
-        if "text" not in input_data:
-            logger.warning("No text found in input data")
-            return {"error": "No text input provided", "status": "error"}
+        if not text1 or not text2:
+            return 0.0
+            
+        # Convert to sets of tokens
+        tokens1 = set(self._tokenize_text(text1))
+        tokens2 = set(self._tokenize_text(text2))
         
-        text = input_data["text"]
-        source = input_data.get("source", "mother")
-        context = input_data.get("context", {})
+        if not tokens1 or not tokens2:
+            return 0.0
+            
+        # Calculate Jaccard similarity
+        intersection = tokens1.intersection(tokens2)
+        union = tokens1.union(tokens2)
         
-        # Create unique ID for this input
-        input_id = f"input_{uuid.uuid4().hex[:8]}"
+        return len(intersection) / len(union)
+    
+    def _update_frequencies(self, text: str):
+        """
+        Update the frequency counters with new text
         
-        try:
-            # Create SensoryInput model
-            sensory_input = SensoryInput(
-                input_id=input_id,
-                text=text,
-                source=source,
-                context=context,
-                metadata=input_data.get("metadata", {})
-            )
-            
-            # Record this input
-            self._record_input(sensory_input)
-            
-            # Extract features
-            features = self._extract_features(text)
-            
-            # Verify that reduced_embedding exists in features
-            if "reduced_embedding" not in features:
-                logger.error(f"Missing reduced_embedding in features: {list(features.keys())}")
-                return {
-                    "status": "error",
-                    "error": "Missing reduced_embedding in features",
-                    "available_keys": list(features.keys())
-                }
-            
-            # Create embedding tensor for neural network processing using the REDUCED embedding
-            # Ensure tensor is on the correct device
-            try:
-                embedding_tensor = torch.tensor(features["reduced_embedding"], dtype=torch.float32).to(self.device).unsqueeze(0)
-            except Exception as e:
-                logger.error(f"Error creating embedding tensor: {e}")
-                return {
-                    "status": "error",
-                    "error": f"Failed to create embedding tensor: {str(e)}",
-                    "reduced_embedding_type": str(type(features["reduced_embedding"])),
-                    "reduced_embedding_shape": str(features["reduced_embedding"].shape if hasattr(features["reduced_embedding"], 'shape') else "unknown")
-                }
-            
-            # Create the result
-            result = {
-                "status": "success",
-                "input_id": input_id,
-                "features": features,
-                "embedding_tensor": embedding_tensor,
-                "sensory_input": sensory_input.model_dump(),
-                "developmental_level": self.development_level,
-                "tokenization_level": self.tokenization_level,
-                "device": str(self.device),
-                "embedding_dimensions": {
-                    "original": len(features["embedding"]),
-                    "reduced": len(features["reduced_embedding"])
-                }
-            }
-            
-            # Publish the processed sensory input event
-            if self.event_bus:
-                self.publish_message(
-                    message_type="sensory_input_processed",
-                    content=result
-                )
-            
-            return result
-            
-        except ValidationError as e:
-            logger.error(f"Invalid sensory input: {e}")
-            return {"error": f"Invalid input data: {str(e)}", "status": "error"}
-        except Exception as e:
-            logger.error(f"Error processing sensory input: {e}")
-            return {"error": f"Failed to process input: {str(e)}", "status": "error"}
-            
-    def _handle_raw_text(self, message: Message):
-        """Handle raw text input event"""
-        if not message.content or "text" not in message.content:
+        Args:
+            text: Text to process for frequency updates
+        """
+        if not text:
             return
             
-        # Process the input
-        self.process_input(message.content)
+        # Update character frequencies
+        self.character_frequencies.update(text)
         
-    def get_recent_inputs(self, count: int = 5) -> List[SensoryInput]:
-        """Get the most recent inputs"""
-        return self.input_history[-count:] if self.input_history else []
+        # Update token frequencies
+        tokens = self._tokenize_text(text)
+        self.token_frequencies.update(tokens)
         
+        # Update bigram frequencies if enough tokens
+        if len(tokens) >= 2:
+            bigrams = ngrams(tokens, 2)
+            self.bigram_frequencies.update(bigrams)
+    
+    def _handle_message(self, message: Message):
+        """
+        Handle incoming messages from the event bus
+        
+        Args:
+            message: The message to handle
+        """
+        if message.message_type == "raw_text_input" and message.content:
+            # Process the raw text input
+            text = message.content.get("text", "")
+            if text:
+                process_id = message.content.get("process_id", str(uuid.uuid4()))
+                self.process_input({
+                    "text": text,
+                    "process_id": process_id,
+                    "source": message.content.get("source", "unknown"),
+                    "metadata": message.content.get("metadata", {})
+                })
+    
+    def update_development(self, amount: float) -> float:
+        """
+        Update the module's developmental level
+        
+        As development progresses, the sensory processing becomes more sophisticated
+        
+        Args:
+            amount: Amount to increase development by
+            
+        Returns:
+            New developmental level
+        """
+        # Update base development level
+        new_level = super().update_development(amount)
+        
+        # Update processing parameters based on development
+        self.max_tokens = int(100 + new_level * 400)  # 100 to 500 tokens - higher minimum for better feature extraction
+        self.token_threshold = max(0.03, 0.15 - new_level * 0.12)  # Lower threshold with development
+        self.similarity_threshold = max(0.4, 0.7 - new_level * 0.3)  # More nuanced similarity detection
+        
+        # Log development progress
+        logger.info(f"Sensory processor {self.module_id} developmental level updated to {new_level:.2f}")
+        logger.debug(f"Updated parameters: max_tokens={self.max_tokens}, token_threshold={self.token_threshold:.2f}")
+        
+        return new_level
+    
     def get_state(self) -> Dict[str, Any]:
-        """Get the current state of the module"""
-        state = super().get_state()
-        state.update({
-            "tokenization_level": self.tokenization_level,
-            "input_history_count": len(self.input_history),
-            "feature_cache_size": len(self.feature_cache),
-            "supported_tokenizers": list(self.tokenizers.keys()),
-            "device": str(self.device),
-            "embedding_dimension": self.embedding_dimension,
-            "reduced_dimension": 384
-        })
-        return state 
+        """
+        Get the current state of the module
+        
+        Returns:
+            Dictionary containing module state
+        """
+        base_state = super().get_state()
+        
+        # Add sensory processor specific state
+        state = {
+            **base_state,
+            "recent_input_count": len(self.recent_inputs),
+            "token_frequency_count": len(self.token_frequencies),
+            "processing_parameters": {
+                "max_tokens": self.max_tokens,
+                "token_threshold": self.token_threshold,
+                "similarity_threshold": self.similarity_threshold
+            }
+        }
+        
+        return state
+    
+    def get_recent_inputs(self, count: int = 5) -> List[Dict[str, Any]]:
+        """
+        Get the most recent inputs
+        
+        Args:
+            count: Maximum number of inputs to return
+            
+        Returns:
+            List of recent inputs
+        """
+        # Return the most recent inputs, limited by count
+        return list(self.recent_inputs)[-count:]
+    
+    def get_token_frequencies(self, top_n: int = 20) -> List[Tuple[str, int]]:
+        """
+        Get the most frequent tokens
+        
+        Args:
+            top_n: Number of top tokens to return
+            
+        Returns:
+            List of (token, frequency) tuples
+        """
+        return self.token_frequencies.most_common(top_n)
+        
+    def clear_history(self):
+        """Clear the input history and frequency counters"""
+        self.recent_inputs.clear()
+        self.token_frequencies.clear()
+        self.bigram_frequencies.clear()
+        self.character_frequencies.clear() 

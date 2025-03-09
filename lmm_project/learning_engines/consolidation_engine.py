@@ -35,11 +35,7 @@ logger = logging.getLogger(__name__)
 
 class ConsolidationEngine(LearningEngine):
     """
-    Implementation of memory consolidation mechanisms
-    
-    This engine handles the transformation of temporary neural activations
-    into stable, long-term connections through processes like synaptic
-    tagging, pattern reactivation, and structural stabilization.
+    Consolidation engine for stabilizing memories.
     """
     
     def __init__(

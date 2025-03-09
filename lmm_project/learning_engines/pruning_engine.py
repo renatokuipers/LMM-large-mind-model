@@ -34,11 +34,7 @@ logger = logging.getLogger(__name__)
 
 class PruningEngine(LearningEngine):
     """
-    Implementation of neural pruning mechanisms
-    
-    This engine applies pruning techniques to optimize neural networks by
-    selectively removing weak or unused connections while preserving
-    important pathways, enhancing efficiency and generalization.
+    Pruning engine for optimizing neural connections.
     """
     
     def __init__(

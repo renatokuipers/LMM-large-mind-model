@@ -32,11 +32,7 @@ logger = logging.getLogger(__name__)
 
 class HebbianEngine(LearningEngine):
     """
-    Implementation of Hebbian learning and variants
-    
-    This engine applies Hebbian learning rules to modify connections
-    between neurons based on their co-activation patterns, strengthening
-    connections between neurons that activate together.
+    Hebbian learning engine for associative learning.
     """
     
     def __init__(

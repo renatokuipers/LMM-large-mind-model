@@ -305,45 +305,44 @@ class PersonalityManager:
         intensity: float = None
     ) -> str:
         """
-        Generate an emotionally-modulated response
+        Apply emotional modifiers to a base response based on the specified valence and intensity
         
         Args:
-            base_response: Base response text
-            valence: Emotional valence to use (if None, uses current emotional state)
-            intensity: Intensity of emotional modulation (0.0-1.0)
+            base_response: Base text response to modify
+            valence: Emotional valence to apply (defaults to current state if None)
+            intensity: Intensity of the emotion (0.0-1.0, defaults to current level if None)
             
         Returns:
-            Emotionally modulated response
+            Modified response with appropriate emotional language
         """
-        # Use current emotional state if valence not specified
+        # Handle empty responses
+        if not base_response or len(base_response.strip()) == 0:
+            return "I'm here with you."
+            
+        # Use current emotional state if no specific valence provided
         if valence is None:
             valence = self.emotional_state["current_valence"]
             
-        # Use current intensity if not specified
         if intensity is None:
             intensity = self.emotional_state["intensity"]
-            
-        # Skip modulation if intensity is very low
-        if intensity < 0.2:
-            return base_response
-            
-        # Get modifiers for this valence
-        modifiers = EMOTIONAL_RESPONSE_MODIFIERS[valence]
         
-        # Probability of adding prefix/suffix based on intensity
-        prefix_prob = intensity * 0.8
-        suffix_prob = intensity * 0.7
+        # Select modifiers based on valence
+        modifiers = EMOTIONAL_RESPONSE_MODIFIERS.get(valence, EMOTIONAL_RESPONSE_MODIFIERS[EmotionalValence.NEUTRAL])
+        
+        # Select prefix based on intensity and random chance
+        prefix_prob = min(0.7, intensity * 0.8)
+        suffix_prob = min(0.5, intensity * 0.6)
         
         # Apply prefix if applicable
         if random.random() < prefix_prob:
-            prefix = random.choice(modifiers["prefixes"])
+            prefix = random.choice(modifiers["prefixes"]) + " "
             base_response = prefix + base_response
             
         # Apply suffix if applicable
         if random.random() < suffix_prob:
             suffix = random.choice(modifiers["suffixes"])
             # Only add suffix if it doesn't already end with punctuation
-            if base_response[-1] in ".!?":
+            if base_response and len(base_response) > 0 and base_response[-1] in ".!?":
                 base_response = base_response[:-1] + suffix
             else:
                 base_response = base_response + suffix

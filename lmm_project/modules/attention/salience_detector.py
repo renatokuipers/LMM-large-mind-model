@@ -10,7 +10,7 @@ from lmm_project.modules.attention.models import SalienceScore, AttentionParamet
 
 class SalienceDetector(BaseModule):
     """
-    Detects salient (important/notable) aspects of inputs
+    Detects salient aspects of inputs.
     
     The salience detector evaluates inputs to determine what aspects
     are important, novel, emotionally significant, or otherwise worthy

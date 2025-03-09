@@ -143,3 +143,58 @@ def get_log_level(level_name: str) -> int:
     }
     
     return levels.get(level_name.upper(), logging.INFO)
+
+def setup_module_logging(
+    module_name: str,
+    log_level: int = logging.INFO,
+    log_to_file: bool = True,
+    log_to_console: bool = True,
+    log_dir: str = "logs"
+) -> logging.Logger:
+    """
+    Set up logging for a specific module
+    
+    Parameters:
+    module_name: Name of the module
+    log_level: Logging level
+    log_to_file: Whether to log to a file
+    log_to_console: Whether to log to console
+    log_dir: Directory for log files
+    
+    Returns:
+    Configured logger
+    """
+    # Create logger with module name
+    logger = logging.getLogger(module_name)
+    logger.setLevel(log_level)
+    
+    # Remove existing handlers to avoid duplicates
+    if logger.handlers:
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+    
+    # Formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Add file handler if requested
+    if log_to_file:
+        log_path = Path(log_dir)
+        log_path.mkdir(exist_ok=True, parents=True)
+        
+        file_handler = logging.FileHandler(
+            log_path / f"{module_name.lower().replace('.', '_')}.log"
+        )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(log_level)
+        logger.addHandler(file_handler)
+    
+    # Add console handler if requested
+    if log_to_console:
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        console.setLevel(log_level)
+        logger.addHandler(console)
+    
+    return logger
