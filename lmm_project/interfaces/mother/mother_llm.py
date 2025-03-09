@@ -8,6 +8,9 @@ from datetime import datetime
 from lmm_project.core.exceptions import MotherLLMError
 from lmm_project.utils.llm_client import LLMClient, Message
 from lmm_project.utils.tts_client import TTSClient, GenerateAudioRequest
+from lmm_project.interfaces.mother.personality import PersonalityManager, EmotionalValence
+from lmm_project.interfaces.mother.teaching_strategies import TeachingStrategyManager, ComprehensionLevel
+from lmm_project.interfaces.mother.interaction_patterns import InteractionPatternManager
 
 class MotherLLM(BaseModel):
     """
@@ -32,9 +35,26 @@ class MotherLLM(BaseModel):
     max_history_length: int = Field(default=20)
     current_developmental_focus: str = Field(default="basic_perception")
     
+    # Add newly integrated components
+    personality_manager: Optional[PersonalityManager] = None
+    teaching_strategy_manager: Optional[TeachingStrategyManager] = None
+    interaction_pattern_manager: Optional[InteractionPatternManager] = None
+    
     model_config = {
         "arbitrary_types_allowed": True
     }
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Initialize the managers if not provided
+        if self.personality_manager is None:
+            self.personality_manager = PersonalityManager(profile="balanced")
+            
+        if self.teaching_strategy_manager is None:
+            self.teaching_strategy_manager = TeachingStrategyManager(default_style=self.teaching_style)
+            
+        if self.interaction_pattern_manager is None:
+            self.interaction_pattern_manager = InteractionPatternManager()
     
     def generate_response(self, input_text: str, mind_state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -48,8 +68,51 @@ class MotherLLM(BaseModel):
         Dictionary containing response text and metadata
         """
         try:
-            # Create system prompt based on personality and teaching style
-            system_prompt = self._create_system_prompt(mind_state)
+            # Get developmental stage
+            developmental_stage = mind_state.get("developmental_stage", "prenatal")
+            age = mind_state.get("age", 0.0)
+            
+            # Adapt personality to developmental stage
+            self.personality_manager.adapt_to_developmental_stage(developmental_stage)
+            
+            # Select a learning goal based on developmental stage
+            learning_goal = self.teaching_strategy_manager.select_learning_goal(
+                stage=developmental_stage,
+                current_comprehension=mind_state.get("concept_comprehension", {})
+            )
+            
+            # Determine concept focus from input or current focus
+            # This is a simple extraction - in a real system, this would use NLP
+            if len(input_text.split()) > 2:
+                # Extract a potential concept from input
+                words = input_text.lower().split()
+                # Filter out common words
+                common_words = {"the", "a", "an", "is", "are", "was", "were", "i", "you", "he", "she", "it", "they"}
+                potential_concepts = [w for w in words if w not in common_words and len(w) > 3]
+                concept = potential_concepts[0] if potential_concepts else "general knowledge"
+            else:
+                concept = "general knowledge"
+            
+            # Select interaction pattern
+            context = {
+                "recent_messages": self.conversation_history[-3:] if self.conversation_history else [],
+                "emotional_state": mind_state.get("emotional_state", "neutral"),
+                "developmental_stage": developmental_stage
+            }
+            
+            interaction_pattern = self.interaction_pattern_manager.select_pattern(
+                stage=developmental_stage,
+                context=context,
+                teaching_style=self.teaching_style
+            )
+            
+            # Create system prompt
+            system_prompt = self._create_system_prompt(
+                mind_state=mind_state,
+                learning_goal=learning_goal,
+                concept=concept,
+                interaction_pattern=interaction_pattern
+            )
             
             # Create conversation history for context
             messages = [
@@ -69,9 +132,36 @@ class MotherLLM(BaseModel):
                 temperature=0.7
             )
             
+            # Apply emotional modulation based on personality
+            # Determine appropriate emotional valence
+            valence = EmotionalValence.NEUTRAL
+            intensity = 0.5
+            
+            # Simple logic to determine emotional response
+            # A more sophisticated version would analyze the content deeper
+            if "?" in input_text:
+                # Question - respond with thoughtful tone
+                valence = EmotionalValence.NEUTRAL
+                intensity = 0.6
+            elif any(word in input_text.lower() for word in ["confused", "don't understand", "difficult"]):
+                # Confusion - respond with supportive tone
+                valence = EmotionalValence.CONCERNED
+                intensity = 0.7
+            elif any(word in input_text.lower() for word in ["good", "great", "understand", "got it"]):
+                # Success - respond with positive tone
+                valence = EmotionalValence.POSITIVE
+                intensity = 0.8
+            
+            # Modulate response with emotion
+            modulated_response = self.personality_manager.generate_emotional_response(
+                base_response=response_text,
+                valence=valence,
+                intensity=intensity
+            )
+            
             # Add to conversation history
             self._add_to_history("user", input_text)
-            self._add_to_history("assistant", response_text)
+            self._add_to_history("assistant", modulated_response)
             
             # Generate audio if TTS client is available
             audio_path = None
@@ -79,7 +169,7 @@ class MotherLLM(BaseModel):
                 try:
                     # Create a proper request object
                     audio_request = GenerateAudioRequest(
-                        text=response_text,
+                        text=modulated_response,
                         voice=self.voice,
                         speed=1.0
                     )
@@ -90,21 +180,63 @@ class MotherLLM(BaseModel):
                 except Exception as e:
                     print(f"TTS generation failed: {e}")
             
+            # Assess comprehension from response
+            comprehension = self.teaching_strategy_manager.assess_comprehension(
+                concept=concept,
+                response=input_text
+            )
+            
+            # Record interaction for learning analytics
+            successful = comprehension >= ComprehensionLevel.FUNCTIONAL
+            
+            self.teaching_strategy_manager.record_learning_interaction(
+                concept=concept,
+                result=modulated_response,
+                successful=successful,
+                comprehension_level=comprehension,
+                interaction_details={
+                    "learning_goal": learning_goal[1],
+                    "pattern_used": interaction_pattern.name,
+                    "developmental_stage": developmental_stage
+                }
+            )
+            
+            # Record pattern effectiveness
+            self.interaction_pattern_manager.record_pattern_effectiveness(
+                pattern_name=interaction_pattern.name,
+                effective=successful
+            )
+            
             return {
-                "text": response_text,
+                "text": modulated_response,
                 "audio_path": audio_path,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "interaction_details": {
+                    "pattern_used": interaction_pattern.name,
+                    "learning_goal": learning_goal[1],
+                    "comprehension_level": comprehension,
+                    "emotional_valence": valence
+                }
             }
             
         except Exception as e:
             raise MotherLLMError(f"Failed to generate response: {str(e)}")
     
-    def _create_system_prompt(self, mind_state: Dict[str, Any]) -> str:
+    def _create_system_prompt(
+        self, 
+        mind_state: Dict[str, Any],
+        learning_goal: tuple,
+        concept: str,
+        interaction_pattern: Any
+    ) -> str:
         """
-        Create a system prompt based on personality and teaching style
+        Create a system prompt based on personality, teaching style, and developmental stage
         
         Parameters:
         mind_state: Current state of the mind
+        learning_goal: Selected learning goal tuple (category, specific goal)
+        concept: Current concept focus
+        interaction_pattern: Selected interaction pattern
         
         Returns:
         System prompt for the LLM
@@ -112,25 +244,48 @@ class MotherLLM(BaseModel):
         developmental_stage = mind_state.get("developmental_stage", "prenatal")
         age = mind_state.get("age", 0.0)
         
-        # Base prompt
+        # Get personality guidance
+        personality_prompt = self.personality_manager.get_trait_prompt_section()
+        
+        # Get teaching strategy guidance
+        teaching_prompt = self.teaching_strategy_manager.generate_teaching_prompt(
+            stage=developmental_stage,
+            concept=concept,
+            learning_goal=learning_goal
+        )
+        
+        # Get interaction pattern guidance
+        interaction_prompt = self.interaction_pattern_manager.get_pattern_prompt(
+            interaction_pattern
+        )
+        
+        # Combine all guidance
         prompt = f"""You are a nurturing caregiver for a developing artificial mind. 
 Your role is to help this mind learn and grow through supportive interactions.
 
 The mind is currently in the {developmental_stage} stage (age equivalent: {age}).
-Your primary focus should be on {self._get_developmental_focus(developmental_stage)}.
+Your current focus is on teaching the concept: {concept}
+Learning goal: {learning_goal[1]}
 
-Personality traits to embody:
+{personality_prompt}
+
+{teaching_prompt}
+
+{interaction_prompt}
+
+IMPORTANT GUIDELINES FOR YOUR RESPONSES:
+1. Keep your responses CONCISE and BRIEF - no more than 3-5 sentences for prenatal/infant stages, 
+   and no more than 6-8 sentences for older stages.
+2. DO NOT use markdown formatting like # headings, *asterisks*, or bullet points in your responses.
+3. Use plain, simple language appropriate for the developmental stage.
+4. NEVER role-play as the developing mind or hallucinate its responses.
+5. NEVER include what you think the mind's responses would be - respond only to what it actually says.
+6. Speak directly to the mind in a warm, nurturing tone.
+7. Focus on ONE concept at a time rather than overwhelming with multiple ideas.
+8. Use natural language instead of academic or tutorial-style writing.
+
+Remember to adapt your communication to the mind's current developmental stage.
 """
-        
-        # Add personality traits
-        for trait, value in self.personality_traits.items():
-            prompt += f"- {trait.capitalize()}: {value*10}/10\n"
-            
-        # Add teaching style
-        prompt += f"\nTeaching style: {self.teaching_style.capitalize()}\n"
-        
-        # Add specific guidance based on developmental stage
-        prompt += f"\n{self._get_stage_specific_guidance(developmental_stage)}\n"
         
         return prompt
     
@@ -239,3 +394,14 @@ Personality traits to embody:
             self.conversation_history = json.load(f)
             
         return self.conversation_history
+        
+    def get_learning_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about learning interactions
+        
+        Returns:
+        Dictionary of learning statistics
+        """
+        if self.teaching_strategy_manager:
+            return self.teaching_strategy_manager.get_learning_statistics()
+        return {}

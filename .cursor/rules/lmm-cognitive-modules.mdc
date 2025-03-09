@@ -1,0 +1,59 @@
+---
+description: Guidelines for implementing the specialized cognitive modules that make up the LMM system.
+globs: lmm_project/modules/*.py, lmm_project/modules/**/*.py
+alwaysApply: true
+---
+# LMM Cognitive Modules Guidelines
+
+Cognitive modules are specialized components that handle specific psychological functions. Each module should follow a consistent pattern while implementing its unique cognitive capabilities.
+
+## Module Structure
+
+- **BaseModule**: All modules inherit from BaseModule for consistent interface
+- **Processing Logic**: Each module implements its specialized cognitive processing
+- **Development Tracking**: Modules track their own developmental level
+- **Event Handling**: Modules subscribe to and publish relevant events
+- **State Management**: Modules maintain their internal state
+
+## Standard Module Interface
+
+Every module must implement:
+
+1. `process_input()` - Process incoming data and return results
+2. `update_development()` - Progress the module's developmental level
+3. `get_state()` - Return the current module state
+4. `save_state()` - Persist module state to storage
+
+## Module Types and Responsibilities
+
+- **Perception**: Process sensory inputs and extract patterns
+- **Attention**: Control focus and salience detection
+- **Memory**: Store and retrieve experiences and knowledge
+- **Language**: Learn and process linguistic information
+- **Emotion**: Generate and regulate emotional states
+- **Consciousness**: Integrate information and maintain awareness
+- **Executive**: Planning, decision-making, inhibition
+- **Social**: Theory of mind, relationship modeling
+- **Motivation**: Drives, needs, goals, rewards
+- **Temporal**: Sequence learning, prediction, causality
+- **Creativity**: Imagination, novel idea generation
+- **Self-Regulation**: Emotional regulation, impulse control
+- **Learning**: Learning mechanisms across domains
+- **Identity**: Self-concept, preferences, personality
+- **Belief**: Belief formation and updating
+
+## Development Guidelines
+
+- Start with very basic functionality in early developmental stages
+- Gradually increase complexity as the system develops
+- Modules should adjust their behavior based on their developmental level
+- Higher-level functions should emerge from interactions between simpler components
+- Avoid implementing advanced capabilities prematurely
+
+## Implementation Notes
+
+- Each module should have an appropriate neural network architecture
+- Use Pydantic models for all data structures
+- Implement clear processing pipelines within each module
+- Maintain module independence while supporting inter-module communication
+- Document expected inputs and outputs for each operation

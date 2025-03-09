@@ -1,0 +1,64 @@
+---
+description: Guidelines for implementing the various memory systems in the LMM project.
+globs: lmm_project/modules/memory/*.py
+alwaysApply: true
+---
+# LMM Memory Systems Guidelines
+
+Memory is a fundamental aspect of cognitive development. The LMM implements multiple memory systems working together to store, organize, and retrieve information.
+
+## Memory Types
+
+- **Working Memory**: Temporary, limited capacity buffer for active processing
+- **Long-Term Memory**: Persistent storage for learned information
+- **Episodic Memory**: Storage for specific experiences and events
+- **Semantic Memory**: Conceptual knowledge and facts
+- **Associative Memory**: Connections between related memories
+
+## Common Requirements
+
+- All memory systems should support:
+  - Storage of information
+  - Retrieval based on relevance
+  - Decay over time if not accessed
+  - Consolidation of important memories
+  - Connection to other memory types
+
+## Vector Storage Implementation
+
+- Use FAISS for efficient embedding storage and similarity search
+- Implement appropriate index types based on data characteristics
+- Configure for CUDA acceleration where available
+- Implement both exact and approximate nearest neighbor search
+- Save and load indices for persistent storage
+
+## Memory Processes
+
+- **Encoding**: Convert experiences to storable memory representations
+- **Storage**: Maintain memories with appropriate metadata
+- **Retrieval**: Find and return relevant memories based on cues
+- **Consolidation**: Strengthen important memories during development
+- **Forgetting**: Remove or decay less important memories
+
+## Developmental Progression
+
+- Working memory capacity should increase with development
+- Memory encoding should become more sophisticated over time
+- Retrieval mechanisms should become more effective with experience
+- Associative capabilities should develop from simple to complex
+- Consolidation should become more selective as development progresses
+
+## Implementation Details
+
+- Use embeddings to represent memory content semantically
+- Implement decay mechanisms based on access frequency and importance
+- Create rich metadata for context and retrieval cues
+- Support both exact-match and similarity-based retrieval
+- Ensure that memory retrieval activates associated memories
+
+## GPU Acceleration for Memory Operations
+
+- Use CUDA-accelerated FAISS indices for similarity search
+- Implement efficient batch processing for memory operations
+- Fall back gracefully to CPU when GPU is unavailable
+- Optimize embedding generation and comparison operations

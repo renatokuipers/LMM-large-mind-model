@@ -65,6 +65,7 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
+example.py
 
 # Documentation
 docs/_build/

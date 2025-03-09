@@ -1,0 +1,73 @@
+---
+description: Guidelines for testing the LMM system to verify proper cognitive development and functionality.
+globs: tests/*.py, tests/**/*.py
+alwaysApply: true
+---
+# LMM Testing Strategy Guidelines
+
+Testing a developmental cognitive system is fundamentally different from testing traditional software. These guidelines outline appropriate testing approaches for the LMM project.
+
+## Testing Philosophy
+
+- Focus on developmental trajectory rather than fixed requirements
+- Test for capability emergence rather than predefined outputs
+- Verify appropriate progression through developmental stages
+- Test module interactions rather than isolated functions
+- Balance deterministic unit tests with developmental verification
+
+## Test Types
+
+1. **Unit Tests**
+   - Test basic component functionality
+   - Verify mathematical correctness of algorithms
+   - Validate data structure integrity
+   - Test individual neural components
+
+2. **Module Tests**
+   - Test module development progression
+   - Verify appropriate adaptation to developmental stage
+   - Test module response to various inputs
+   - Validate module persistence and state management
+
+3. **Integration Tests**
+   - Test inter-module communication
+   - Verify event propagation
+   - Test cognitive pathways across modules
+   - Validate overall system stability
+
+4. **Developmental Tests**
+   - Track developmental milestones
+   - Verify capability emergence at appropriate stages
+   - Test critical period functionality
+   - Validate learning across developmental stages
+
+5. **Transfer Tests**
+   - Test knowledge application across domains
+   - Verify generalization capabilities
+   - Test adaptation to novel situations
+   - Validate genuine learning vs. memorization
+
+## Test Implementation
+
+- Use pytest as the primary testing framework
+- Create fixtures for developmental stages
+- Implement parametrized tests for multiple scenarios
+- Use mocking cautiously - primarily for external services
+- Create realistic test scenarios rather than artificial cases
+
+## Testing Standards
+
+- Every core algorithm needs mathematical validation
+- Module behaviors should be verified across developmental stages
+- Neural substrate requires extensive unit testing
+- Memory systems need persistence and retrieval validation
+- Event communication requires comprehensive verification
+- Mother interface needs adaptation testing
+
+## Testing for True Understanding
+
+- Test application of knowledge in novel contexts
+- Verify appropriate generalization boundaries
+- Test knowledge transfer across domains
+- Implement counterfactual reasoning tests
+- Verify causal understanding vs. correlation recognition

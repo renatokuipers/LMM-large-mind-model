@@ -1,0 +1,80 @@
+---
+description: Guidelines for optimizing the LMM system with CUDA 12.1 GPU acceleration.
+globs: lmm_project/neural_substrate/*.py, lmm_project/utils/vector_store.py
+alwaysApply: true
+---
+# LMM CUDA Acceleration Guidelines
+
+GPU acceleration is crucial for efficient neural processing and vector operations. These guidelines ensure proper CUDA 12.1 integration.
+
+## CUDA Detection and Fallback
+
+Always check for CUDA availability and provide CPU fallback:
+
+```python
+import torch
+
+def get_device():
+    """Get the appropriate device for tensor operations."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+    
+device = get_device()
+```
+
+## PyTorch CUDA Best Practices
+
+- Always specify device when creating tensors
+- Move models to GPU explicitly using .to(device)
+- Use CUDA streams for parallel operations
+- Implement batch processing for GPU efficiency
+- Minimize CPU-GPU data transfers
+- Use mixed precision where appropriate
+
+## FAISS GPU Acceleration
+
+- Use GPU resources for FAISS indices:
+
+```python
+import faiss
+
+# Check for GPU availability
+use_gpu = faiss.get_num_gpus() > 0
+
+if use_gpu:
+    # Create CPU index first
+    cpu_index = faiss.IndexFlatL2(dimension)
+    
+    # Move to GPU
+    gpu_resources = faiss.StandardGpuResources()
+    gpu_index = faiss.index_cpu_to_gpu(gpu_resources, 0, cpu_index)
+    index = gpu_index
+else:
+    # Use CPU index
+    index = faiss.IndexFlatL2(dimension)
+```
+
+## Memory Management
+
+- Monitor GPU memory usage
+- Implement memory-efficient algorithms
+- Use del and torch.cuda.empty_cache() to free memory
+- Consider gradient checkpointing for large models
+- Profile memory usage to identify bottlenecks
+
+## Performance Optimization
+
+- Use cudnn.benchmark for consistent operations
+- Implement efficient tensor operations
+- Avoid unnecessary data type conversions
+- Use GPU-accelerated libraries where available
+- Implement asynchronous processing when possible
+
+## Testing GPU Code
+
+- Test both GPU and CPU paths
+- Verify numerical consistency between implementations
+- Test with different GPU memory constraints
+- Validate performance improvements
+- Create GPU diagnostic utilities

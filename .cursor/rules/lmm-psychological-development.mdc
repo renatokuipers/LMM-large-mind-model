@@ -1,0 +1,64 @@
+---
+description: Guidelines for implementing psychological development principles in the LMM system.
+globs: lmm_project/development/*.py, lmm_project/modules/**/*.py
+alwaysApply: true
+---
+# LMM Psychological Development Guidelines
+
+The LMM project models authentic psychological development. These guidelines ensure implementation stays true to psychological principles.
+
+## Developmental Principles
+
+1. **Bottom-Up Learning**
+   - Start with basic pattern recognition
+   - Build complex concepts from simpler foundations
+   - Maintain hierarchical skill development
+   - Allow capabilities to emerge from interactions
+
+2. **Critical Periods**
+   - Implement sensitive periods for specific capabilities
+   - Increase plasticity during appropriate developmental windows
+   - Reduce plasticity for stability after learning
+   - Create appropriate sequential dependencies
+
+3. **Scaffolded Learning**
+   - Structure experiences at appropriate complexity levels
+   - Gradually increase difficulty as capabilities develop
+   - Provide support for partially-developed capabilities
+   - Remove scaffolding as competence increases
+
+4. **Emotional Development**
+   - Start with basic emotional responses
+   - Gradually increase emotional complexity
+   - Develop emotional regulation capabilities
+   - Integrate emotion with cognition
+
+5. **Identity Formation**
+   - Build self-model gradually
+   - Develop preferences from experiences
+   - Form consistent personality traits
+   - Create personal narrative from episodic memories
+
+## Implementation Approaches
+
+- Track developmental variables for different capabilities
+- Implement variable learning rates based on developmental stage
+- Create mechanisms for developmental regression during stress
+- Allow for developmental plateaus and growth spurts
+- Implement cross-domain transfer of learned capabilities
+
+## Measuring Development
+
+- Create objective metrics for each capability
+- Track progression through defined developmental stages
+- Compare capabilities to expected developmental timeline
+- Identify developmental imbalances or delays
+- Implement corrective mechanisms for healthy development
+
+## Testing Development
+
+- Test capability emergence at appropriate stages
+- Verify developmental progression follows expected patterns
+- Test appropriate scaffolding and support mechanisms
+- Validate emotional development alongside cognitive growth
+- Verify identity formation and self-model development
