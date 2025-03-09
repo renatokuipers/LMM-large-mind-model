@@ -23,6 +23,7 @@ def get_module_classes() -> Dict[str, Any]:
     from lmm_project.modules.attention import get_module as get_attention_module
     from lmm_project.modules.memory import get_module as get_memory_module
     from lmm_project.modules.emotion import get_module as get_emotion_module
+    from lmm_project.modules.learning import get_module as get_learning_module
     # Add other module imports as they are implemented
     
     return {
@@ -30,6 +31,7 @@ def get_module_classes() -> Dict[str, Any]:
         "attention": get_attention_module,
         "memory": get_memory_module,
         "emotion": get_emotion_module,
+        "learning": get_learning_module,
         # Add other modules here as they are implemented
     }
 

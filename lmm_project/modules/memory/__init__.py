@@ -190,6 +190,15 @@ class EpisodicMemory:
         """Add an episode to the temporal index in the correct position"""
         # Simple implementation: just maintain a sorted list
         # For larger systems, more sophisticated indexing would be needed
+        
+        # Ensure timestamp is a float (handle case where it might be a string)
+        if isinstance(timestamp, str):
+            try:
+                timestamp = float(timestamp)
+            except ValueError:
+                # If conversion fails, use current time
+                timestamp = float(time.time())
+        
         self.temporal_index.append((timestamp, episode_id))
         self.temporal_index.sort()  # Sort by timestamp
         
