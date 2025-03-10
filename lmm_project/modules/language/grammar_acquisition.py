@@ -1,31 +1,27 @@
-# TODO: Implement the GrammarAcquisition class to learn and apply grammatical rules
+# TODO: Implement the GrammarAcquisition class to learn language structure
 # This component should be able to:
-# - Identify grammatical patterns from language input
-# - Extract and formalize grammatical rules
-# - Apply learned rules in language comprehension and production
-# - Handle syntactic processing and sentence structure
+# - Learn grammatical patterns from examples
+# - Apply syntactic rules to understand sentence structure
+# - Recognize and use morphological patterns
+# - Develop increasingly complex grammatical knowledge
 
 # TODO: Implement developmental progression in grammar acquisition:
-# - Simple two-word combinations in early stages
-# - Basic sentence structures in early childhood
-# - Complex grammar and exceptions in later childhood
-# - Advanced syntax and pragmatics in adolescence/adulthood
+# - Simple word combinations in early stages
+# - Basic sentence patterns in early childhood
+# - Complex grammatical structures in later childhood
+# - Sophisticated syntax and exceptions in adolescence/adulthood
 
 # TODO: Create mechanisms for:
-# - Pattern detection: Identify recurring grammatical structures
-# - Rule extraction: Formalize explicit and implicit rules
-# - Syntactic parsing: Analyze sentence structure
-# - Grammatical error detection: Identify violations of learned rules
+# - Pattern extraction: Identify recurring grammatical patterns
+# - Rule formation: Create generalizable grammatical rules
+# - Structural analysis: Parse sentences into grammatical components
+# - Morphological processing: Understand word formation rules
 
-# TODO: Implement different grammatical concepts:
-# - Word order rules (syntax)
-# - Morphological rules (word formation)
-# - Agreement rules (subject-verb, etc.)
-# - Dependency relationships between sentence elements
-
-# TODO: Connect to word learning and semantic processing
-# Grammar acquisition should work with lexical knowledge
-# and contribute to meaning extraction
+# TODO: Implement different grammatical capabilities:
+# - Word order: Understand syntactic positioning
+# - Agreement: Match number, gender, tense, etc.
+# - Dependency: Recognize relationships between words
+# - Transformation: Convert between related grammatical forms
 
 from typing import Dict, List, Any, Optional, Set, Tuple
 import torch
@@ -33,9 +29,11 @@ import uuid
 import numpy as np
 from datetime import datetime
 from collections import deque
+import random
+import time
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.language.models import GrammarModel, LanguageNeuralState
 from lmm_project.modules.language.neural_net import GrammarNetwork, get_device
 from lmm_project.utils.llm_client import LLMClient
@@ -245,18 +243,128 @@ class GrammarAcquisition(BaseModule):
         
         # Convert tokens to feature vectors
         token_features = []
-        for token in tokens:
-            # Simple feature creation (in a real implementation, these would be richer)
+        
+        # For grammar analysis, we need both individual token features and their context
+        
+        # First, try to get embeddings for the entire sentence for context
+        sentence_embedding = None
+        try:
+            if self.development_level >= 0.5:  # Only use LLM API at higher development levels
+                raw_embedding = self.llm_client.get_embedding(
+                    sentence,
+                    embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                )
+                
+                # Process the embedding
+                if isinstance(raw_embedding, list):
+                    if isinstance(raw_embedding[0], list):
+                        sentence_embedding = np.array(raw_embedding[0])[:128]  # Truncate if needed
+                    else:
+                        sentence_embedding = np.array(raw_embedding)[:128]  # Truncate if needed
+                        
+                    # Pad if too small
+                    if len(sentence_embedding) < 128:
+                        sentence_embedding = np.pad(
+                            sentence_embedding, 
+                            (0, 128 - len(sentence_embedding)),
+                            'constant'
+                        )
+        except Exception as e:
+            print(f"Warning: Failed to get sentence embedding for grammar analysis: {e}")
+            sentence_embedding = None
+        
+        # Process each token with contextual information
+        for i, token in enumerate(tokens):
+            # Initialize token vector
             token_vector = np.zeros(128)
             
-            # Set hash-based features
-            hash_val = hash(token) % 100
-            token_vector[hash_val] = 1.0
+            # Use token-level features based on linguistic properties
             
-            # Add positional information
-            pos_index = tokens.index(token) % 10
-            token_vector[100 + pos_index] = 1.0
+            # Feature 1: First letter capitalization (potential proper noun or sentence start)
+            if token and token[0].isupper():
+                token_vector[0] = 1.0
             
+            # Feature 2: Contains digits (potential number or date)
+            if any(c.isdigit() for c in token):
+                token_vector[1] = 1.0
+            
+            # Feature 3: All capitals (potential acronym or emphasis)
+            if token.isupper() and len(token) > 1:
+                token_vector[2] = 1.0
+            
+            # Feature 4: Contains punctuation
+            if any(c in ".,;:!?-\"'()[]{}/" for c in token):
+                token_vector[3] = 1.0
+                
+                # Specific punctuation types (likely grammatical function)
+                if "." in token: token_vector[4] = 1.0  # Period - potential sentence end
+                if "," in token: token_vector[5] = 1.0  # Comma - potential clause separator
+                if "?" in token: token_vector[6] = 1.0  # Question mark
+                if "!" in token: token_vector[7] = 1.0  # Exclamation
+            
+            # Feature 5: Word length categories
+            token_len = len(token)
+            if token_len <= 2: token_vector[8] = 1.0    # Very short words (e.g., "a", "to")
+            elif token_len <= 4: token_vector[9] = 1.0  # Short words
+            elif token_len <= 7: token_vector[10] = 1.0 # Medium words
+            else: token_vector[11] = 1.0                # Long words
+            
+            # Feature 6: Common function words (highly grammatical)
+            function_words = {"the", "a", "an", "and", "or", "but", "if", "of", "to", "for", 
+                              "with", "by", "at", "in", "on", "from", "as", "this", "that", 
+                              "these", "those", "is", "are", "was", "were", "be", "been", "being"}
+            if token.lower() in function_words:
+                token_vector[12] = 1.0
+                
+                # Find function word index
+                for fi, fw in enumerate(function_words):
+                    if token.lower() == fw:
+                        # Encode specific function word (limited to first 20)
+                        if fi < 20:
+                            token_vector[13 + fi] = 1.0
+                        break
+            
+            # Feature 7: Common verb endings
+            if token.lower().endswith("ing"): token_vector[33] = 1.0  # Present participle
+            if token.lower().endswith("ed"): token_vector[34] = 1.0   # Past tense/participle
+            if token.lower().endswith("s"): token_vector[35] = 1.0    # Potential plural or 3rd person
+            if token.lower().endswith("ly"): token_vector[36] = 1.0   # Potential adverb
+            
+            # Feature 8: Position information (absolute and relative)
+            # Absolute position (start/middle/end)
+            if i == 0: token_vector[37] = 1.0                         # First token
+            if i == len(tokens) - 1: token_vector[38] = 1.0           # Last token
+            
+            # Relative position (normalize to 0-1)
+            rel_pos = i / max(1, len(tokens) - 1)
+            token_vector[39] = rel_pos
+            
+            # Feature 9: Distance from beginning/end (bucketed)
+            dist_from_start = min(i, 9)  # Cap at 9
+            dist_from_end = min(len(tokens) - i - 1, 9)  # Cap at 9
+            token_vector[40 + dist_from_start] = 1.0
+            token_vector[50 + dist_from_end] = 1.0
+            
+            # Feature 10: Context bigrams (words before/after)
+            if i > 0:  # Has previous word
+                prev_word = tokens[i-1].lower()
+                # Hash of previous word + current word
+                context_hash = hash(prev_word + "_" + token.lower()) % 10
+                token_vector[60 + context_hash] = 1.0
+            
+            if i < len(tokens) - 1:  # Has next word
+                next_word = tokens[i+1].lower()
+                # Hash of current word + next word
+                context_hash = hash(token.lower() + "_" + next_word) % 10
+                token_vector[70 + context_hash] = 1.0
+            
+            # If we have a sentence embedding and we're at higher development level, 
+            # incorporate it into the token features
+            if sentence_embedding is not None and self.development_level >= 0.7:
+                # Combine token features with sentence context
+                # We'll use the sentence embedding for the higher feature indices
+                token_vector[80:108] = sentence_embedding[20:48]  # Use a slice of the sentence embedding
+                
             token_features.append(token_vector)
         
         # Convert to tensor
@@ -272,7 +380,9 @@ class GrammarAcquisition(BaseModule):
                 # Second pass with the sequence if available
                 if len(token_tensor) > 1:
                     sequence_output = self.network(token_tensor[0:1], operation="predict", sequence=token_tensor)
-                    prediction_quality = sequence_output.get("quality", torch.tensor([0.5])).item()
+                    # Handle multi-element quality tensor
+                    quality_tensor = sequence_output.get("quality", torch.tensor([0.5]))
+                    prediction_quality = quality_tensor.mean().item()  # Take the mean if multiple elements
                 else:
                     prediction_quality = 0.5
         else:

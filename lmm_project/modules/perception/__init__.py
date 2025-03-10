@@ -91,24 +91,24 @@ class PerceptionSystem(BaseModule):
         )
         
         # Create sensory input processor
-        self.sensory_processor = SensoryInputProcessor(
-            module_id=f"{module_id}_sensory",
+        self.sensory_input = SensoryInputProcessor(
+            module_id=f"{module_id}.sensory_input",
             event_bus=event_bus,
             development_level=development_level
         )
         
         # Create pattern recognizer
-        self.pattern_recognizer = PatternRecognizer(
-            module_id=f"{module_id}_patterns",
+        self.pattern_recognition = PatternRecognizer(
+            module_id=f"{module_id}.pattern_recognition",
             event_bus=event_bus,
             development_level=development_level
         )
         
         # Configuration parameters - adjusted for better pattern detection at all levels
         self.parameters = PerceptionParameters(
-            token_sensitivity=0.8,        # Increased for better token detection
-            ngram_sensitivity=0.7,        # Increased for better n-gram detection
-            semantic_sensitivity=0.5,     # Increased for better semantic pattern detection
+            token_sensitivity=0.6,        # Reduced to comply with total sensitivity limit
+            ngram_sensitivity=0.5,        # Reduced to comply with total sensitivity limit
+            semantic_sensitivity=0.4,     # Reduced to comply with total sensitivity limit
             novelty_threshold=0.4,        # Decreased to accept more patterns as novel
             pattern_activation_threshold=0.1,  # Significantly lowered to detect more patterns
             developmental_scaling=True
@@ -132,20 +132,20 @@ class PerceptionSystem(BaseModule):
     def _apply_parameters(self):
         """Apply configuration parameters to submodules"""
         # Apply to pattern recognizer
-        if hasattr(self.pattern_recognizer, 'token_sensitivity'):
-            self.pattern_recognizer.token_sensitivity = self.parameters.token_sensitivity
+        if hasattr(self.pattern_recognition, 'token_sensitivity'):
+            self.pattern_recognition.token_sensitivity = self.parameters.token_sensitivity
         
-        if hasattr(self.pattern_recognizer, 'ngram_sensitivity'):
-            self.pattern_recognizer.ngram_sensitivity = self.parameters.ngram_sensitivity
+        if hasattr(self.pattern_recognition, 'ngram_sensitivity'):
+            self.pattern_recognition.ngram_sensitivity = self.parameters.ngram_sensitivity
             
-        if hasattr(self.pattern_recognizer, 'semantic_sensitivity'):
-            self.pattern_recognizer.semantic_sensitivity = self.parameters.semantic_sensitivity
+        if hasattr(self.pattern_recognition, 'semantic_sensitivity'):
+            self.pattern_recognition.semantic_sensitivity = self.parameters.semantic_sensitivity
             
-        if hasattr(self.pattern_recognizer, 'novelty_threshold'):
-            self.pattern_recognizer.novelty_threshold = self.parameters.novelty_threshold
+        if hasattr(self.pattern_recognition, 'novelty_threshold'):
+            self.pattern_recognition.novelty_threshold = self.parameters.novelty_threshold
             
-        if hasattr(self.pattern_recognizer, 'pattern_activation_threshold'):
-            self.pattern_recognizer.pattern_activation_threshold = self.parameters.pattern_activation_threshold
+        if hasattr(self.pattern_recognition, 'pattern_activation_threshold'):
+            self.pattern_recognition.pattern_activation_threshold = self.parameters.pattern_activation_threshold
     
     def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -167,7 +167,7 @@ class PerceptionSystem(BaseModule):
             logger.info(f"Input data before sensory processing: {list(input_data.keys())}")
         
         # Process through sensory input processor
-        sensory_result = self.sensory_processor.process_input(input_data)
+        sensory_result = self.sensory_input.process_input(input_data)
         
         # Debug logging to see what's happening with the data
         logger.info(f"Sensory result keys: {list(sensory_result.keys())}")
@@ -184,7 +184,7 @@ class PerceptionSystem(BaseModule):
             logger.info(f"Text value length: {len(sensory_result['text'])}")
         
         # Process through pattern recognizer
-        pattern_result = self.pattern_recognizer.process_input(sensory_result)
+        pattern_result = self.pattern_recognition.process_input(sensory_result)
         
         # Integrate results based on developmental level
         result = self._integrate_results(process_id, sensory_result, pattern_result)
@@ -391,8 +391,8 @@ class PerceptionSystem(BaseModule):
     
     def _update_submodule_development(self):
         """Update the developmental level of submodules"""
-        self.sensory_processor.update_development(self.development_level - self.sensory_processor.development_level)
-        self.pattern_recognizer.update_development(self.development_level - self.pattern_recognizer.development_level)
+        self.sensory_input.update_development(self.development_level - self.sensory_input.development_level)
+        self.pattern_recognition.update_development(self.development_level - self.pattern_recognition.development_level)
     
     def _handle_message(self, message: Message):
         """
@@ -426,19 +426,19 @@ class PerceptionSystem(BaseModule):
         if query_type == "recent_patterns":
             # Return recent patterns
             count = message.content.get("count", 5)
-            response["result"] = self.pattern_recognizer.get_recent_patterns(count)
+            response["result"] = self.pattern_recognition.get_recent_patterns(count)
             
         elif query_type == "recent_inputs":
             # Return recent inputs
             count = message.content.get("count", 5)
-            response["result"] = self.sensory_processor.get_recent_inputs(count)
+            response["result"] = self.sensory_input.get_recent_inputs(count)
             
         elif query_type == "perception_state":
             # Return the current state of perception
             response["result"] = {
                 "system_state": self.get_state(),
-                "sensory_state": self.sensory_processor.get_state(),
-                "pattern_state": self.pattern_recognizer.get_state()
+                "sensory_state": self.sensory_input.get_state(),
+                "pattern_state": self.pattern_recognition.get_state()
             }
             
         elif query_type == "process_text":
@@ -472,13 +472,13 @@ class PerceptionSystem(BaseModule):
             **base_state,
             "parameters": self.parameters.model_dump() if hasattr(self.parameters, "model_dump") else vars(self.parameters),
             "submodules": {
-                "sensory_processor": {
-                    "id": self.sensory_processor.module_id,
-                    "development_level": self.sensory_processor.development_level
+                "sensory_input": {
+                    "id": self.sensory_input.module_id,
+                    "development_level": self.sensory_input.development_level
                 },
-                "pattern_recognizer": {
-                    "id": self.pattern_recognizer.module_id,
-                    "development_level": self.pattern_recognizer.development_level
+                "pattern_recognition": {
+                    "id": self.pattern_recognition.module_id,
+                    "development_level": self.pattern_recognition.development_level
                 }
             },
             "device": str(self.device)

@@ -78,6 +78,20 @@ class CreativeOutput(BaseModel):
         "arbitrary_types_allowed": True
     }
 
+class CreativityMetrics(BaseModel):
+    """Metrics tracking various aspects of creativity performance"""
+    fluency: float = Field(default=0.0, ge=0.0, le=1.0)  # Ability to generate many ideas
+    flexibility: float = Field(default=0.0, ge=0.0, le=1.0)  # Ability to generate diverse ideas
+    originality: float = Field(default=0.0, ge=0.0, le=1.0)  # Novelty of generated ideas
+    elaboration: float = Field(default=0.0, ge=0.0, le=1.0)  # Detail in generated ideas
+    coherence: float = Field(default=0.0, ge=0.0, le=1.0)  # How well ideas fit together
+    usefulness: float = Field(default=0.0, ge=0.0, le=1.0)  # Practical value of ideas
+    last_updated: datetime = Field(default_factory=datetime.now)
+    
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
+
 class CreativityState(BaseModel):
     """Integrated state of the creativity system"""
     concept_combination: ConceptCombinationState = Field(default_factory=ConceptCombinationState)
@@ -90,6 +104,12 @@ class CreativityState(BaseModel):
     originality: float = Field(default=0.1, ge=0.0, le=1.0)  # Overall originality of outputs
     elaboration: float = Field(default=0.1, ge=0.0, le=1.0)  # Detail and richness of outputs
     abstraction: float = Field(default=0.1, ge=0.0, le=1.0)  # Ability to work with abstract concepts
+    
+    # Detailed creativity metrics
+    metrics: Optional[CreativityMetrics] = Field(default=None)
+    
+    # Output history
+    output_history: List[CreativeOutput] = Field(default_factory=list)
     
     # Developmental level of creativity
     developmental_level: float = Field(default=0.0, ge=0.0, le=1.0)

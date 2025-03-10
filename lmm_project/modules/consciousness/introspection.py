@@ -73,6 +73,9 @@ class Introspection(BaseModule):
         """
         super().__init__(module_id=module_id, module_type="introspection", event_bus=event_bus)
         
+        # Set developmental_level attribute to match development_level
+        self.developmental_level = self.development_level
+        
         # Initialize introspection state
         self.state = IntrospectionState()
         
@@ -167,18 +170,16 @@ class Introspection(BaseModule):
             "current_milestone": self._get_current_milestone()
         }
         
-        # Publish introspection results if event bus is available
-        if self.event_bus and insights:
+        # Publish the introspection result
+        if self.event_bus:
+            from lmm_project.core.message import Message
+            
             self.event_bus.publish(
-                msg_type="introspection_result",
-                content={
-                    "insights": insights,
-                    "source_mental_state": {
-                        "type": input_type,
-                        "source": source
-                    },
-                    "development_level": self.developmental_level
-                }
+                Message(
+                    sender="introspection",
+                    message_type="introspection_result",
+                    content=result
+                )
             )
         
         return result

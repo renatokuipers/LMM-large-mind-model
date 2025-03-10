@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Dict, List, Any, Optional, Set, Union, Literal
 from datetime import datetime
 import uuid
@@ -29,6 +29,22 @@ class Drive(BaseModel):
     last_updated: datetime = Field(default_factory=datetime.now)
     # Whether this drive is active (some drives only activate at certain dev levels)
     is_active: bool = Field(default=True)
+    
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "name": "Hunger",
+                    "description": "Need for food and energy",
+                    "intensity": 0.7,
+                    "decay_rate": 0.02,
+                    "priority": 0.8,
+                    "category": "physiological"
+                }
+            ]
+        }
+    }
     
     def update_intensity(self, amount: float) -> None:
         """Update the drive intensity, ensuring it stays within bounds"""
@@ -69,6 +85,21 @@ class Need(BaseModel):
     # Whether this need is currently active
     is_active: bool = Field(default=True)
     
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "name": "Belonging",
+                    "description": "Need for social connection and acceptance",
+                    "satisfaction": 0.6,
+                    "hierarchy_level": 3,
+                    "min_development_level": 0.3
+                }
+            ]
+        }
+    }
+    
     def update_satisfaction(self, amount: float) -> None:
         """Update the satisfaction level, ensuring it stays within bounds"""
         self.satisfaction = max(0.0, min(1.0, self.satisfaction + amount))
@@ -78,6 +109,16 @@ class Need(BaseModel):
         """Decrease satisfaction naturally over time"""
         decay_amount = self.decay_rate * time_delta
         self.update_satisfaction(-decay_amount)
+    
+    @model_validator(mode='after')
+    def validate_prerequisites_exist(self) -> 'Need':
+        """Ensure prerequisites are valid"""
+        # This validator would normally check if prerequisites exist in a larger system
+        # In a standalone model we just ensure they're well-formed
+        for prereq in self.prerequisites:
+            if not prereq or not isinstance(prereq, str):
+                raise ValueError(f"Invalid prerequisite: {prereq}")
+        return self
 
 class Goal(BaseModel):
     """
@@ -118,6 +159,21 @@ class Goal(BaseModel):
     # Goal type (approach or avoidance)
     goal_type: Literal["approach", "avoidance"] = "approach"
     
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "name": "Learn Python Programming",
+                    "description": "Develop skills in Python programming language",
+                    "importance": 0.8,
+                    "urgency": 0.6,
+                    "goal_type": "approach"
+                }
+            ]
+        }
+    }
+    
     def update_progress(self, amount: float) -> None:
         """Update progress toward goal"""
         self.progress = max(0.0, min(1.0, self.progress + amount))
@@ -129,6 +185,19 @@ class Goal(BaseModel):
         """Abandon this goal"""
         self.is_active = False
         self.last_updated = datetime.now()
+    
+    @model_validator(mode='after')
+    def validate_consistency(self) -> 'Goal':
+        """Ensure goal state is consistent"""
+        # If the goal is achieved, progress should be 1.0
+        if self.is_achieved and self.progress < 1.0:
+            self.progress = 1.0
+            
+        # If deadline is in the past, increase urgency
+        if self.deadline and self.deadline < datetime.now() and not self.is_achieved:
+            self.urgency = 1.0
+            
+        return self
 
 class RewardEvent(BaseModel):
     """
@@ -156,6 +225,20 @@ class RewardEvent(BaseModel):
     is_processed: bool = Field(default=False)
     # Additional metadata about this reward
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "reward_type": "extrinsic",
+                    "magnitude": 0.8,
+                    "source": "goal_completion",
+                    "context": "learning_task"
+                }
+            ]
+        }
+    }
     
     @field_validator('magnitude')
     @classmethod
@@ -186,6 +269,19 @@ class MotivationalState(BaseModel):
     dominant_motivation: Optional[str] = None
     # Timestamp when this state was created
     timestamp: datetime = Field(default_factory=datetime.now)
+    
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "motivation_level": 0.75,
+                    "development_level": 0.5,
+                    "dominant_motivation": "need:belonging"
+                }
+            ]
+        }
+    }
     
     def update_motivation_level(self) -> None:
         """Update the overall motivation level based on drives and needs"""
@@ -273,6 +369,18 @@ class MotivationNeuralState(BaseModel):
     development_level: float = Field(default=0.0, ge=0.0, le=1.0)
     # Last update timestamp
     last_updated: datetime = Field(default_factory=datetime.now)
+    
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "learning_rate": 0.02,
+                    "development_level": 0.4
+                }
+            ]
+        }
+    }
     
     def add_activation(self, activation_type: str, activations: List[float]) -> None:
         """Store activation pattern"""

@@ -340,35 +340,22 @@ class ExecutiveSystem(BaseModule):
         return combined_state
 
 
-def get_module(module_id: str, event_bus: Optional[EventBus] = None) -> Any:
+def get_module(module_id: str, event_bus: Optional[EventBus] = None, development_level: float = 0.0) -> Any:
     """
-    Factory function to create an executive function module.
+    Factory function to create an executive module
     
-    The executive system is responsible for:
-    - Planning and executing multi-step behaviors
-    - Making decisions between alternative options
-    - Inhibiting inappropriate actions and thoughts
-    - Managing the contents of working memory
+    This function is responsible for creating an executive system that can:
+    - Plan and execute goal-directed actions
+    - Make decisions based on available information
+    - Inhibit inappropriate responses
+    - Control working memory contents
     
     Args:
-        module_id: Identifier for the module to create
-        event_bus: Event bus for inter-module communication
+        module_id: Unique identifier for the module
+        event_bus: Event bus for communication with other modules
+        development_level: Initial developmental level of the module
         
     Returns:
-        An instance of ExecutiveSystem or one of its components
+        An instance of the ExecutiveSystem class
     """
-    # Check if requesting a specific submodule
-    if "." in module_id:
-        base_id, submodule = module_id.split(".", 1)
-        
-        if submodule == "planning":
-            return Planning(module_id=module_id, event_bus=event_bus)
-        elif submodule == "decision" or submodule == "decision_making":
-            return DecisionMaking(module_id=module_id, event_bus=event_bus)
-        elif submodule == "inhibition":
-            return Inhibition(module_id=module_id, event_bus=event_bus)
-        elif submodule == "working_memory":
-            return WorkingMemoryControl(module_id=module_id, event_bus=event_bus)
-    
-    # Default to returning the integrated executive system
-    return ExecutiveSystem(module_id=module_id, event_bus=event_bus)
+    return ExecutiveSystem(module_id=module_id, event_bus=event_bus, development_level=development_level)

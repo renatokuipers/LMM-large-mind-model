@@ -43,11 +43,21 @@ def get_module(
     Returns:
         Initialized MemorySystem
     """
-    return MemorySystem(
+    # Create memory system without long-term memory first
+    memory_system = MemorySystem(
         module_id=module_id,
         event_bus=event_bus,
         development_level=development_level
     )
+    
+    # Initialize long-term memory separately
+    memory_system.long_term_memory = LongTermMemory(
+        module_id="long_term_memory", 
+        event_bus=event_bus,
+        storage_dir="storage/memories"
+    )
+    
+    return memory_system
 
 class WorkingMemory:
     """
@@ -488,7 +498,7 @@ class MemorySystem(BaseModule):
         self.working_memory = WorkingMemory(capacity=3)
         self.episodic_memory = EpisodicMemory(max_episodes=100)
         self.semantic_memory = SemanticMemory(max_items=500)
-        self.long_term_memory = LongTermMemory(module_id="long_term_memory", event_bus=event_bus)
+        self.long_term_memory = None  # Will be initialized by get_module
         self.associative_memory = AssociativeMemoryModule(module_id="associative_memory", event_bus=event_bus)
         
         # Adjust memory parameters based on development level
@@ -515,9 +525,9 @@ class MemorySystem(BaseModule):
         self.semantic_memory.max_items = int(500 + self.development_level * 9500)
         
         # Adjust consolidation threshold for long-term memory based on development
-        if self.development_level >= 0.5:
+        if self.development_level >= 0.5 and self.long_term_memory is not None:
             self.long_term_memory.consolidation_threshold = max(0.4, 0.7 - self.development_level * 0.3)
-            
+        
         # Adjust associative memory's hebbian rate based on development
         if self.development_level >= 0.6:
             self.associative_memory.hebbian_rate = min(0.05, 0.01 + self.development_level * 0.04)
@@ -644,7 +654,7 @@ class MemorySystem(BaseModule):
                 "memory_type": "semantic"
             }
             
-        elif memory_type == "long_term" and self.development_level >= 0.7:
+        elif memory_type == "long_term" and self.development_level >= 0.7 and self.long_term_memory is not None:
             # Store in long-term memory
             result = self.long_term_memory.store_memory(content)
             
@@ -779,7 +789,7 @@ class MemorySystem(BaseModule):
                     return {
                         "status": "success",
                         "label": label,
-                        "content": concept,
+                        "concept": concept,
                         "memory_type": "semantic"
                     }
                 else:
@@ -791,7 +801,6 @@ class MemorySystem(BaseModule):
                 # Retrieve by type
                 concept_type = input_data["type"]
                 limit = input_data.get("limit", 100)
-                
                 concepts = self.semantic_memory.retrieve_by_type(concept_type, limit)
                 
                 return {
@@ -804,10 +813,10 @@ class MemorySystem(BaseModule):
             else:
                 return {
                     "status": "error",
-                    "error": "No retrieval criteria specified for semantic memory"
+                    "error": "Must provide label or type for semantic memory retrieval"
                 }
                 
-        elif memory_type == "long_term" and self.development_level >= 0.7:
+        elif memory_type == "long_term" and self.development_level >= 0.7 and self.long_term_memory is not None:
             # Retrieve from long-term memory
             if "memory_id" in input_data:
                 result = self.long_term_memory.retrieve_memory(input_data["memory_id"])
@@ -1059,16 +1068,22 @@ class MemorySystem(BaseModule):
         return new_level
     
     def get_state(self) -> Dict[str, Any]:
-        """Get the current state of the module"""
-        state = super().get_state()
+        """
+        Get the current state of the memory system
         
-        # Add memory-specific state
-        state.update({
-            "working_memory": self.working_memory.get_state(),
-            "episodic_memory": self.episodic_memory.get_state() if self.development_level >= 0.4 else "Not yet developed",
-            "semantic_memory": self.semantic_memory.get_state() if self.development_level >= 0.6 else "Not yet developed",
-            "long_term_memory": self.long_term_memory.get_state() if self.development_level >= 0.7 else "Not yet developed",
-            "associative_memory": self.associative_memory.get_state() if self.development_level >= 0.8 else "Not yet developed"
-        })
-        
-        return state 
+        Returns:
+            Dictionary containing state information
+        """
+        return {
+            "module_id": self.module_id,
+            "module_type": self.module_type,
+            "development_level": self.development_level,
+            "current_milestone": self._get_current_milestone(),
+            "memory_systems": {
+                "working_memory": self.working_memory.get_state(),
+                "episodic_memory": self.episodic_memory.get_state() if self.development_level >= 0.4 else "Not yet developed",
+                "semantic_memory": self.semantic_memory.get_state() if self.development_level >= 0.6 else "Not yet developed",
+                "long_term_memory": self.long_term_memory.get_state() if self.development_level >= 0.7 and self.long_term_memory is not None else "Not yet developed",
+                "associative_memory": self.associative_memory.get_state() if self.development_level >= 0.8 else "Not yet developed"
+            }
+        } 

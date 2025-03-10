@@ -34,8 +34,8 @@ import numpy as np
 from datetime import datetime
 from collections import deque
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.language.models import SemanticModel, LanguageNeuralState
 from lmm_project.modules.language.neural_net import SemanticNetwork, get_device
 from lmm_project.utils.llm_client import LLMClient
@@ -209,29 +209,77 @@ class SemanticProcessing(BaseModule):
     
     def _generate_concept_embedding(self, concept: str):
         """
-        Generate and store embedding for a concept
+        Generate and store embedding for a concept using LLM API
         
         Args:
             concept: The concept to generate embedding for
         """
-        try:
-            # Use LLM client to get embedding
-            embedding = self.llm_client.get_embedding(concept)
-            
-            # Handle different return formats
-            if isinstance(embedding, list):
-                if isinstance(embedding[0], list):
-                    # Handle nested list output
-                    self.semantic_model.concept_embeddings[concept] = embedding[0]
-                else:
-                    # Handle flat list output
-                    self.semantic_model.concept_embeddings[concept] = embedding
-        except Exception as e:
-            # Fall back to simplified embedding if LLM client fails
-            print(f"Warning: Failed to get embedding for '{concept}': {e}")
-            
-            # Create a simple hash-based embedding
-            self.semantic_model.concept_embeddings[concept] = [(hash(concept + str(i)) % 10000) / 10000 for i in range(64)]
+        # Maximum retry attempts
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Try to get embedding with primary model
+                embedding = self.llm_client.get_embedding(
+                    concept, 
+                    embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                )
+                
+                # Handle different return formats
+                if isinstance(embedding, list):
+                    if isinstance(embedding[0], list):
+                        # Handle nested list output
+                        self.semantic_model.concept_embeddings[concept] = embedding[0]
+                    else:
+                        # Handle flat list output
+                        self.semantic_model.concept_embeddings[concept] = embedding
+                
+                # If we got here, embedding was successful
+                return
+                
+            except Exception as e:
+                retry_count += 1
+                print(f"Warning: Embedding attempt {retry_count} failed for '{concept}': {e}")
+                
+                # On last retry, try with a fallback model
+                if retry_count == max_retries - 1:
+                    try:
+                        # Try with fallback embedding model
+                        embedding = self.llm_client.get_embedding(
+                            concept, 
+                            embedding_model="text-embedding-ada-002"
+                        )
+                        
+                        if isinstance(embedding, list):
+                            if isinstance(embedding[0], list):
+                                self.semantic_model.concept_embeddings[concept] = embedding[0]
+                            else:
+                                self.semantic_model.concept_embeddings[concept] = embedding
+                        
+                        # If we got here, fallback embedding was successful
+                        print(f"Successfully used fallback embedding model for '{concept}'")
+                        return
+                        
+                    except Exception as fallback_error:
+                        print(f"Fallback embedding also failed: {fallback_error}")
+        
+        # If all retries and fallbacks failed, log the error and create a warning entry
+        print(f"ERROR: All embedding attempts failed for '{concept}'")
+        
+        # Add a placeholder but mark it as invalid
+        # Instead of a random hash, use all zeros with a single 1 at a position based on the 
+        # concept's first character to maintain minimal consistency
+        placeholder = [0.0] * 64
+        first_char_val = ord(concept[0]) % 64 if concept else 0
+        placeholder[first_char_val] = 1.0
+        
+        self.semantic_model.concept_embeddings[concept] = placeholder
+        
+        # Also flag this concept as needing re-embedding later
+        if not hasattr(self, "_needs_embedding"):
+            self._needs_embedding = set()
+        self._needs_embedding.add(concept)
     
     def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -807,7 +855,7 @@ class SemanticProcessing(BaseModule):
     
     def _extract_features(self, text: str) -> torch.Tensor:
         """
-        Extract features from text
+        Extract semantic features from text using LLM embeddings
         
         Args:
             text: The text to extract features from
@@ -815,33 +863,134 @@ class SemanticProcessing(BaseModule):
         Returns:
             Tensor of features
         """
-        # Simple feature extraction
-        words = text.lower().split()
+        # If text is empty, return zero vector
+        if not text or text.strip() == "":
+            return torch.zeros((1, 128), dtype=torch.float32)
         
-        # Create a simple embedding for the text
+        # Cache key for efficiency
+        cache_key = hash(text)
+        
+        # Check if we have a cached embedding (maintain a small LRU cache)
+        if not hasattr(self, "_feature_cache"):
+            # Create a small LRU cache (OrderedDict would be better but this works)
+            self._feature_cache = {}
+            self._feature_cache_keys = []
+            self._max_cache_size = 100
+        
+        if cache_key in self._feature_cache:
+            return self._feature_cache[cache_key]
+        
+        try:
+            # Try to get embedding directly from LLM API
+            raw_embedding = self.llm_client.get_embedding(
+                text, 
+                embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+            )
+            
+            # Convert to tensor and resize if needed
+            if isinstance(raw_embedding, list):
+                if isinstance(raw_embedding[0], list):
+                    # Handle nested list
+                    raw_embedding = raw_embedding[0]
+                
+                # Resize to our target dimension (128)
+                if len(raw_embedding) >= 128:
+                    # If larger, take the first 128 dimensions
+                    embedding_data = raw_embedding[:128]
+                else:
+                    # If smaller, pad with zeros
+                    embedding_data = raw_embedding + [0.0] * (128 - len(raw_embedding))
+                
+                # Convert to tensor
+                embedding = torch.tensor([embedding_data], dtype=torch.float32)
+                
+                # Add to cache
+                self._feature_cache[cache_key] = embedding
+                self._feature_cache_keys.append(cache_key)
+                
+                # Maintain cache size
+                if len(self._feature_cache_keys) > self._max_cache_size:
+                    # Remove oldest entry
+                    oldest_key = self._feature_cache_keys.pop(0)
+                    del self._feature_cache[oldest_key]
+                    
+                return embedding
+        
+        except Exception as e:
+            print(f"Warning: Failed to get embedding for text: {e}")
+        
+        # Fallback to using contextual features if LLM embedding fails
+        # This is a more sophisticated approach than simple hashing
+        
+        # Prepare a feature vector
         embedding = torch.zeros(128, dtype=torch.float32)
         
-        for i, word in enumerate(words[:min(len(words), 20)]):  # Limit to 20 words
-            # Get position in embedding
-            pos = (hash(word) + i) % 120  # Keep a few positions for special features
-            embedding[pos] = 1.0
-            
-            # Add emphasis on first and last words
-            if i == 0:
-                embedding[120] = 1.0  # First word marker
-            if i == len(words) - 1:
-                embedding[121] = 1.0  # Last word marker
-                
-            # Add known concept marker if word is a known concept
-            if word in self.semantic_model.concept_network:
-                embedding[122] = 1.0
-                
-                # Add category information
-                category = self.semantic_model.concept_network[word]["category"]
-                category_hash = hash(category) % 5
-                embedding[123 + category_hash] = 1.0
+        # Tokenize and normalize
+        words = text.lower().split()
         
-        return embedding.unsqueeze(0)  # Add batch dimension
+        # Create a bag-of-words representation for known concepts
+        concept_count = 0
+        
+        for word in words:
+            if word in self.semantic_model.concept_network:
+                concept = self.semantic_model.concept_network[word]
+                concept_count += 1
+                
+                # Add concept features
+                if "category" in concept:
+                    category_id = hash(concept["category"]) % 20
+                    embedding[category_id] += 1.0
+                
+                # Add relation features if available
+                if "relations" in concept:
+                    for relation in concept["relations"][:5]:  # Limit to first 5
+                        relation_id = 20 + (hash(relation["type"] + relation["target"]) % 20)
+                        embedding[relation_id] += 0.5
+        
+        # Add special pattern detection
+        # Check for question pattern
+        if "?" in text or any(q in text.lower() for q in ["who", "what", "where", "when", "why", "how"]):
+            embedding[40] = 1.0  # Question marker
+        
+        # Check for negation
+        if any(neg in text.lower() for neg in ["not", "no", "never", "isn't", "aren't", "wasn't", "weren't"]):
+            embedding[41] = 1.0  # Negation marker
+        
+        # Grammatical features (basic)
+        word_count = len(words)
+        embedding[42] = min(1.0, word_count / 20)  # Normalized sentence length
+        
+        # Create context window features
+        for i, word in enumerate(words[:min(20, len(words))]):
+            # Position-aware features
+            pos_feature = 50 + (i % 10)  # Position features in 50-59 range
+            embedding[pos_feature] += 0.5
+            
+            # First and last word get special treatment
+            if i == 0:
+                embedding[60] = 1.0
+            if i == len(words) - 1:
+                embedding[61] = 1.0
+        
+        # Normalize the vector to unit length for better comparison
+        norm = torch.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+            
+        # Add batch dimension
+        result = embedding.unsqueeze(0)
+        
+        # Cache this result
+        self._feature_cache[cache_key] = result
+        self._feature_cache_keys.append(cache_key)
+        
+        # Maintain cache size
+        if len(self._feature_cache_keys) > self._max_cache_size:
+            # Remove oldest entry
+            oldest_key = self._feature_cache_keys.pop(0)
+            del self._feature_cache[oldest_key]
+            
+        return result
     
     def update_development(self, amount: float) -> float:
         """

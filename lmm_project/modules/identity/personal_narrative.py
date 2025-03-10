@@ -399,34 +399,38 @@ class PersonalNarrative(BaseModule):
         # Theme extraction requires higher development
         if self.development_level < 0.4:
             return {
-                "status": "undeveloped",
-                "message": "Theme extraction requires higher developmental level",
-                "development_level": self.development_level,
-                "required_level": 0.4,
+                "status": "error",
+                "message": "Theme extraction not available at current development level",
                 "process_id": process_id
             }
             
         # Extract data
         event_ids = input_data.get("event_ids", [])
-        suggested_name = input_data.get("name", "")
+        suggested_name = input_data.get("name")
+        suggested_description = input_data.get("description")
         
+        # Validate input
         if not event_ids:
-            return {"status": "error", "message": "No event_ids provided", "process_id": process_id}
+            return {
+                "status": "error",
+                "message": "No event IDs provided for theme extraction",
+                "process_id": process_id
+            }
             
-        # Check if events exist
+        # Get valid events
         valid_events = []
         for event_id in event_ids:
             if event_id in self.narrative.events:
                 valid_events.append(self.narrative.events[event_id])
-            
+                
         if not valid_events:
             return {
-                "status": "error", 
-                "message": "None of the provided event IDs were found", 
+                "status": "error",
+                "message": "No valid events found with provided IDs",
                 "process_id": process_id
             }
             
-        # Get embeddings for these events
+        # Get embeddings for events
         event_embeddings = []
         for event in valid_events:
             if event.event_id in self.event_embeddings:
@@ -448,12 +452,40 @@ class PersonalNarrative(BaseModule):
                 
         # Average embeddings to get theme representation
         if event_embeddings:
-            avg_embedding = torch.stack(event_embeddings).mean(dim=0).unsqueeze(0)
+            # Stack embeddings and average them
+            stacked_embeddings = torch.stack(event_embeddings)
+            avg_embedding = stacked_embeddings.mean(dim=0)
             
+            # The neural network expects input of shape [batch_size, input_dim] where input_dim is 128
+            # But our avg_embedding has shape [hidden_dim] which is 256
+            # We need to project it down to the expected input dimension
+            
+            # Check the shape of avg_embedding
+            if avg_embedding.dim() == 1:
+                # If it's a 1D tensor, add batch dimension
+                avg_embedding = avg_embedding.unsqueeze(0)  # Shape becomes [1, hidden_dim]
+                
+            # Move avg_embedding to the device before processing
+            avg_embedding = avg_embedding.to(self.device)
+                
+            # If the embedding dimension doesn't match the expected input dimension (128),
+            # we need to project it to the correct size
+            if avg_embedding.shape[1] != 128:
+                # Create a simple projection if needed (first time)
+                if not hasattr(self, 'projection_layer'):
+                    input_dim = avg_embedding.shape[1]  # Current dimension (likely 256)
+                    target_dim = 128  # Target dimension for the network input
+                    self.projection_layer = torch.nn.Linear(input_dim, target_dim)
+                    # Ensure the projection layer is on the same device as the input tensor
+                    self.projection_layer.to(self.device)
+                
+                # Apply the projection
+                avg_embedding = self.projection_layer(avg_embedding)
+                
             # Process through neural network for theme extraction
             with torch.no_grad():
                 theme_output = self.network(
-                    avg_embedding.to(self.device),
+                    avg_embedding,  # Already on the correct device
                     operation="extract_theme"
                 )
                 
@@ -762,7 +794,7 @@ class PersonalNarrative(BaseModule):
         """
         # For demonstration, create simple random features
         # In a real implementation, this would use proper feature extraction
-        feature_dim = 128
+        feature_dim = 128  # This should match the input_dim of the NarrativeNetwork
         
         if isinstance(data, str):
             # Seed random generator with hash of string to ensure consistent features
@@ -770,7 +802,7 @@ class PersonalNarrative(BaseModule):
             np.random.seed(seed)
             
             # Generate "features" based on the text
-            features = np.random.randn(feature_dim)
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
             features = features / np.linalg.norm(features)  # Normalize
             
         elif isinstance(data, dict):
@@ -778,18 +810,16 @@ class PersonalNarrative(BaseModule):
             seed = hash(str(sorted(data.items()))) % 10000
             np.random.seed(seed)
             
-            features = np.random.randn(feature_dim)
+            # Generate "features" based on the dictionary
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
             features = features / np.linalg.norm(features)  # Normalize
             
         else:
             # Default random features
-            seed = hash(str(data)) % 10000
-            np.random.seed(seed)
-            
-            features = np.random.randn(feature_dim)
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
             features = features / np.linalg.norm(features)  # Normalize
         
-        return torch.tensor(features, dtype=torch.float32).unsqueeze(0)
+        return torch.FloatTensor(features)
     
     def update_development(self, amount: float) -> float:
         """

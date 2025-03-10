@@ -1,18 +1,137 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Any, Optional, Tuple
+import psutil
+import gc
+from typing import Dict, List, Any, Optional, Tuple, Union
+
+from lmm_project.utils.llm_client import LLMClient
 
 def get_device() -> torch.device:
     """
-    Get the appropriate device (GPU if available, otherwise CPU)
+    Get the appropriate device (GPU if available, otherwise CPU) with memory management
     
     Returns:
         torch.device: The device to use for tensor operations
     """
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        # Check available GPU memory before deciding
+        try:
+            free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+            # Require at least 1GB of free memory
+            if free_memory > 1024 * 1024 * 1024:
+                return torch.device("cuda")
+            else:
+                print(f"Warning: CUDA available but low memory ({free_memory / (1024**3):.2f} GB free). Using CPU.")
+                return torch.device("cpu")
+        except Exception as e:
+            print(f"Error checking CUDA memory: {e}. Falling back to CPU.")
+            return torch.device("cpu")
     return torch.device("cpu")
+
+def get_semantic_embedding(text: str, cache: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
+    """
+    Generate semantic embedding for text instead of random vectors
+    
+    Args:
+        text: Text to generate embedding for
+        cache: Optional cache dictionary to avoid repeated embedding generation
+        
+    Returns:
+        torch.Tensor: Embedding tensor
+    """
+    # Check cache first if provided
+    if cache is not None and text in cache:
+        return cache[text]
+        
+    try:
+        # Generate embedding
+        client = LLMClient()
+        embedding = client.get_embedding(text)
+        
+        # Convert to tensor
+        embedding_tensor = torch.tensor(embedding, dtype=torch.float32)
+        
+        # Add to cache if provided
+        if cache is not None:
+            cache[text] = embedding_tensor
+            
+        return embedding_tensor
+    except Exception as e:
+        print(f"Error generating embedding: {e}. Falling back to random vector.")
+        # Fallback to random vector of appropriate size (768 for most embedding models)
+        return torch.randn(768, dtype=torch.float32) * 0.1
+
+def clean_cuda_memory():
+    """
+    Clean up CUDA memory to prevent OOM errors
+    """
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+
+class DevelopmentalLayer(nn.Module):
+    """
+    Layer that gradually increases in complexity with development level
+    
+    Provides smooth transition between developmental stages rather than
+    abrupt changes.
+    """
+    
+    def __init__(self, 
+                in_features: int, 
+                out_features: int, 
+                min_dev_level: float = 0.0,
+                max_dev_level: float = 1.0):
+        """
+        Initialize developmental layer
+        
+        Args:
+            in_features: Input feature dimension
+            out_features: Output feature dimension
+            min_dev_level: Minimum development level where layer begins to function
+            max_dev_level: Development level where layer reaches full functionality
+        """
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features)
+        self.min_dev_level = min_dev_level
+        self.max_dev_level = max_dev_level
+    
+    def forward(self, x: torch.Tensor, dev_level: float) -> torch.Tensor:
+        """
+        Forward pass with developmental modulation
+        
+        Args:
+            x: Input tensor
+            dev_level: Current development level (0.0 to 1.0)
+            
+        Returns:
+            Output tensor modulated by development level
+        """
+        # Calculate modulation factor (smooth transition)
+        if dev_level <= self.min_dev_level:
+            mod_factor = 0.0
+        elif dev_level >= self.max_dev_level:
+            mod_factor = 1.0
+        else:
+            # Smooth interpolation between min and max
+            mod_factor = (dev_level - self.min_dev_level) / (self.max_dev_level - self.min_dev_level)
+        
+        # Ensure input has proper shape
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)  # Add batch dimension
+        
+        # Apply layer with modulation
+        output = self.linear(x)
+        
+        # Apply modulation with proper broadcasting
+        if len(output.shape) == 1:
+            output = output.unsqueeze(0)
+        
+        # Reshape mod_factor for proper broadcasting
+        mod_factor = torch.tensor(mod_factor, device=output.device).view(1, 1)
+        
+        return output * mod_factor
 
 class SelfConceptNetwork(nn.Module):
     """
@@ -22,12 +141,12 @@ class SelfConceptNetwork(nn.Module):
     into a coherent self-representation.
     """
     
-    def __init__(self, input_dim: int = 128, hidden_dim: int = 256, output_dim: int = 64):
+    def __init__(self, input_dim: int = 768, hidden_dim: int = 256, output_dim: int = 64):
         """
         Initialize the self-concept network
         
         Args:
-            input_dim: Dimension of input features
+            input_dim: Dimension of input features (set to embedding dim)
             hidden_dim: Dimension of hidden layers
             output_dim: Dimension of output features
         """
@@ -41,25 +160,28 @@ class SelfConceptNetwork(nn.Module):
         self.hidden2 = nn.Linear(hidden_dim, hidden_dim)
         
         # Domain-specific processing paths
-        self.domain_physical = nn.Linear(hidden_dim, hidden_dim//2)
-        self.domain_social = nn.Linear(hidden_dim, hidden_dim//2)
-        self.domain_academic = nn.Linear(hidden_dim, hidden_dim//2)
-        self.domain_emotional = nn.Linear(hidden_dim, hidden_dim//2)
+        self.domain_physical = DevelopmentalLayer(hidden_dim, hidden_dim//2, min_dev_level=0.3, max_dev_level=0.6)
+        self.domain_social = DevelopmentalLayer(hidden_dim, hidden_dim//2, min_dev_level=0.3, max_dev_level=0.6)
+        self.domain_academic = DevelopmentalLayer(hidden_dim, hidden_dim//2, min_dev_level=0.4, max_dev_level=0.7)
+        self.domain_emotional = DevelopmentalLayer(hidden_dim, hidden_dim//2, min_dev_level=0.5, max_dev_level=0.8)
         
         # Integration layer
         self.integration = nn.Linear(hidden_dim * 2, hidden_dim)
         
         # Output layers
         self.attribute_content = nn.Linear(hidden_dim, output_dim)
-        self.attribute_confidence = nn.Linear(hidden_dim, 1)
-        self.attribute_importance = nn.Linear(hidden_dim, 1)
-        self.attribute_valence = nn.Linear(hidden_dim, 1)
+        self.attribute_confidence = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.1, max_dev_level=0.4)
+        self.attribute_importance = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.2, max_dev_level=0.5)
+        self.attribute_valence = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.3, max_dev_level=0.6)
         
         # Global self-evaluation
-        self.global_self_esteem = nn.Linear(hidden_dim, 1)
+        self.global_self_esteem = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.4, max_dev_level=0.7)
         
         # Developmental factor (modulates network with development level)
         self.developmental_factor = nn.Parameter(torch.tensor(0.0), requires_grad=False)
+        
+        # Embedding cache to prevent repeated embedding generation
+        self.embedding_cache = {}
         
         # Dropout for regularization
         self.dropout = nn.Dropout(0.3)
@@ -75,57 +197,61 @@ class SelfConceptNetwork(nn.Module):
         Returns:
             Dictionary containing processed outputs
         """
-        # Get developmental modulation factor
-        dev_factor = torch.sigmoid(self.developmental_factor * 5)
+        # Get development level (direct value rather than sigmoid)
+        dev_level = self.developmental_factor.item()
         
-        # Initial layers with developmental modulation
+        # Check input dimensionality and reshape if needed
+        if len(input_data.shape) == 1:
+            input_data = input_data.unsqueeze(0)  # Add batch dimension
+            
+        # Initial layers 
         x = F.relu(self.input_layer(input_data))
         x = self.dropout(x)
         
-        # Hidden layers
+        # Hidden layers with gradual developmental progression
         h1 = F.relu(self.hidden1(x))
         h1 = self.dropout(h1)
         
-        # Development affects depth of processing
-        if dev_factor > 0.3:
+        # Second hidden layer gradually activates with development
+        if dev_level > 0.2:
+            # Smooth transition factor
+            trans_factor = min(1.0, (dev_level - 0.2) / 0.3)
             h2 = F.relu(self.hidden2(h1))
             h2 = self.dropout(h2)
-            x = h2
+            # Weighted combination
+            x = h1 * (1 - trans_factor) + h2 * trans_factor
         else:
             x = h1
         
-        # Domain-specific processing based on development level
-        if dev_factor > 0.5 and domain is not None:
+        # Domain-specific processing with gradual development
+        domain_x = None
+        if domain is not None:
             if domain == "physical":
-                domain_x = F.relu(self.domain_physical(x))
+                domain_x = F.relu(self.domain_physical(x, dev_level))
             elif domain == "social":
-                domain_x = F.relu(self.domain_social(x))
+                domain_x = F.relu(self.domain_social(x, dev_level))
             elif domain == "academic":
-                domain_x = F.relu(self.domain_academic(x))
+                domain_x = F.relu(self.domain_academic(x, dev_level))
             elif domain == "emotional":
-                domain_x = F.relu(self.domain_emotional(x))
-            else:
-                domain_x = x
-                
-            # Concatenate domain-specific and general processing
+                domain_x = F.relu(self.domain_emotional(x, dev_level))
+        
+        # Integrate domain-specific processing if available
+        if domain_x is not None and domain_x.abs().sum() > 0:
             x = torch.cat([x, domain_x], dim=1)
             x = F.relu(self.integration(x))
         
         # Generate outputs
         attribute_content = self.attribute_content(x)
         
-        # Meta-cognitive aspects develop with maturity
-        if dev_factor > 0.2:
-            confidence = torch.sigmoid(self.attribute_confidence(x))
-            importance = torch.sigmoid(self.attribute_importance(x))
-            valence = torch.tanh(self.attribute_valence(x))
-            self_esteem = torch.sigmoid(self.global_self_esteem(x))
-        else:
-            # Limited metacognitive abilities at early development
-            confidence = torch.sigmoid(torch.randn_like(self.attribute_confidence(x)) * 0.1 + 0.5)
-            importance = torch.sigmoid(torch.randn_like(self.attribute_importance(x)) * 0.1 + 0.5)
-            valence = torch.tanh(torch.randn_like(self.attribute_valence(x)) * 0.1)
-            self_esteem = torch.sigmoid(torch.randn_like(self.global_self_esteem(x)) * 0.1 + 0.5)
+        # Meta-cognitive aspects develop gradually
+        confidence = torch.sigmoid(self.attribute_confidence(x, dev_level))
+        importance = torch.sigmoid(self.attribute_importance(x, dev_level))
+        valence = torch.tanh(self.attribute_valence(x, dev_level))
+        self_esteem = torch.sigmoid(self.global_self_esteem(x, dev_level))
+        
+        # Clean up memory if needed
+        if torch.cuda.is_available() and torch.cuda.memory_allocated() > 0.8 * torch.cuda.get_device_properties(0).total_memory:
+            clean_cuda_memory()
         
         return {
             "attribute_content": attribute_content,
@@ -153,12 +279,12 @@ class NarrativeNetwork(nn.Module):
     a coherent personal narrative with themes and meaning.
     """
     
-    def __init__(self, input_dim: int = 128, hidden_dim: int = 256, output_dim: int = 64):
+    def __init__(self, input_dim: int = 768, hidden_dim: int = 256, output_dim: int = 64):
         """
         Initialize the narrative network
         
         Args:
-            input_dim: Dimension of input features
+            input_dim: Dimension of input features (set to embedding dim)
             hidden_dim: Dimension of hidden layers
             output_dim: Dimension of output features
         """
@@ -175,7 +301,7 @@ class NarrativeNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim)
         )
         
-        # Theme extraction
+        # Theme extraction with developmental adaptation
         self.theme_extraction = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim//2),
             nn.ReLU(),
@@ -211,6 +337,9 @@ class NarrativeNetwork(nn.Module):
             batch_first=True,
             dropout=0.3
         )
+        
+        # Embedding cache to prevent repeated embedding generation
+        self.embedding_cache = {}
     
     def forward(self, 
                input_data: torch.Tensor, 
@@ -231,8 +360,12 @@ class NarrativeNetwork(nn.Module):
         Returns:
             Dictionary containing processed outputs
         """
-        # Get developmental modulation factor
-        dev_factor = torch.sigmoid(self.developmental_factor * 5)
+        # Get development level (direct value rather than sigmoid)
+        dev_level = self.developmental_factor.item()
+        
+        # Check input dimensionality and reshape if needed
+        if len(input_data.shape) == 1:
+            input_data = input_data.unsqueeze(0)  # Add batch dimension
         
         # Initial processing
         x = F.relu(self.input_layer(input_data))
@@ -241,44 +374,81 @@ class NarrativeNetwork(nn.Module):
             # Event encoding
             event_encoding = self.event_encoder(x)
             
-            # Event importance (develops with maturity)
-            importance = torch.sigmoid(self.importance_evaluation(event_encoding))
+            # Event importance - gradually develops
+            importance_factor = min(1.0, max(0.2, dev_level))
+            importance = torch.sigmoid(self.importance_evaluation(event_encoding) * importance_factor)
             
-            # Emotional processing
+            # Emotional processing - even early development has this
             emotional_impact = torch.tanh(self.emotional_impact(event_encoding))
             
-            # Context-sensitive processing with development
-            if dev_factor > 0.4 and past_events is not None:
-                # Add current event to past events
+            # Context-sensitive processing with gradual development
+            # Calculate threshold and transition smoothness
+            context_threshold = 0.4  # When context sensitivity begins
+            transition_width = 0.2  # How quickly it develops
+            
+            # Initialize outputs
+            theme_vector = None
+            interpretation = None
+            temporal_context = event_encoding
+            
+            # Process with past events if provided
+            if past_events is not None:
                 batch_size = input_data.size(0)
-                event_expanded = event_encoding.unsqueeze(1)  # [batch_size, 1, hidden_dim]
                 
-                # Process temporal sequence with LSTM
-                if past_events.size(1) > 0:
-                    all_events = torch.cat([past_events, event_expanded], dim=1)
-                    seq_output, _ = self.temporal_lstm(all_events)
-                    temporal_context = seq_output[:, -1, :]  # Get last output
+                # Gradually activate context sensitivity
+                if dev_level > context_threshold:
+                    # Calculate smooth transition factor
+                    context_factor = min(1.0, (dev_level - context_threshold) / transition_width)
+                    
+                    # Add current event to past events
+                    event_expanded = event_encoding.unsqueeze(1)  # [batch_size, 1, hidden_dim]
+                    
+                    # Process temporal sequence with LSTM if we have past events
+                    if past_events.size(1) > 0:
+                        all_events = torch.cat([past_events, event_expanded], dim=1)
+                        seq_output, _ = self.temporal_lstm(all_events)
+                        # Gradually transition to using temporal context
+                        lstm_context = seq_output[:, -1, :]  # Get last output
+                        temporal_context = event_encoding * (1 - context_factor) + lstm_context * context_factor
+                    
+                    # Theme extraction with smooth developmental progression
+                    theme_threshold = 0.5  # When theme extraction begins
+                    theme_width = 0.2  # How quickly it develops
+                    
+                    if dev_level > theme_threshold:
+                        theme_factor = min(1.0, (dev_level - theme_threshold) / theme_width)
+                        
+                        # Extract theme
+                        raw_theme = self.theme_extraction(temporal_context)
+                        
+                        # Apply developmental factor
+                        theme_vector = raw_theme * theme_factor
+                        
+                        # Generate interpretation by combining event and theme
+                        context_augmented = torch.cat([event_encoding, theme_vector], dim=1)
+                        interpretation = self.interpretation(context_augmented) * theme_factor
+                    else:
+                        # Partial theme development
+                        raw_theme = self.theme_extraction(temporal_context)
+                        theme_vector = torch.zeros_like(raw_theme)
+                        interpretation = torch.zeros((batch_size, self.interpretation[-1].out_features),
+                                                   device=input_data.device)
                 else:
-                    temporal_context = event_encoding
-                
-                # Theme extraction with context
-                if dev_factor > 0.6:
-                    theme_vector = self.theme_extraction(temporal_context)
-                    # Generate interpretation with thematic understanding
-                    context_augmented = torch.cat([event_encoding, theme_vector], dim=1)
-                    interpretation = self.interpretation(context_augmented)
-                else:
+                    # No context sensitivity yet
                     theme_vector = torch.zeros((batch_size, self.theme_extraction[0].out_features), 
                                              device=input_data.device)
                     interpretation = torch.zeros((batch_size, self.interpretation[-1].out_features),
                                                device=input_data.device)
             else:
-                # Simple processing without context at early development
-                temporal_context = event_encoding
+                # No past events provided
                 theme_vector = torch.zeros((input_data.size(0), self.theme_extraction[0].out_features), 
                                          device=input_data.device)
                 interpretation = torch.zeros((input_data.size(0), self.interpretation[-1].out_features),
                                            device=input_data.device)
+            
+            # Clean up memory if needed
+            if torch.cuda.is_available() and torch.cuda.memory_allocated() > 0.8 * torch.cuda.get_device_properties(0).total_memory:
+                clean_cuda_memory()
             
             return {
                 "event_encoding": event_encoding,
@@ -291,33 +461,51 @@ class NarrativeNetwork(nn.Module):
             
         elif operation == "extract_theme":
             # Theme extraction from events
-            # At early development, themes are simple and concrete
-            if dev_factor < 0.4:
-                theme_vector = torch.randn_like(self.theme_extraction(x)) * 0.1
+            # Gradual development of theme extraction
+            theme_threshold = 0.3  # When theme extraction begins
+            theme_width = 0.3  # How quickly it develops
+            
+            if dev_level < theme_threshold:
+                # Early development - no real theme extraction yet
+                null_theme = torch.zeros_like(self.theme_extraction(x))
+                return {"theme_vector": null_theme}
             else:
-                theme_vector = self.theme_extraction(x)
+                # Calculate smooth transition factor
+                theme_factor = min(1.0, (dev_level - theme_threshold) / theme_width)
                 
-            return {
-                "theme_vector": theme_vector
-            }
+                # Extract theme with developmental scaling
+                raw_theme = self.theme_extraction(x)
+                theme_vector = raw_theme * theme_factor
+                
+                return {"theme_vector": theme_vector}
             
         elif operation == "evaluate_coherence":
-            # Evaluate narrative coherence
-            # At early development, coherence evaluation is limited
-            if dev_factor < 0.6:
-                coherence = torch.sigmoid(torch.tensor([0.3], device=input_data.device))
+            # Evaluate narrative coherence with gradual development
+            coherence_threshold = 0.4  # When coherence evaluation begins
+            coherence_width = 0.3  # How quickly it develops
+            
+            # Initialize with developmentally appropriate defaults
+            if dev_level < coherence_threshold:
+                base_coherence = 0.3 * (dev_level / coherence_threshold)  # Very basic coherence
+                coherence = torch.tensor([base_coherence], device=input_data.device)
             else:
+                # Calculate smooth transition factor
+                coherence_factor = min(1.0, (dev_level - coherence_threshold) / coherence_width)
+                
                 # Process with temporal LSTM if past events available
                 if past_events is not None and past_events.size(1) > 0:
+                    # Use temporal sequence for coherence evaluation
                     seq_output, _ = self.temporal_lstm(past_events)
                     temporal_features = seq_output[:, -1, :]
-                    coherence = torch.sigmoid(self.coherence_evaluation(temporal_features))
+                    raw_coherence = self.coherence_evaluation(temporal_features)
                 else:
-                    coherence = torch.sigmoid(self.coherence_evaluation(x))
+                    # Fallback to simpler coherence evaluation
+                    raw_coherence = self.coherence_evaluation(x)
+                
+                # Apply developmental factor
+                coherence = torch.sigmoid(raw_coherence * coherence_factor)
             
-            return {
-                "coherence": coherence
-            }
+            return {"coherence": coherence}
         
         # Default return
         return {"features": x}
@@ -340,12 +528,12 @@ class PreferenceNetwork(nn.Module):
     extracts values from preference patterns.
     """
     
-    def __init__(self, input_dim: int = 128, hidden_dim: int = 256, output_dim: int = 64):
+    def __init__(self, input_dim: int = 768, hidden_dim: int = 256, output_dim: int = 64):
         """
         Initialize the preference network
         
         Args:
-            input_dim: Dimension of input features
+            input_dim: Dimension of input features (set to embedding dim)
             hidden_dim: Dimension of hidden layers
             output_dim: Dimension of output features
         """
@@ -362,21 +550,16 @@ class PreferenceNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim)
         )
         
-        # Preference evaluation
-        self.valence_evaluation = nn.Linear(hidden_dim, 1)
-        self.strength_evaluation = nn.Linear(hidden_dim, 1)
-        self.certainty_evaluation = nn.Linear(hidden_dim, 1)
+        # Preference evaluation with developmental layers
+        self.valence_evaluation = nn.Linear(hidden_dim, 1)  # Basic approach/avoid develops early
+        self.strength_evaluation = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.2, max_dev_level=0.5)
+        self.certainty_evaluation = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.3, max_dev_level=0.6)
         
         # Value extraction (higher-level preferences)
-        self.value_extraction = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_dim//2, output_dim)
-        )
+        self.value_extraction = DevelopmentalLayer(hidden_dim, output_dim, min_dev_level=0.5, max_dev_level=0.8)
         
         # Value importance evaluation
-        self.value_importance = nn.Linear(output_dim, 1)
+        self.value_importance = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.5, max_dev_level=0.8)
         
         # Preference application (using preferences to make decisions)
         self.preference_application = nn.Sequential(
@@ -388,6 +571,9 @@ class PreferenceNetwork(nn.Module):
         
         # Developmental factor
         self.developmental_factor = nn.Parameter(torch.tensor(0.0), requires_grad=False)
+        
+        # Embedding cache to prevent repeated embedding generation
+        self.embedding_cache = {}
     
     def forward(self, 
                input_data: torch.Tensor, 
@@ -407,8 +593,12 @@ class PreferenceNetwork(nn.Module):
         Returns:
             Dictionary containing processed outputs
         """
-        # Get developmental modulation factor
-        dev_factor = torch.sigmoid(self.developmental_factor * 5)
+        # Get development level (direct value rather than sigmoid)
+        dev_level = self.developmental_factor.item()
+        
+        # Check input dimensionality and reshape if needed
+        if len(input_data.shape) == 1:
+            input_data = input_data.unsqueeze(0)  # Add batch dimension
         
         # Initial processing
         x = F.relu(self.input_layer(input_data))
@@ -417,26 +607,20 @@ class PreferenceNetwork(nn.Module):
             # Preference formation
             preference_encoding = self.preference_formation(x)
             
-            # Basic preference evaluation (develops with maturity)
-            if dev_factor < 0.2:
-                # Simple approach/avoid at early stages
-                valence = torch.tanh(self.valence_evaluation(preference_encoding)) 
-                strength = torch.ones_like(self.strength_evaluation(preference_encoding)) * 0.5
-                certainty = torch.ones_like(self.certainty_evaluation(preference_encoding)) * 0.5
-            else:
-                # More nuanced preferences with development
-                valence = torch.tanh(self.valence_evaluation(preference_encoding))
-                strength = torch.sigmoid(self.strength_evaluation(preference_encoding))
-                certainty = torch.sigmoid(self.certainty_evaluation(preference_encoding))
+            # Basic preference evaluation (valence develops early)
+            valence = torch.tanh(self.valence_evaluation(preference_encoding))
+            
+            # More nuanced preferences develop gradually
+            strength = torch.sigmoid(self.strength_evaluation(preference_encoding, dev_level))
+            certainty = torch.sigmoid(self.certainty_evaluation(preference_encoding, dev_level))
             
             # Value extraction develops later
-            if dev_factor > 0.6:
-                value_vector = self.value_extraction(preference_encoding)
-                value_importance = torch.sigmoid(self.value_importance(value_vector))
-            else:
-                value_vector = torch.zeros((input_data.size(0), self.value_extraction[-1].out_features), 
-                                         device=input_data.device)
-                value_importance = torch.zeros((input_data.size(0), 1), device=input_data.device)
+            value_vector = self.value_extraction(preference_encoding, dev_level)
+            value_importance = torch.sigmoid(self.value_importance(preference_encoding, dev_level))
+            
+            # Clean up memory if needed
+            if torch.cuda.is_available() and torch.cuda.memory_allocated() > 0.8 * torch.cuda.get_device_properties(0).total_memory:
+                clean_cuda_memory()
             
             return {
                 "preference_encoding": preference_encoding,
@@ -449,16 +633,17 @@ class PreferenceNetwork(nn.Module):
             
         elif operation == "extract_value":
             # Value extraction from preference patterns
-            # Only available at higher development levels
-            if dev_factor < 0.6:
-                value_vector = torch.zeros((input_data.size(0), self.value_extraction[-1].out_features), 
-                                         device=input_data.device)
-                value_importance = torch.zeros((input_data.size(0), 1), device=input_data.device)
-            else:
-                preference_encoding = self.preference_formation(x)
-                value_vector = self.value_extraction(preference_encoding)
-                value_importance = torch.sigmoid(self.value_importance(value_vector))
-                
+            # Gradual development of value extraction
+            value_threshold = 0.5  # When value extraction begins
+            value_width = 0.3  # How quickly it develops
+            
+            # Preference encoding is available at all development levels
+            preference_encoding = self.preference_formation(x)
+            
+            # Value extraction with developmental scaling
+            value_vector = self.value_extraction(preference_encoding, dev_level)
+            value_importance = torch.sigmoid(self.value_importance(preference_encoding, dev_level))
+            
             return {
                 "value_vector": value_vector,
                 "value_importance": value_importance
@@ -468,21 +653,39 @@ class PreferenceNetwork(nn.Module):
             # Apply preferences to a choice context
             preference_encoding = self.preference_formation(x)
             
-            # Combine preference with context
-            combined = torch.cat([preference_encoding, context], dim=1)
+            # Calculate application threshold and factor
+            application_threshold = 0.3  # When preference application begins
+            application_width = 0.3  # How quickly it develops
             
-            # Generate decision influence
-            decision_influence = self.preference_application(combined)
-            
-            # Decision confidence based on preference strength and certainty
-            strength = torch.sigmoid(self.strength_evaluation(preference_encoding))
-            certainty = torch.sigmoid(self.certainty_evaluation(preference_encoding))
-            confidence = strength * certainty
-            
-            return {
-                "decision_influence": decision_influence,
-                "confidence": confidence
-            }
+            if dev_level < application_threshold:
+                # Very basic preference application
+                decision_factor = dev_level / application_threshold
+                combined = torch.cat([preference_encoding, context], dim=1)
+                basic_influence = F.tanh(combined.mean(dim=1, keepdim=True)) * decision_factor
+                
+                return {
+                    "decision_influence": basic_influence,
+                    "confidence": torch.tensor([0.3 * decision_factor], device=input_data.device)
+                }
+            else:
+                # More sophisticated preference application
+                application_factor = min(1.0, (dev_level - application_threshold) / application_width)
+                
+                # Combine preference with context
+                combined = torch.cat([preference_encoding, context], dim=1)
+                
+                # Generate decision influence
+                decision_influence = self.preference_application(combined) * application_factor
+                
+                # Decision confidence based on preference strength and certainty
+                strength = torch.sigmoid(self.strength_evaluation(preference_encoding, dev_level))
+                certainty = torch.sigmoid(self.certainty_evaluation(preference_encoding, dev_level))
+                confidence = strength * certainty * application_factor
+                
+                return {
+                    "decision_influence": decision_influence,
+                    "confidence": confidence
+                }
         
         # Default return
         return {"features": x}
@@ -505,12 +708,12 @@ class PersonalityNetwork(nn.Module):
     and organizes them into stable traits.
     """
     
-    def __init__(self, input_dim: int = 128, hidden_dim: int = 256, output_dim: int = 64, num_traits: int = 10):
+    def __init__(self, input_dim: int = 768, hidden_dim: int = 256, output_dim: int = 64, num_traits: int = 10):
         """
         Initialize the personality network
         
         Args:
-            input_dim: Dimension of input features
+            input_dim: Dimension of input features (set to embedding dim)
             hidden_dim: Dimension of hidden layers
             output_dim: Dimension of output features
             num_traits: Number of personality traits to track
@@ -528,14 +731,11 @@ class PersonalityNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim)
         )
         
-        # Trait extraction
-        self.trait_extraction = nn.Sequential(
-            nn.Linear(hidden_dim, num_traits),
-            nn.Sigmoid()  # Traits from 0.0 to 1.0
-        )
+        # Trait extraction with developmental adaptation
+        self.trait_extraction = DevelopmentalLayer(hidden_dim, num_traits, min_dev_level=0.2, max_dev_level=0.6)
         
         # Dimension organization (e.g., Big Five)
-        self.dimension_organization = nn.Linear(num_traits, 5)
+        self.dimension_organization = DevelopmentalLayer(num_traits, 5, min_dev_level=0.5, max_dev_level=0.8)
         
         # Trait application (predicting behavior from traits)
         self.trait_application = nn.Sequential(
@@ -546,15 +746,17 @@ class PersonalityNetwork(nn.Module):
         )
         
         # Trait stability tracking
-        self.stability_evaluation = nn.Linear(hidden_dim, 1)
+        self.stability_evaluation = DevelopmentalLayer(hidden_dim, 1, min_dev_level=0.3, max_dev_level=0.7)
         
         # Developmental factor
         self.developmental_factor = nn.Parameter(torch.tensor(0.0), requires_grad=False)
         
         # Running average of trait scores for stability
-        register_buffer = lambda name, tensor: self.register_buffer(name, tensor)
-        register_buffer('trait_averages', torch.zeros(num_traits))
-        register_buffer('trait_update_count', torch.zeros(1))
+        self.register_buffer('trait_averages', torch.zeros(num_traits))
+        self.register_buffer('trait_update_count', torch.zeros(1))
+        
+        # Embedding cache to prevent repeated embedding generation
+        self.embedding_cache = {}
     
     def forward(self, 
                input_data: torch.Tensor, 
@@ -574,87 +776,81 @@ class PersonalityNetwork(nn.Module):
         Returns:
             Dictionary containing processed outputs
         """
-        # Get developmental modulation factor
-        dev_factor = torch.sigmoid(self.developmental_factor * 5)
+        # Get development level (direct value rather than sigmoid)
+        dev_level = self.developmental_factor.item()
+        
+        # Check input dimensionality and reshape if needed
+        if len(input_data.shape) == 1:
+            input_data = input_data.unsqueeze(0)  # Add batch dimension
         
         # Initial processing
         x = F.relu(self.input_layer(input_data))
         
         if operation == "extract_traits":
-            # Behavioral pattern recognition
+            # Extract traits from behavioral patterns
             patterns = self.pattern_recognition(x)
+            trait_scores = torch.sigmoid(self.trait_extraction(patterns, dev_level))
             
-            # Trait extraction (develops with maturity)
-            if dev_factor < 0.2:
-                # Very simple temperamental tendencies at early stages
-                trait_scores = torch.sigmoid(torch.randn_like(self.trait_extraction(patterns)) * 0.1 + 0.5)
-                # No dimension organization at early stages
-                dimension_scores = torch.zeros((input_data.size(0), 5), device=input_data.device)
-                stability = torch.tensor([0.1], device=input_data.device)
+            # Update running averages if we have a batch
+            if trait_scores.size(0) > 0:
+                batch_avg = trait_scores.mean(0)  # Average across batch dimension
+                self.trait_averages = (self.trait_averages * self.trait_update_count + batch_avg) / (self.trait_update_count + 1)
+                self.trait_update_count += 1
+            
+            # Organize into dimensions if development level allows
+            if dev_level >= 0.5:
+                dimension_scores = torch.sigmoid(self.dimension_organization(trait_scores, dev_level))
             else:
-                # More structured trait extraction with development
-                trait_scores = self.trait_extraction(patterns)
-                
-                # Update running averages for stability tracking
-                if self.training:
-                    batch_avg = trait_scores.mean(0)
-                    old_count = self.trait_update_count
-                    new_count = old_count + 1
-                    self.trait_averages.copy_((self.trait_averages * old_count + batch_avg) / new_count)
-                    self.trait_update_count.copy_(new_count)
-                
-                # Stability calculation
-                stability = torch.sigmoid(self.stability_evaluation(patterns))
-                
-                # Dimension organization develops later
-                if dev_factor > 0.6:
-                    dimension_scores = torch.tanh(self.dimension_organization(trait_scores))
-                else:
-                    dimension_scores = torch.zeros((input_data.size(0), 5), device=input_data.device)
+                dimension_scores = torch.zeros(trait_scores.size(0), 5, device=trait_scores.device)
             
             return {
-                "trait_scores": trait_scores,
-                "dimension_scores": dimension_scores,
-                "stability": stability,
-                "patterns": patterns
+                "patterns": trait_scores,
+                "dimensions": dimension_scores
             }
             
         elif operation == "predict_behavior":
-            # Predict behavior from traits
-            # Only meaningful at higher development levels
-            if dev_factor < 0.4:
-                behavior_prediction = torch.randn((input_data.size(0), self.trait_application[-1].out_features), 
-                                                device=input_data.device) * 0.1
-            else:
-                # Extract traits first
-                patterns = self.pattern_recognition(x)
-                trait_scores = self.trait_extraction(patterns)
-                
-                # Context-sensitive behavior prediction
-                if context is not None and dev_factor > 0.6:
-                    # Modulate traits based on context (trait x context interaction)
-                    context_processed = F.relu(self.input_layer(context))
-                    # Simple context influence through multiplication
-                    trait_scores = trait_scores * torch.sigmoid(context_processed.mean(dim=1, keepdim=True))
-                
-                # Predict behavior from traits
-                behavior_prediction = self.trait_application(trait_scores)
-                
+            # Predict behavior based on traits
+            if context is None:
+                context = torch.zeros(x.size(0), self.trait_application[0].in_features, device=x.device)
+            
+            # Apply traits to predict behavior
+            behavior = self.trait_application(context)
+            
             return {
-                "behavior_prediction": behavior_prediction
+                "behavior": behavior
             }
             
         elif operation == "evaluate_stability":
-            # Evaluate trait stability
-            patterns = self.pattern_recognition(x)
-            trait_scores = self.trait_extraction(patterns)
+            # Evaluate trait stability with gradual development
+            stability_threshold = 0.3  # When stability evaluation begins
+            stability_width = 0.4  # How quickly it develops
             
-            # Calculate deviation from running averages
-            if self.trait_update_count > 0:
-                deviation = torch.abs(trait_scores.mean(0) - self.trait_averages)
-                stability = 1.0 - torch.clamp(deviation.mean(), 0.0, 1.0)
+            # Extract traits
+            patterns = self.pattern_recognition(x)
+            trait_scores = torch.sigmoid(self.trait_extraction(patterns, dev_level))
+            
+            # Calculate stability based on developmental level
+            if dev_level < stability_threshold or self.trait_update_count == 0:
+                # Basic stability assessment
+                base_stability = 0.2 + (dev_level / stability_threshold) * 0.3
+                stability = torch.tensor([base_stability], device=input_data.device)
             else:
-                stability = torch.tensor([0.5], device=input_data.device)
+                # Calculate smooth transition factor
+                stability_factor = min(1.0, (dev_level - stability_threshold) / stability_width)
+                
+                # Calculate deviation from running averages
+                # Ensure trait_scores and trait_averages have compatible shapes
+                if len(trait_scores.shape) == 1:
+                    trait_scores = trait_scores.unsqueeze(0)
+                if len(self.trait_averages.shape) == 1:
+                    self.trait_averages = self.trait_averages.unsqueeze(0)
+                
+                # Calculate mean deviation across batch
+                deviation = torch.abs(trait_scores - self.trait_averages)
+                raw_stability = 1.0 - torch.clamp(deviation.mean(), 0.0, 1.0)
+                
+                # Apply developmental factor
+                stability = raw_stability * stability_factor + 0.5 * (1.0 - stability_factor)
                 
             return {
                 "stability": stability

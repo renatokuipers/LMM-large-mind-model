@@ -104,7 +104,7 @@ class DivergentThinking(BaseModule):
         # Extract input information
         problem = input_data.get("problem", {})
         problem_id = input_data.get("problem_id", str(uuid.uuid4()))
-        diversity_factor = input_data.get("diversity_factor", self.developmental_level)
+        diversity_factor = input_data.get("diversity_factor", self.development_level)
         num_solutions = input_data.get("num_solutions", self._calculate_fluency())
         context = input_data.get("context", {})
         
@@ -168,9 +168,22 @@ class DivergentThinking(BaseModule):
                 # Publish creative output if event bus is available
                 if self.event_bus:
                     self.event_bus.publish(
-                        msg_type="creative_output",
-                        content=creative_output.model_dump()
+                        Message(
+                            sender="divergent_thinking",
+                            message_type="creative_output",
+                            content=creative_output.model_dump()
+                        )
                     )
+            
+            # Publish the solution result
+            if self.event_bus:
+                self.event_bus.publish(
+                    Message(
+                        sender="divergent_thinking",
+                        message_type="solution_result",
+                        content=result
+                    )
+                )
             
             return result
             
@@ -184,7 +197,7 @@ class DivergentThinking(BaseModule):
         
     def update_development(self, amount: float) -> float:
         """
-        Update the developmental level of this module
+        Update the module's developmental level
         
         Args:
             amount: Amount to increase development
@@ -192,25 +205,15 @@ class DivergentThinking(BaseModule):
         Returns:
             New developmental level
         """
-        previous_level = self.developmental_level
+        previous_level = self.development_level
         new_level = super().update_development(amount)
         
-        # Update divergent thinking metrics based on development
+        # Update neural network if available
+        if hasattr(self, 'network') and hasattr(self.network, 'update_development'):
+            self.network.update_development(amount)
         
-        # Fluency (ability to generate many ideas)
-        self.state.fluency_score = min(1.0, 0.1 + 0.6 * new_level)
-        
-        # Flexibility (ability to generate diverse ideas)
-        if previous_level < 0.5 and new_level >= 0.5:
-            self.state.flexibility_score = min(1.0, self.state.flexibility_score + 0.2)
-        
-        # Originality (ability to generate novel ideas)
-        if previous_level < 0.75 and new_level >= 0.75:
-            self.state.originality_score = min(1.0, self.state.originality_score + 0.3)
-        
-        # Elaboration (ability to develop ideas in detail)
-        if previous_level < 0.9 and new_level >= 0.9:
-            self.state.elaboration_score = min(1.0, self.state.elaboration_score + 0.2)
+        # Adjust thinking parameters based on development
+        self._adjust_thinking_parameters()
         
         return new_level
     
@@ -218,7 +221,7 @@ class DivergentThinking(BaseModule):
         """Get the current developmental milestone"""
         milestone = "pre_divergent"
         for level, name in sorted(self.development_milestones.items()):
-            if self.developmental_level >= level:
+            if self.development_level >= level:
                 milestone = name
         return milestone
     
@@ -302,7 +305,7 @@ class DivergentThinking(BaseModule):
         ]
         
         # Early development has fewer categories
-        available_categories = max(2, int(self.developmental_level * len(categories)))
+        available_categories = max(2, int(self.development_level * len(categories)))
         
         # Distribute solutions across available categories
         category_index = index % available_categories
@@ -321,13 +324,13 @@ class DivergentThinking(BaseModule):
         
         # Calculate flexibility as ratio of unique categories to solutions
         # Multiplied by developmental scaling factor
-        return min(1.0, len(unique_categories) / len(solutions)) * (0.5 + 0.5 * self.developmental_level)
+        return min(1.0, len(unique_categories) / len(solutions)) * (0.5 + 0.5 * self.development_level)
     
     def _calculate_originality(self, solutions: List[Dict[str, Any]]) -> float:
         """Calculate originality score based on solution properties"""
         # In a real system, this would compare solutions to known patterns
         # Here we'll use a simplified placeholder based on developmental level
-        return 0.3 + 0.6 * self.developmental_level
+        return 0.3 + 0.6 * self.development_level
     
     def _calculate_elaboration(self, solutions: List[Dict[str, Any]]) -> float:
         """Calculate elaboration score based on solution detail"""
@@ -348,7 +351,7 @@ class DivergentThinking(BaseModule):
         avg_details = total_details / len(solutions)
         
         # Normalize to [0, 1] range
-        return min(1.0, avg_details / 10) * (0.5 + 0.5 * self.developmental_level)
+        return min(1.0, avg_details / 10) * (0.5 + 0.5 * self.development_level)
     
     def _update_thinking_metrics(self, solutions: List[Dict[str, Any]]) -> None:
         """Update the divergent thinking metrics based on generated solutions"""
@@ -368,7 +371,7 @@ class DivergentThinking(BaseModule):
         # In a real system, this would compare the solution to prior solutions
         # Here we'll use a simplified approach
         base_novelty = 0.3
-        dev_factor = 0.6 * self.developmental_level
+        dev_factor = 0.6 * self.development_level
         random_factor = 0.1 * np.random.random()
         
         return min(1.0, base_novelty + dev_factor + random_factor)
@@ -396,7 +399,7 @@ class DivergentThinking(BaseModule):
         # In a real system, this would evaluate usefulness based on the problem constraints
         # Here we'll use a simplified approach
         base_usefulness = 0.4
-        dev_factor = 0.4 * self.developmental_level
+        dev_factor = 0.4 * self.development_level
         
         # More elaborate solutions are considered more useful
         details = solution.get("details", {})
@@ -422,8 +425,40 @@ class DivergentThinking(BaseModule):
             # Publish result if successful
             if result["status"] == "success" and self.event_bus:
                 self.event_bus.publish(
-                    msg_type="solution_result",
-                    content=result,
-                    source=self.module_id,
-                    target=message.source
+                    Message(
+                        sender="divergent_thinking",
+                        message_type="solution_result",
+                        content=result
+                    )
                 )
+    
+    def _adjust_thinking_parameters(self) -> None:
+        """
+        Adjust divergent thinking metrics based on development level
+        
+        As development increases, different aspects of divergent thinking improve:
+        - Fluency (ability to generate many ideas) increases steadily
+        - Flexibility (ability to generate diverse ideas) increases at mid-development
+        - Originality (ability to generate novel ideas) increases at later development
+        - Elaboration (ability to develop ideas in detail) increases at advanced development
+        """
+        # Fluency (ability to generate many ideas)
+        self.state.fluency_score = min(1.0, 0.1 + 0.6 * self.development_level)
+        
+        # Flexibility (ability to generate diverse ideas)
+        if self.development_level >= 0.5:
+            self.state.flexibility_score = min(1.0, 0.3 + 0.5 * self.development_level)
+        else:
+            self.state.flexibility_score = min(1.0, 0.1 + 0.3 * self.development_level)
+        
+        # Originality (ability to generate novel ideas)
+        if self.development_level >= 0.75:
+            self.state.originality_score = min(1.0, 0.4 + 0.6 * self.development_level)
+        else:
+            self.state.originality_score = min(1.0, 0.1 + 0.3 * self.development_level)
+        
+        # Elaboration (ability to develop ideas in detail)
+        if self.development_level >= 0.9:
+            self.state.elaboration_score = min(1.0, 0.5 + 0.5 * self.development_level)
+        else:
+            self.state.elaboration_score = min(1.0, 0.1 + 0.4 * self.development_level)

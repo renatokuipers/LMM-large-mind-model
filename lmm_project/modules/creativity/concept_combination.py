@@ -194,18 +194,33 @@ class ConceptCombination(BaseModule):
                 source_components=[self.module_id]
             )
             
-            # Publish creative output if event bus is available
+            # Publish the creative output
             if self.event_bus:
+                from lmm_project.core.message import Message
+                
                 self.event_bus.publish(
-                    msg_type="creative_output",
-                    content=creative_output.model_dump()
+                    Message(
+                        sender="concept_combination",
+                        message_type="creative_output",
+                        content=creative_output.model_dump()
+                    )
                 )
+                
+        # Publish the combination result
+        if self.event_bus:
+            self.event_bus.publish(
+                Message(
+                    sender="concept_combination",
+                    message_type="combination_result",
+                    content=result
+                )
+            )
                 
         return result
         
     def update_development(self, amount: float) -> float:
         """
-        Update the developmental level of this module
+        Update the module's developmental level
         
         Args:
             amount: Amount to increase development
@@ -213,29 +228,23 @@ class ConceptCombination(BaseModule):
         Returns:
             New developmental level
         """
-        previous_level = self.developmental_level
+        previous_level = self.development_level
         new_level = super().update_development(amount)
         
-        # Update available combination patterns based on development level
-        if previous_level < 0.25 and new_level >= 0.25:
-            # Enable property transfer
-            self.state.combination_patterns["property_transfer"] = 0.5
-            
-        if previous_level < 0.5 and new_level >= 0.5:
-            # Enable conceptual blending
-            self.state.combination_patterns["blend"] = 0.5
-            
-        if previous_level < 0.75 and new_level >= 0.75:
-            # Enable analogical mapping
-            self.state.combination_patterns["analogy"] = 0.5
-            
+        # Update neural network if available
+        if hasattr(self, 'network') and hasattr(self.network, 'update_development'):
+            self.network.update_development(amount)
+        
+        # Adjust combination patterns based on development
+        self._adjust_combination_patterns()
+        
         return new_level
     
     def _get_current_milestone(self) -> str:
         """Get the current developmental milestone"""
         milestone = "pre_association"
         for level, name in sorted(self.development_milestones.items()):
-            if self.developmental_level >= level:
+            if self.development_level >= level:
                 milestone = name
         return milestone
         
@@ -361,7 +370,7 @@ class ConceptCombination(BaseModule):
                 }
                 
             # Calculate usefulness score based on development level
-            result["usefulness_score"] = 0.3 + 0.5 * self.developmental_level
+            result["usefulness_score"] = 0.3 + 0.5 * self.development_level
             
             return result
             
@@ -506,7 +515,7 @@ class ConceptCombination(BaseModule):
                 new_features[key] = value
         
         # Create new emergent features (more likely with higher development)
-        if np.random.random() < self.developmental_level:
+        if np.random.random() < self.development_level:
             # Add an emergent feature that wasn't in either concept
             new_features["emergent_property"] = "Created through conceptual blending"
         
@@ -623,8 +632,37 @@ class ConceptCombination(BaseModule):
             # Publish result if successful
             if result["status"] == "success" and self.event_bus:
                 self.event_bus.publish(
-                    msg_type="combination_result",
-                    content=result,
-                    source=self.module_id,
-                    target=message.source
+                    Message(
+                        sender="concept_combination",
+                        message_type="combination_result",
+                        content=result
+                    )
                 )
+
+    def _adjust_combination_patterns(self) -> None:
+        """
+        Adjust available combination patterns based on development level
+        
+        As development increases, more sophisticated combination patterns become available:
+        - Association (always available)
+        - Property transfer (available at development level 0.25+)
+        - Conceptual blending (available at development level 0.5+)
+        - Analogical mapping (available at development level 0.75+)
+        """
+        # Enable property transfer at development level 0.25+
+        if self.development_level >= 0.25:
+            self.state.combination_patterns["property_transfer"] = 0.5
+        else:
+            self.state.combination_patterns["property_transfer"] = 0.0
+            
+        # Enable conceptual blending at development level 0.5+
+        if self.development_level >= 0.5:
+            self.state.combination_patterns["blend"] = 0.5
+        else:
+            self.state.combination_patterns["blend"] = 0.0
+            
+        # Enable analogical mapping at development level 0.75+
+        if self.development_level >= 0.75:
+            self.state.combination_patterns["analogy"] = 0.5
+        else:
+            self.state.combination_patterns["analogy"] = 0.0

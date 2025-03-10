@@ -34,8 +34,8 @@ from datetime import datetime
 import numpy as np
 from pydantic import ValidationError
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.identity.models import (
     PersonalityTrait, 
     TraitDimension, 
@@ -152,7 +152,7 @@ class PersonalityTraits(BaseModule):
                     features.to(self.device),
                     operation="extract_traits"
                 )
-                self.dimension_embeddings[dimension.dimension_id] = output["trait_encoding"].cpu().squeeze(0)
+                self.dimension_embeddings[dimension.dimension_id] = output["patterns"].cpu().squeeze(0)
         
         # If development level is high enough, add some basic traits
         if self.development_level >= 0.2:
@@ -212,7 +212,7 @@ class PersonalityTraits(BaseModule):
                 features.to(self.device),
                 operation="extract_traits"
             )
-            self.trait_embeddings[trait.trait_id] = output["trait_encoding"].cpu().squeeze(0)
+            self.trait_embeddings[trait.trait_id] = output["patterns"].cpu().squeeze(0)
     
     def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -307,7 +307,7 @@ class PersonalityTraits(BaseModule):
                     features.to(self.device),
                     operation="extract_traits"
                 )
-                self.trait_embeddings[trait_id] = output["trait_encoding"].cpu().squeeze(0)
+                self.trait_embeddings[trait_id] = output["patterns"].cpu().squeeze(0)
             
             return {
                 "status": "success",
@@ -410,7 +410,7 @@ class PersonalityTraits(BaseModule):
                         features.to(self.device),
                         operation="extract_traits"
                     )
-                    self.trait_embeddings[trait_id] = output["trait_encoding"].cpu().squeeze(0)
+                    self.trait_embeddings[trait_id] = output["patterns"].cpu().squeeze(0)
             
             return {
                 "status": "success",
@@ -469,7 +469,7 @@ class PersonalityTraits(BaseModule):
                     features.to(self.device),
                     operation="extract_traits"
                 )
-                self.dimension_embeddings[dimension_id] = output["trait_encoding"].cpu().squeeze(0)
+                self.dimension_embeddings[dimension_id] = output["patterns"].cpu().squeeze(0)
             
             return {
                 "status": "success",
@@ -563,7 +563,7 @@ class PersonalityTraits(BaseModule):
                         features.to(self.device),
                         operation="extract_traits"
                     )
-                    self.dimension_embeddings[dimension_id] = output["trait_encoding"].cpu().squeeze(0)
+                    self.dimension_embeddings[dimension_id] = output["patterns"].cpu().squeeze(0)
             
             return {
                 "status": "success",
@@ -608,7 +608,7 @@ class PersonalityTraits(BaseModule):
                 operation="extract_traits"
             )
             
-            trait_encoding = output["trait_encoding"].cpu().squeeze(0)
+            trait_encoding = output["patterns"].cpu().squeeze(0)
             
         # Find most similar traits
         similar_traits = []
@@ -787,7 +787,7 @@ class PersonalityTraits(BaseModule):
                     operation="extract_traits"
                 )
                 
-                query_encoding = output["trait_encoding"].cpu().squeeze(0)
+                query_encoding = output["patterns"].cpu().squeeze(0)
                 
             # Find most similar traits
             similar_traits = []
@@ -829,32 +829,42 @@ class PersonalityTraits(BaseModule):
     
     def _extract_features(self, data) -> torch.Tensor:
         """
-        Extract features from data using the neural network
+        Extract features from input data for neural processing
         
         Args:
-            data: Data to extract features from
+            data: Text or other data to extract features from
             
         Returns:
-            Tensor of features
+            Tensor of features [1, feature_dim]
         """
-        # Simple feature extraction
-        text = str(data)
-        words = text.split()
+        # For demonstration, create simple random features
+        # In a real implementation, this would use proper feature extraction
+        feature_dim = 768  # Changed from 128 to 768 to match PersonalityNetwork input_dim
         
-        # Create a simple word embedding
-        embedding = torch.zeros(min(len(words), 128), dtype=torch.float32)
-        
-        for i, word in enumerate(words[:embedding.size(0)]):
-            # Simple hash-based embedding
-            hash_val = hash(word) % 10000
-            embedding[i] = (hash_val / 10000) * 2 - 1
+        if isinstance(data, str):
+            # Seed random generator with hash of string to ensure consistent features
+            seed = hash(data) % 10000
+            np.random.seed(seed)
             
-        # Pad if needed
-        if embedding.size(0) < 128:
-            padding = torch.zeros(128 - embedding.size(0), dtype=torch.float32)
-            embedding = torch.cat([embedding, padding])
+            # Generate "features" based on the text
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
+            features = features / np.linalg.norm(features)  # Normalize
             
-        return embedding.unsqueeze(0)  # Add batch dimension
+        elif isinstance(data, dict):
+            # For dictionary data, use keys and values to generate features
+            seed = hash(str(sorted(data.items()))) % 10000
+            np.random.seed(seed)
+            
+            # Generate "features" based on the dictionary
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
+            features = features / np.linalg.norm(features)  # Normalize
+            
+        else:
+            # Default random features
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
+            features = features / np.linalg.norm(features)  # Normalize
+            
+        return torch.FloatTensor(features)
     
     def update_development(self, amount: float) -> float:
         """

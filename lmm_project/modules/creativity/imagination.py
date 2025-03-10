@@ -194,11 +194,26 @@ class Imagination(BaseModule):
                 source_components=[self.module_id]
             )
             
-            # Publish creative output if event bus is available
+            # Publish the creative output
+            if self.event_bus:
+                from lmm_project.core.message import Message
+                
+                self.event_bus.publish(
+                    Message(
+                        sender="imagination",
+                        message_type="creative_output",
+                        content=result
+                    )
+                )
+            
+            # Publish the scene result
             if self.event_bus:
                 self.event_bus.publish(
-                    msg_type="creative_output",
-                    content=creative_output.model_dump()
+                    Message(
+                        sender="imagination",
+                        message_type="scene_result",
+                        content=result
+                    )
                 )
             
             return result
@@ -213,7 +228,7 @@ class Imagination(BaseModule):
         
     def update_development(self, amount: float) -> float:
         """
-        Update the developmental level of this module
+        Update the module's developmental level
         
         Args:
             amount: Amount to increase development
@@ -221,40 +236,23 @@ class Imagination(BaseModule):
         Returns:
             New developmental level
         """
-        previous_level = self.developmental_level
+        previous_level = self.development_level
         new_level = super().update_development(amount)
         
-        # Update imagination capabilities based on development level
+        # Update neural network if available
+        if hasattr(self, 'network') and hasattr(self.network, 'update_development'):
+            self.network.update_development(amount)
         
-        # Scene complexity
-        self.state.scene_complexity = min(1.0, 0.1 + 0.7 * new_level)
+        # Adjust imagination parameters based on development
+        self._adjust_imagination_parameters()
         
-        # Scene coherence changes with development
-        # First increases as basic organization improves, then might decrease
-        # as more fantastical elements are incorporated, then increases again
-        # with higher cognitive organization
-        if new_level < 0.5:
-            # Increasing coherence in early development
-            self.state.coherence_level = min(1.0, 0.2 + 0.6 * new_level)
-        elif new_level < 0.7:
-            # Slight decrease during fantasy stage
-            self.state.coherence_level = min(1.0, 0.5 + 0.2 * (new_level - 0.5))
-        else:
-            # Increasing again in later development
-            self.state.coherence_level = min(1.0, 0.54 + 0.4 * (new_level - 0.7))
-        
-        # Scene novelty
-        if previous_level < 0.5 and new_level >= 0.5:
-            # Significant increase in novelty at fantasy stage
-            self.state.novelty_level = min(1.0, self.state.novelty_level + 0.3)
-            
         return new_level
     
     def _get_current_milestone(self) -> str:
         """Get the current developmental milestone"""
         milestone = "pre_imagination"
         for level, name in sorted(self.development_milestones.items()):
-            if self.developmental_level >= level:
+            if self.development_level >= level:
                 milestone = name
         return milestone
     
@@ -338,10 +336,10 @@ class Imagination(BaseModule):
             scene["sequence"].append(scene_frame)
         
         # Add coherence elements based on developmental level
-        if self.developmental_level >= 0.5:
+        if self.development_level >= 0.5:
             scene["theme"] = "Imagined theme"
             
-        if self.developmental_level >= 0.7:
+        if self.development_level >= 0.7:
             scene["narrative_arc"] = {
                 "beginning": "Start of the scene",
                 "middle": "Development of the scene",
@@ -349,7 +347,7 @@ class Imagination(BaseModule):
             }
             
         # Add abstract elements if at high development level
-        if self.developmental_level >= 0.9:
+        if self.development_level >= 0.9:
             scene["abstract_concepts"] = ["Abstract concept 1", "Abstract concept 2"]
             scene["metaphors"] = ["Metaphor 1"]
         
@@ -374,7 +372,7 @@ class Imagination(BaseModule):
         avg_elements = total_elements / len(scene["sequence"])
         
         # Normalize to [0, 1] range with developmental scaling
-        return min(1.0, avg_elements / 10) * (0.5 + 0.5 * self.developmental_level)
+        return min(1.0, avg_elements / 10) * (0.5 + 0.5 * self.development_level)
     
     def _calculate_scene_coherence(self, scene: Dict[str, Any]) -> float:
         """Calculate coherence score of a scene"""
@@ -401,7 +399,7 @@ class Imagination(BaseModule):
             coherence += 0.1
             
         # Developmental scaling
-        scaled_coherence = coherence * (0.5 + 0.5 * self.developmental_level)
+        scaled_coherence = coherence * (0.5 + 0.5 * self.development_level)
         
         return min(1.0, scaled_coherence)
     
@@ -414,13 +412,13 @@ class Imagination(BaseModule):
         base_novelty = 0.3
         
         # Development factor - higher development enables more novelty
-        dev_factor = 0.5 * self.developmental_level
+        dev_factor = 0.5 * self.development_level
         
         # Random factor for variation
         random_factor = 0.2 * np.random.random()
         
         # Check for fantastical elements (more likely with higher development)
-        if self.developmental_level >= 0.5:
+        if self.development_level >= 0.5:
             # Fantasy bonus
             fantasy_factor = 0.2
         else:
@@ -460,8 +458,42 @@ class Imagination(BaseModule):
             # Publish result if successful
             if result["status"] == "success" and self.event_bus:
                 self.event_bus.publish(
-                    msg_type="scene_result",
-                    content=result,
-                    source=self.module_id,
-                    target=message.source
+                    Message(
+                        sender="imagination",
+                        message_type="scene_result",
+                        content=result
+                    )
                 )
+    
+    def _adjust_imagination_parameters(self) -> None:
+        """
+        Adjust imagination capabilities based on development level
+        
+        As development increases, different aspects of imagination improve:
+        - Scene complexity increases steadily
+        - Scene coherence follows a non-linear pattern (increases, slight decrease during fantasy stage, then increases again)
+        - Scene novelty increases significantly at the fantasy stage
+        """
+        # Scene complexity
+        self.state.scene_complexity = min(1.0, 0.1 + 0.7 * self.development_level)
+        
+        # Scene coherence changes with development
+        # First increases as basic organization improves, then might decrease
+        # as more fantastical elements are incorporated, then increases again
+        # with higher cognitive organization
+        if self.development_level < 0.5:
+            # Increasing coherence in early development
+            self.state.coherence_level = min(1.0, 0.2 + 0.6 * self.development_level)
+        elif self.development_level < 0.7:
+            # Slight decrease during fantasy stage
+            self.state.coherence_level = min(1.0, 0.5 + 0.2 * (self.development_level - 0.5))
+        else:
+            # Increasing again in later development
+            self.state.coherence_level = min(1.0, 0.54 + 0.4 * (self.development_level - 0.7))
+        
+        # Scene novelty
+        if self.development_level >= 0.5:
+            # Significant increase in novelty at fantasy stage
+            self.state.novelty_level = min(1.0, 0.3 + 0.6 * self.development_level)
+        else:
+            self.state.novelty_level = min(1.0, 0.1 + 0.4 * self.development_level)

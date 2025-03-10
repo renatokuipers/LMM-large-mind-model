@@ -26,15 +26,18 @@ from typing import Optional, Dict, Any, List, Union, Tuple
 import uuid
 from datetime import datetime
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.identity.models import (
     IdentityState,
     IdentityNeuralState,
     SelfConcept as SelfConceptModel,
     PersonalNarrative as PersonalNarrativeModel,
     PreferenceSystem,
-    PersonalityProfile
+    PersonalityProfile,
+    Value,
+    PersonalityTrait,
+    IdentityChange
 )
 from lmm_project.modules.identity.self_concept import SelfConcept
 from lmm_project.modules.identity.personal_narrative import PersonalNarrative
@@ -117,19 +120,19 @@ class IdentitySystem(BaseModule):
         # Register for event subscriptions
         if event_bus:
             event_bus.subscribe(
-                sender=f"{module_id}.self_concept", 
+                message_type=f"{module_id}.self_concept", 
                 callback=self._handle_self_concept_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.personal_narrative", 
+                message_type=f"{module_id}.personal_narrative", 
                 callback=self._handle_narrative_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.preferences", 
+                message_type=f"{module_id}.preferences", 
                 callback=self._handle_preference_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.personality_traits", 
+                message_type=f"{module_id}.personality_traits", 
                 callback=self._handle_personality_event
             )
     
@@ -547,41 +550,22 @@ class IdentitySystem(BaseModule):
                 print(f"Error loading identity state: {e}")
 
 
-def get_module(module_id: str, event_bus: Optional[EventBus] = None, development_level: float = 0.0) -> Union[IdentitySystem, BaseModule]:
+def get_module(
+    module_id: str = "identity",
+    event_bus: Optional[EventBus] = None,
+    development_level: float = 0.0
+) -> "IdentitySystem":
     """
-    Factory function to get an identity module
+    Factory function to create and initialize an identity module
     
     Args:
         module_id: Unique identifier for this module
         event_bus: Event bus for communication with other modules
-        development_level: Initial developmental level (0.0 to 1.0)
-    
-    Returns:
-        An identity module instance (IdentitySystem or a specific component)
-    """
-    # Check if requesting a specific component or the full system
-    module_parts = module_id.split('.')
-    
-    if len(module_parts) > 1 and module_parts[0] == "identity":
-        component = module_parts[1]
+        development_level: Initial developmental level (0.0-1.0)
         
-        # Return specific component
-        if component == "self_concept":
-            return SelfConcept(module_id, event_bus, development_level)
-            
-        elif component == "personal_narrative":
-            return PersonalNarrative(module_id, event_bus, development_level)
-            
-        elif component == "preferences":
-            return Preferences(module_id, event_bus, development_level)
-            
-        elif component == "personality_traits":
-            return PersonalityTraits(module_id, event_bus, development_level)
-            
-        else:
-            # Unknown component, return full system
-            print(f"Unknown identity component '{component}', returning full identity system")
-            return IdentitySystem(module_id, event_bus, development_level)
-    
-    # Return full identity system
-    return IdentitySystem(module_id, event_bus, development_level) 
+    Returns:
+        Initialized identity module
+    """
+    module = IdentitySystem(module_id=module_id, event_bus=event_bus)
+    module.set_development_level(development_level)
+    return module 

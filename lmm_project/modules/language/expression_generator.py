@@ -20,8 +20,8 @@
 # TODO: Implement different expression types:
 # - Declarative statements: Convey information
 # - Questions: Request information
-# - Directives: Request actions
-# - Expressive: Communicate emotions and attitudes
+# - Imperatives: Direct or request actions
+# - Expressives: Convey emotions and attitudes
 
 # TODO: Connect to semantic processing and social understanding
 # Expression should build on semantic representations
@@ -34,8 +34,8 @@ import numpy as np
 from datetime import datetime
 from collections import deque
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.language.models import ExpressionModel, LanguageNeuralState
 from lmm_project.modules.language.neural_net import ExpressionNetwork, get_device
 from lmm_project.utils.llm_client import LLMClient
@@ -95,6 +95,9 @@ class ExpressionGenerator(BaseModule):
     
     def _initialize_expression_templates(self):
         """Initialize expression templates based on development level"""
+        # Reset existing templates
+        self.expression_model.expression_templates = []
+        
         # Basic expression templates at earliest stages
         if self.development_level >= 0.0:
             # Single word expressions for basic needs
@@ -220,6 +223,145 @@ class ExpressionGenerator(BaseModule):
             # Update fluency metrics
             self.expression_model.fluency_metrics["grammatical_accuracy"] = 0.5 * ((self.development_level - 0.6) / 0.4)
             self.expression_model.fluency_metrics["vocabulary_diversity"] = 0.5 * ((self.development_level - 0.6) / 0.4)
+        
+        # Generate template embeddings if development level is sufficient
+        if self.development_level >= 0.5:
+            self._generate_template_embeddings()
+    
+    def _generate_template_embeddings(self):
+        """
+        Generate embeddings for expression templates using the LLM API
+        
+        This allows more sophisticated template selection based on semantic similarity
+        to the intended expression rather than just template names.
+        """
+        # Only process templates that don't already have embeddings
+        templates_to_embed = [
+            template for template in self.expression_model.expression_templates
+            if "embedding" not in template
+        ]
+        
+        if not templates_to_embed:
+            return
+            
+        for template in templates_to_embed:
+            # Create a representative text for this template
+            # Use examples and template structure
+            
+            # Start with the template name
+            embedding_text = f"Template: {template['name']}. "
+            
+            # Add template structure
+            embedding_text += f"Structure: {template['template']}. "
+            
+            # Add examples if available
+            if "examples" in template and template["examples"]:
+                embedding_text += f"Examples: {', '.join(template['examples'])}. "
+            
+            # Try to get embedding
+            try:
+                raw_embedding = self.llm_client.get_embedding(
+                    embedding_text,
+                    embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                )
+                
+                # Process the embedding
+                if isinstance(raw_embedding, list):
+                    if isinstance(raw_embedding[0], list):
+                        template["embedding"] = raw_embedding[0]
+                    else:
+                        template["embedding"] = raw_embedding
+                    
+                    print(f"Generated embedding for template '{template['name']}'")
+                
+            except Exception as e:
+                print(f"Warning: Failed to generate embedding for template '{template['name']}': {e}")
+                
+                # Try fallback model
+                try:
+                    raw_embedding = self.llm_client.get_embedding(
+                        embedding_text,
+                        embedding_model="text-embedding-ada-002"
+                    )
+                    
+                    # Process the embedding
+                    if isinstance(raw_embedding, list):
+                        if isinstance(raw_embedding[0], list):
+                            template["embedding"] = raw_embedding[0]
+                        else:
+                            template["embedding"] = raw_embedding
+                        
+                        print(f"Generated embedding for template '{template['name']}' using fallback model")
+                    
+                except Exception as fallback_error:
+                    print(f"ERROR: Fallback embedding also failed for template '{template['name']}': {fallback_error}")
+    
+    def _find_template_by_similarity(self, intent_text, max_complexity=1.0):
+        """
+        Find the most suitable template based on semantic similarity to intent
+        
+        Args:
+            intent_text: Text describing the intention
+            max_complexity: Maximum template complexity to consider
+            
+        Returns:
+            The most semantically similar template within complexity constraints
+        """
+        # Check if we have embeddings for templates
+        templates_with_embeddings = [
+            template for template in self.expression_model.expression_templates
+            if "embedding" in template and template["complexity"] <= max_complexity
+        ]
+        
+        if not templates_with_embeddings:
+            # Fall back to traditional selection if no embeddings available
+            return None
+            
+        try:
+            # Get embedding for intent text
+            intent_embedding = self.llm_client.get_embedding(
+                intent_text,
+                embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+            )
+            
+            if not isinstance(intent_embedding, list):
+                return None
+                
+            # Flatten if nested
+            if isinstance(intent_embedding[0], list):
+                intent_embedding = intent_embedding[0]
+                
+            # Calculate similarity to each template
+            best_similarity = -1
+            best_template = None
+            
+            for template in templates_with_embeddings:
+                template_embedding = template["embedding"]
+                
+                # Ensure both embeddings have the same length for comparison
+                min_length = min(len(intent_embedding), len(template_embedding))
+                
+                # Calculate cosine similarity
+                dot_product = sum(a * b for a, b in zip(intent_embedding[:min_length], template_embedding[:min_length]))
+                intent_magnitude = sum(a * a for a in intent_embedding[:min_length]) ** 0.5
+                template_magnitude = sum(b * b for b in template_embedding[:min_length]) ** 0.5
+                
+                if intent_magnitude > 0 and template_magnitude > 0:
+                    similarity = dot_product / (intent_magnitude * template_magnitude)
+                    
+                    # Apply a complexity bonus (prefer more complex templates when similar)
+                    complexity_bonus = template["complexity"] * 0.1
+                    adjusted_similarity = similarity + complexity_bonus
+                    
+                    if adjusted_similarity > best_similarity:
+                        best_similarity = adjusted_similarity
+                        best_template = template
+            
+            return best_template
+            
+        except Exception as e:
+            print(f"Warning: Error finding template by similarity: {e}")
+            return None
     
     def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -284,40 +426,59 @@ class ExpressionGenerator(BaseModule):
         
         # Development level constrains complexity
         max_complexity = min(1.0, 0.2 + (self.development_level * 0.8))
+        chosen_template = None
         
-        # Find suitable templates based on intent and development level
-        suitable_templates = []
-        
-        # Check if we have specific templates for this intent
-        if intent in self.expression_model.communication_intents:
-            intent_info = self.expression_model.communication_intents[intent]
-            template_names = intent_info.get("templates", [])
+        # Use semantic template selection if development level is high enough
+        if self.development_level >= 0.5:
+            # Create a more descriptive intent text for semantic matching
+            intent_description = f"Intent: {intent}. "
             
-            # Find the template objects
-            for template in self.expression_model.expression_templates:
-                if template["name"] in template_names and template["complexity"] <= max_complexity:
-                    suitable_templates.append(template)
+            # Add context information if available
+            if context:
+                context_desc = ", ".join([f"{k}: {v}" for k, v in context.items() 
+                                        if isinstance(v, str) and len(v) < 100])
+                if context_desc:
+                    intent_description += f"Context: {context_desc}."
+            
+            # Try to find template by semantic similarity
+            semantic_template = self._find_template_by_similarity(intent_description, max_complexity)
+            if semantic_template:
+                chosen_template = semantic_template
         
-        # If no suitable templates found, use templates within complexity constraints
-        if not suitable_templates:
-            for template in self.expression_model.expression_templates:
-                if template["complexity"] <= max_complexity:
-                    suitable_templates.append(template)
-        
-        # If still no templates, return error
-        if not suitable_templates:
-            return {
-                "status": "undeveloped",
-                "message": "No suitable expression templates available at current development level",
-                "development_level": self.development_level,
-                "process_id": process_id
-            }
-        
-        # Sort by complexity (descending) to use the most complex templates possible
-        suitable_templates.sort(key=lambda t: t["complexity"], reverse=True)
-        
-        # Choose the best template (most complex that we can handle)
-        chosen_template = suitable_templates[0]
+        # If semantic selection failed or development level is too low, use traditional selection
+        if not chosen_template:
+            suitable_templates = []
+            
+            # Check if we have specific templates for this intent
+            if intent in self.expression_model.communication_intents:
+                intent_info = self.expression_model.communication_intents[intent]
+                template_names = intent_info.get("templates", [])
+                
+                # Find the template objects
+                for template in self.expression_model.expression_templates:
+                    if template["name"] in template_names and template["complexity"] <= max_complexity:
+                        suitable_templates.append(template)
+            
+            # If no suitable templates found, use templates within complexity constraints
+            if not suitable_templates:
+                for template in self.expression_model.expression_templates:
+                    if template["complexity"] <= max_complexity:
+                        suitable_templates.append(template)
+            
+            # If still no templates, return error
+            if not suitable_templates:
+                return {
+                    "status": "undeveloped",
+                    "message": "No suitable expression templates available at current development level",
+                    "development_level": self.development_level,
+                    "process_id": process_id
+                }
+            
+            # Sort by complexity (descending) to use the most complex templates possible
+            suitable_templates.sort(key=lambda t: t["complexity"], reverse=True)
+            
+            # Choose the best template (most complex that we can handle)
+            chosen_template = suitable_templates[0]
         
         # Generate expression by filling template
         expression = chosen_template["template"]

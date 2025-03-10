@@ -18,10 +18,10 @@
 # - Phonological rule learning: Understand phoneme patterns
 
 # TODO: Implement phonological awareness capabilities:
-# - Phoneme identification: Recognize distinct sound units
-# - Phoneme manipulation: Add/remove/change sounds
-# - Syllable awareness: Recognize syllable boundaries
-# - Pattern recognition: Identify rhymes and alliteration
+# - Phoneme isolation: Identify individual sounds
+# - Phoneme blending: Combine sounds into words
+# - Phoneme segmentation: Break words into component sounds
+# - Phoneme manipulation: Add, delete, or substitute sounds
 
 # TODO: Connect to perception and word learning systems
 # Phoneme recognition should draw on auditory perception
@@ -34,8 +34,8 @@ import numpy as np
 from datetime import datetime
 from collections import deque
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.language.models import PhonemeModel, LanguageNeuralState
 from lmm_project.modules.language.neural_net import PhonemeNetwork, get_device
 from lmm_project.utils.llm_client import LLMClient
@@ -253,9 +253,106 @@ class PhonemeRecognition(BaseModule):
             "process_id": process_id
         }
     
+    def _analyze_phoneme_similarity(self, phoneme1: str, phoneme2: str) -> float:
+        """
+        Analyze phonetic similarity between two phonemes
+        
+        Uses the LLM API for advanced phonetic similarity when available,
+        falls back to feature-based comparison.
+        
+        Args:
+            phoneme1: First phoneme
+            phoneme2: Second phoneme
+            
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        # If comparing with self, return 1.0
+        if phoneme1 == phoneme2:
+            return 1.0
+            
+        # Check if we have features for both phonemes
+        if (phoneme1 in self.phoneme_model.phoneme_features and 
+            phoneme2 in self.phoneme_model.phoneme_features):
+            
+            # Get phoneme features
+            features1 = self.phoneme_model.phoneme_features[phoneme1]
+            features2 = self.phoneme_model.phoneme_features[phoneme2]
+            
+            # Calculate similarity based on shared features
+            shared_features = 0
+            total_features = 0
+            
+            # Compare common phonetic features
+            for feature in ["place", "manner", "voicing", "vowel_height", "vowel_backness", "rounded"]:
+                if feature in features1 and feature in features2:
+                    total_features += 1
+                    if features1[feature] == features2[feature]:
+                        shared_features += 1
+            
+            # If we have features to compare
+            if total_features > 0:
+                return shared_features / total_features
+        
+        # If phoneme features aren't available or development level is high,
+        # try using the LLM API for phonetic similarity
+        if self.development_level >= 0.6:
+            try:
+                # Create prompts for embedding comparison
+                phoneme1_desc = f"Phoneme: {phoneme1}. Pronunciation characteristics and articulatory features."
+                phoneme2_desc = f"Phoneme: {phoneme2}. Pronunciation characteristics and articulatory features."
+                
+                # Get embeddings for both phonemes
+                embedding1 = self.llm_client.get_embedding(
+                    phoneme1_desc,
+                    embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                )
+                
+                embedding2 = self.llm_client.get_embedding(
+                    phoneme2_desc,
+                    embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                )
+                
+                # Process embeddings to calculate similarity
+                if isinstance(embedding1, list) and isinstance(embedding2, list):
+                    # Handle nested lists
+                    if isinstance(embedding1[0], list):
+                        embedding1 = embedding1[0]
+                    if isinstance(embedding2[0], list):
+                        embedding2 = embedding2[0]
+                    
+                    # Ensure same length for comparison
+                    min_length = min(len(embedding1), len(embedding2))
+                    
+                    # Calculate cosine similarity
+                    dot_product = sum(a * b for a, b in zip(embedding1[:min_length], embedding2[:min_length]))
+                    magnitude1 = sum(a * a for a in embedding1[:min_length]) ** 0.5
+                    magnitude2 = sum(b * b for b in embedding2[:min_length]) ** 0.5
+                    
+                    if magnitude1 > 0 and magnitude2 > 0:
+                        similarity = dot_product / (magnitude1 * magnitude2)
+                        # Scale to 0.0-1.0 range (cosine similarity is between -1 and 1)
+                        return (similarity + 1) / 2
+            
+            except Exception as e:
+                print(f"Warning: Failed to calculate phoneme similarity using LLM API: {e}")
+        
+        # Fallback: basic string similarity
+        # Count matching characters
+        min_len = min(len(phoneme1), len(phoneme2))
+        max_len = max(len(phoneme1), len(phoneme2))
+        
+        matches = 0
+        for i in range(min_len):
+            if phoneme1[i] == phoneme2[i]:
+                matches += 1
+        
+        # Return similarity ratio
+        return matches / max_len
+    
     def _analyze_phoneme_patterns(self, input_data: Dict[str, Any], process_id: str) -> Dict[str, Any]:
         """
-        Analyze phoneme patterns to identify phonotactic rules
+        Analyze patterns in phoneme sequences
         
         Args:
             input_data: Input data dictionary including phoneme sequence
@@ -275,82 +372,104 @@ class PhonemeRecognition(BaseModule):
         # Get phoneme sequence
         phoneme_sequence = input_data["phoneme_sequence"]
         
-        # Check development level
-        if self.development_level < 0.4:
+        # Ensure we have a list of phonemes
+        if isinstance(phoneme_sequence, str):
+            phoneme_sequence = phoneme_sequence.split()
+        
+        # If sequence is too short for pattern analysis
+        if len(phoneme_sequence) < 2:
             return {
-                "status": "undeveloped",
-                "message": "Pattern analysis requires higher development level (0.4+)",
-                "current_level": self.development_level,
+                "status": "success",
+                "message": "Sequence too short for pattern analysis",
+                "patterns": [],
                 "process_id": process_id
             }
         
-        # Convert sequence to features
-        sequence_features = []
-        for phoneme in phoneme_sequence:
-            # Create simple one-hot-like features
-            # In a real implementation, would use actual phonological features
-            feature_vec = np.zeros(128)
-            
-            # Set simple hash-based feature
-            hash_val = hash(phoneme) % 100
-            feature_vec[hash_val] = 1.0
-            
-            sequence_features.append(feature_vec)
+        # Development level affects pattern recognition sophistication
+        dev_level = self.development_level
         
-        # Convert to tensor
-        sequence_tensor = torch.tensor(np.array(sequence_features), dtype=torch.float32)
-        sequence_tensor = sequence_tensor.to(self.device)
+        # Find patterns in the sequence
+        patterns = []
         
-        # Process through network
-        with torch.no_grad():
-            output = self.network(sequence_tensor.mean(dim=0, keepdim=True), operation="analyze")
-        
-        # Extract pattern features
-        pattern_features = output["phoneme_features"].cpu().numpy()[0]
-        
-        # Build a simplified pattern description
-        # Identify consonant-vowel patterns
-        cv_pattern = ""
-        for phoneme in phoneme_sequence:
-            if phoneme in self.phoneme_model.phoneme_categories.get("vowels", []):
-                cv_pattern += "V"
-            elif phoneme in self.phoneme_model.phoneme_categories.get("consonants", []):
-                cv_pattern += "C"
-            else:
-                cv_pattern += "?"
-        
-        # Check for existing patterns or create new ones
-        pattern_found = False
-        for rule in self.phoneme_model.phonotactic_rules:
-            if rule["pattern"] == cv_pattern:
-                # Increase confidence in existing rule
-                rule["confidence"] = min(1.0, rule["confidence"] + 0.05)
-                pattern_found = True
-                break
-        
-        # Add new pattern if not found and meets minimum criteria
-        if not pattern_found and len(cv_pattern) >= 2:
-            # Only mature enough systems can create new rules
-            if self.development_level >= 0.6:
-                self.phoneme_model.phonotactic_rules.append({
-                    "description": f"Observed phoneme pattern",
-                    "pattern": cv_pattern,
-                    "confidence": 0.3,
-                    "examples": [phoneme_sequence]
+        # Look for repeated phonemes
+        for i in range(len(phoneme_sequence) - 1):
+            # For exact repetitions
+            if phoneme_sequence[i] == phoneme_sequence[i + 1]:
+                patterns.append({
+                    "type": "repetition",
+                    "phonemes": [phoneme_sequence[i]],
+                    "position": i,
+                    "confidence": 0.9
                 })
+            
+            # For similar phonemes (if development level is sufficient)
+            elif dev_level >= 0.4:
+                similarity = self._analyze_phoneme_similarity(phoneme_sequence[i], phoneme_sequence[i + 1])
+                if similarity >= 0.7:  # High similarity threshold
+                    patterns.append({
+                        "type": "similar_phonemes",
+                        "phonemes": [phoneme_sequence[i], phoneme_sequence[i + 1]],
+                        "position": i,
+                        "similarity": similarity,
+                        "confidence": similarity * 0.8
+                    })
         
-        # Record activation in neural state
-        self.neural_state.add_activation("phoneme_recognition", {
-            'operation': 'analyze_patterns',
-            'pattern': cv_pattern
-        })
+        # Look for common sequences (if development level is sufficient)
+        if dev_level >= 0.3:
+            for rule in self.phoneme_model.phonotactic_rules:
+                rule_phonemes = rule["sequence"]
+                
+                # Convert to list if it's a string
+                if isinstance(rule_phonemes, str):
+                    rule_phonemes = rule_phonemes.split()
+                
+                # Check if rule sequence exists in the input sequence
+                for i in range(len(phoneme_sequence) - len(rule_phonemes) + 1):
+                    match = True
+                    for j in range(len(rule_phonemes)):
+                        if phoneme_sequence[i + j] != rule_phonemes[j]:
+                            match = False
+                            break
+                    
+                    if match:
+                        patterns.append({
+                            "type": "known_pattern",
+                            "pattern_name": rule.get("name", "unnamed"),
+                            "phonemes": rule_phonemes,
+                            "position": i,
+                            "confidence": rule.get("confidence", 0.7)
+                        })
         
-        # Return analysis results
+        # Look for vowel harmony (if development level is sufficient)
+        if dev_level >= 0.6:
+            vowels = [p for p in phoneme_sequence 
+                     if p in self.phoneme_model.phoneme_categories.get("vowels", [])]
+            
+            if len(vowels) >= 2:
+                # Check for vowel harmony (similar vowels)
+                harmony_score = 0
+                for i in range(len(vowels) - 1):
+                    similarity = self._analyze_phoneme_similarity(vowels[i], vowels[i + 1])
+                    harmony_score += similarity
+                
+                # Calculate average harmony
+                if len(vowels) > 1:
+                    avg_harmony = harmony_score / (len(vowels) - 1)
+                    
+                    if avg_harmony >= 0.6:  # Threshold for harmony
+                        patterns.append({
+                            "type": "vowel_harmony",
+                            "vowels": vowels,
+                            "harmony_score": avg_harmony,
+                            "confidence": avg_harmony * 0.8
+                        })
+        
+        # Return results
         return {
             "status": "success",
-            "cv_pattern": cv_pattern,
-            "pattern_features": pattern_features.tolist(),
-            "developmental_level": self.development_level,
+            "patterns": patterns,
+            "sequence_length": len(phoneme_sequence),
+            "development_level": dev_level,
             "process_id": process_id
         }
     

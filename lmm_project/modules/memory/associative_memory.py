@@ -49,8 +49,17 @@ class AssociativeMemoryModule(BaseModule):
             **data
         )
         
+        # Extract storage_dir from Field if needed
+        storage_path = self.storage_dir
+        if hasattr(storage_path, "default"):  # If it's still a Field object
+            storage_path = storage_path.default
+        elif isinstance(storage_path, Field):  # Direct check for Field type
+            storage_path = "storage/memories/associations"  # Use default value
+        
         # Create storage directory
-        os.makedirs(self.storage_dir, exist_ok=True)
+        os.makedirs(storage_path, exist_ok=True)
+        # Store the resolved path
+        self.storage_dir = storage_path
         
         # Try to load previous associations
         self._load_associations()

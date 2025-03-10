@@ -519,3 +519,23 @@ class IdentityNeuralState(BaseModel):
                 self.recent_personality_activations = self.recent_personality_activations[-100:]
                 
         self.last_updated = datetime.now()
+
+class IdentityChange(BaseModel):
+    """
+    Represents a change in identity over time
+    
+    Tracks significant changes to identity components
+    """
+    change_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique identifier for this change")
+    component: str = Field(..., description="Identity component that changed (e.g., 'self_concept', 'narrative')")
+    description: str = Field(..., description="Description of the change")
+    previous_state: Dict[str, Any] = Field(default_factory=dict, description="State before the change")
+    current_state: Dict[str, Any] = Field(default_factory=dict, description="State after the change")
+    significance: float = Field(0.5, ge=0.0, le=1.0, description="Significance of this change")
+    timestamp: datetime = Field(default_factory=datetime.now, description="When the change occurred")
+    
+    def dict(self, *args, **kwargs):
+        """Convert to dictionary, preserving datetime objects"""
+        result = super().dict(*args, **kwargs)
+        result["timestamp"] = self.timestamp
+        return result

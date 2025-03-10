@@ -765,7 +765,7 @@ class Preferences(BaseModule):
             np.random.seed(seed)
             
             # Generate "features" based on the text
-            features = np.random.randn(feature_dim)
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
             features = features / np.linalg.norm(features)  # Normalize
             
         elif isinstance(data, dict):
@@ -773,18 +773,16 @@ class Preferences(BaseModule):
             seed = hash(str(sorted(data.items()))) % 10000
             np.random.seed(seed)
             
-            features = np.random.randn(feature_dim)
+            # Generate "features" based on the dictionary
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
             features = features / np.linalg.norm(features)  # Normalize
             
         else:
             # Default random features
-            seed = hash(str(data)) % 10000
-            np.random.seed(seed)
-            
-            features = np.random.randn(feature_dim)
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
             features = features / np.linalg.norm(features)  # Normalize
-        
-        return torch.tensor(features, dtype=torch.float32).unsqueeze(0)
+            
+        return torch.FloatTensor(features)
     
     def update_development(self, amount: float) -> float:
         """

@@ -201,14 +201,35 @@ class NoveltyDetection(BaseModule):
                 )
                 
                 self.event_bus.publish(
-                    msg_type="creative_output",
-                    content=creative_output.model_dump()
+                    Message(
+                        sender="novelty_detection",
+                        message_type="creative_output",
+                        content=result
+                    )
                 )
                 
-                # Also publish a direct novelty alert
+                # If novelty is high, also send a novelty alert
+                if result.get("novelty_score", 0) > 0.7:
+                    self.event_bus.publish(
+                        Message(
+                            sender="novelty_detection",
+                            message_type="novelty_alert",
+                            content={
+                                "source": input_data.get("source", "unknown"),
+                                "novelty_score": result.get("novelty_score", 0),
+                                "content": result.get("content", {})
+                            }
+                        )
+                    )
+            
+            # Publish the novelty result
+            if self.event_bus:
                 self.event_bus.publish(
-                    msg_type="novelty_alert",
-                    content=result
+                    Message(
+                        sender="novelty_detection",
+                        message_type="novelty_result",
+                        content=result
+                    )
                 )
             
             return result
@@ -223,7 +244,7 @@ class NoveltyDetection(BaseModule):
         
     def update_development(self, amount: float) -> float:
         """
-        Update the developmental level of this module
+        Update the module's developmental level
         
         Args:
             amount: Amount to increase development
@@ -231,21 +252,15 @@ class NoveltyDetection(BaseModule):
         Returns:
             New developmental level
         """
-        previous_level = self.developmental_level
+        previous_level = self.development_level
         new_level = super().update_development(amount)
         
-        # Update novelty detection capabilities based on development
+        # Update neural network development
+        if hasattr(self.network, 'update_development'):
+            self.network.update_development(amount)
         
-        # Adjust novelty thresholds (gradually lower thresholds to detect more subtle novelty)
-        threshold_reduction = 0.2 * (new_level - previous_level)
-        for input_type in self.state.novelty_thresholds:
-            self.state.novelty_thresholds[input_type] = max(
-                0.3,  # Minimum threshold
-                self.state.novelty_thresholds[input_type] - threshold_reduction
-            )
-        
-        # Adjust surprise sensitivity (increases with development)
-        self.state.surprise_sensitivity = min(1.0, 0.3 + 0.7 * new_level)
+        # Adjust novelty thresholds based on development
+        self._adjust_novelty_thresholds()
         
         return new_level
     
@@ -253,7 +268,7 @@ class NoveltyDetection(BaseModule):
         """Get the current developmental milestone"""
         milestone = "pre_novelty_detection"
         for level, name in sorted(self.development_milestones.items()):
-            if self.developmental_level >= level:
+            if self.development_level >= level:
                 milestone = name
         return milestone
     
@@ -276,7 +291,7 @@ class NoveltyDetection(BaseModule):
         with torch.no_grad():
             # Get appropriate update_memory setting based on developmental level
             # More developed systems are more selective about what they add to memory
-            update_memory = np.random.random() < (1.0 - 0.5 * self.developmental_level)
+            update_memory = np.random.random() < (1.0 - 0.5 * self.development_level)
             
             network_output = self.network(
                 input_embedding,
@@ -287,13 +302,13 @@ class NoveltyDetection(BaseModule):
         novelty_score = network_output["novelty_score"].item()
         
         # Apply developmental modulation to novelty detection
-        if self.developmental_level < 0.25:
+        if self.development_level < 0.25:
             # Basic feature novelty only at early stages
             novelty_score = self._modulate_early_novelty(novelty_score, content)
-        elif self.developmental_level < 0.5:
+        elif self.development_level < 0.5:
             # Statistical novelty at intermediate stages
             novelty_score = self._apply_statistical_novelty(novelty_score, input_type)
-        elif self.developmental_level < 0.75:
+        elif self.development_level < 0.75:
             # Contextual surprise at advanced stages
             context_modifier = np.random.uniform(0.8, 1.2)  # Simplified context effect
             novelty_score = min(1.0, novelty_score * context_modifier)
@@ -428,7 +443,7 @@ class NoveltyDetection(BaseModule):
     def _handle_input(self, message: Message) -> None:
         """Handle various input messages for novelty detection"""
         # Process the input for novelty
-        input_type = message.msg_type.split('_')[0]  # Extract first part of message type
+        input_type = message.message_type.split('_')[0]  # Extract first part of message type
         
         self.process_input({
             "type": input_type,
@@ -445,8 +460,26 @@ class NoveltyDetection(BaseModule):
             # Publish result
             if self.event_bus:
                 self.event_bus.publish(
-                    msg_type="novelty_result",
-                    content=result,
-                    source=self.module_id,
-                    target=message.source
+                    Message(
+                        sender="novelty_detection",
+                        message_type="novelty_result",
+                        content=result
+                    )
                 )
+    
+    def _adjust_novelty_thresholds(self) -> None:
+        """
+        Adjust novelty thresholds based on development level
+        
+        As development increases, thresholds are lowered to detect more subtle novelty
+        and surprise sensitivity increases.
+        """
+        # Adjust novelty thresholds (gradually lower thresholds to detect more subtle novelty)
+        for input_type in self.state.novelty_thresholds:
+            self.state.novelty_thresholds[input_type] = max(
+                0.3,  # Minimum threshold
+                0.8 - 0.5 * self.development_level  # Gradually decrease from 0.8 to 0.3
+            )
+        
+        # Adjust surprise sensitivity (increases with development)
+        self.state.surprise_sensitivity = min(1.0, 0.3 + 0.7 * self.development_level)

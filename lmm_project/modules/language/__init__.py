@@ -9,8 +9,8 @@ from typing import Dict, List, Any, Optional, Union
 import uuid
 from datetime import datetime
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.language.models import LanguageModel, LanguageNeuralState
 
 # Import all language submodules
@@ -106,23 +106,23 @@ class LanguageSystem(BaseModule):
         # Register for event subscriptions
         if event_bus:
             event_bus.subscribe(
-                sender=f"{module_id}.phoneme_recognition", 
+                message_type=f"{module_id}.phoneme_recognition", 
                 callback=self._handle_phoneme_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.word_learning", 
+                message_type=f"{module_id}.word_learning", 
                 callback=self._handle_word_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.grammar_acquisition", 
+                message_type=f"{module_id}.grammar_acquisition", 
                 callback=self._handle_grammar_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.semantic_processing", 
+                message_type=f"{module_id}.semantic_processing", 
                 callback=self._handle_semantic_event
             )
             event_bus.subscribe(
-                sender=f"{module_id}.expression_generator", 
+                message_type=f"{module_id}.expression_generator", 
                 callback=self._handle_expression_event
             )
     

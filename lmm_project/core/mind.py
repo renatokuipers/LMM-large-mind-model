@@ -1,19 +1,26 @@
 """
 Mind - Core cognitive architecture controller
+
+This module implements the central Mind class that coordinates all cognitive modules,
+manages developmental progression, and orchestrates the flow of information between
+components of the Large Mind Model system.
 """
 
 import logging
 import time
-from typing import Dict, Any, Optional, List, TYPE_CHECKING, Union, Type
+import traceback
+from typing import Dict, List, Any, Optional, Set, Tuple, TYPE_CHECKING, Union, Type
 import os
 import json
+import threading
 from datetime import datetime
+from pathlib import Path
 
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.state_manager import StateManager
 from lmm_project.core.message import Message
-from lmm_project.core.types import DevelopmentalStage, HomeostaticSignalType
-from lmm_project.core.exceptions import ModuleInitializationError
+from lmm_project.core.types import DevelopmentalStage, HomeostaticSignalType, ModuleType
+from lmm_project.core.exceptions import ModuleInitializationError, ModuleProcessingError
 
 # Type annotations with strings to avoid circular imports
 if TYPE_CHECKING:
@@ -31,6 +38,13 @@ class Mind:
     
     The Mind integrates all cognitive modules, manages developmental progression,
     and coordinates information flow between components.
+    
+    Key responsibilities:
+    - Initialize and manage cognitive modules
+    - Track developmental progression
+    - Coordinate homeostatic regulation
+    - Process inputs and generate responses
+    - Maintain system state
     """
     
     def __init__(
@@ -38,7 +52,8 @@ class Mind:
         event_bus: EventBus,
         state_manager: StateManager,
         initial_age: float = 0.0,
-        developmental_stage: str = "prenatal"
+        developmental_stage: str = "prenatal",
+        config: Optional[Dict[str, Any]] = None
     ):
         """
         Initialize the Mind
@@ -46,8 +61,12 @@ class Mind:
         Args:
             event_bus: Event bus for inter-module communication
             state_manager: State manager for tracking system state
-            initial_age: Initial age of the mind
+            initial_age: Initial age of the mind (0.0-1.0)
             developmental_stage: Initial developmental stage
+            config: Optional configuration parameters
+        
+        Raises:
+            ModuleInitializationError: If there's an error initializing the mind
         """
         self.event_bus = event_bus
         self.state_manager = state_manager
@@ -58,9 +77,22 @@ class Mind:
         self.creation_time = datetime.now()
         self.last_cycle_time = datetime.now()
         self.cycle_count = 0
+        self.config = config or {}
+        self._lock = threading.RLock()
+        self._performance_metrics = {
+            "cycle_times": [],
+            "module_processing_times": {},
+            "error_counts": {},
+            "last_error_time": None,
+            "total_messages_processed": 0
+        }
+        self._active = False
+        self._initialized = False
         
         # Register event handlers
         self.event_bus.subscribe("system_cycle_complete", self._handle_system_cycle)
+        self.event_bus.subscribe("module_error", self._handle_module_error)
+        self.event_bus.subscribe("performance_metric", self._handle_performance_metric)
         
         logger.info(f"Mind initialized at age {initial_age} in {developmental_stage} stage")
         
@@ -70,35 +102,97 @@ class Mind:
         
         This method creates instances of all required cognitive modules and 
         establishes connections between them.
+        
+        Returns:
+            Dict[str, Any]: Initialized modules
+            
+        Raises:
+            ModuleInitializationError: If there's an error initializing modules
         """
+        if self._initialized:
+            logger.warning("Modules already initialized, skipping initialization")
+            return self.modules
+            
         logger.info("Initializing cognitive modules...")
         
         # Import modules here to avoid circular imports
         from lmm_project.modules import get_module_classes
         
-        module_classes = get_module_classes()
-        
-        # Create instances of all modules
-        for module_type, module_class in module_classes.items():
-            module_id = f"{module_type}_{int(time.time())}"
-            try:
-                module = module_class(
-                    module_id=module_id,
-                    event_bus=self.event_bus
-                )
-                self.modules[module_type] = module
-                logger.info(f"Initialized {module_type} module")
-            except Exception as e:
-                logger.error(f"Failed to initialize {module_type} module: {str(e)}")
-                raise ModuleInitializationError(f"Failed to initialize {module_type} module: {str(e)}")
-                
-        logger.info(f"Initialized {len(self.modules)} cognitive modules")
-        
-        # Initialize homeostasis systems
-        self._initialize_homeostasis()
-        
+        try:
+            module_classes = get_module_classes()
+            
+            # Create instances of all modules
+            initialization_errors = []
+            for module_type, module_class in module_classes.items():
+                module_id = f"{module_type}_{int(time.time())}"
+                try:
+                    # Apply module-specific configuration if available
+                    module_config = self.config.get("modules", {}).get(module_type, {})
+                    
+                    module = module_class(
+                        module_id=module_id,
+                        event_bus=self.event_bus,
+                        development_level=self.age,
+                        **module_config
+                    )
+                    self.modules[module_type] = module
+                    
+                    # Initialize performance tracking for this module
+                    self._performance_metrics["module_processing_times"][module_type] = []
+                    self._performance_metrics["error_counts"][module_type] = 0
+                    
+                    logger.info(f"Initialized {module_type} module")
+                except Exception as e:
+                    error_msg = f"Failed to initialize {module_type} module: {str(e)}"
+                    logger.error(error_msg)
+                    logger.debug(traceback.format_exc())
+                    initialization_errors.append(error_msg)
+            
+            # If any modules failed to initialize, raise an error with details
+            if initialization_errors:
+                if len(initialization_errors) == len(module_classes):
+                    raise ModuleInitializationError(f"All modules failed to initialize: {initialization_errors}")
+                else:
+                    logger.warning(f"Some modules failed to initialize: {initialization_errors}")
+                    
+            logger.info(f"Initialized {len(self.modules)} cognitive modules")
+            
+            # Initialize homeostasis systems
+            self._initialize_homeostasis()
+            
+            # Mark as initialized
+            self._initialized = True
+            
+            # Publish initialization complete event
+            self.event_bus.publish(Message(
+                sender="mind",
+                message_type="initialization_complete",
+                content={
+                    "modules": list(self.modules.keys()),
+                    "homeostasis_systems": list(self.homeostasis_systems.keys()),
+                    "development_level": self.age,
+                    "developmental_stage": self.developmental_stage
+                }
+            ))
+            
+            return self.modules
+            
+        except Exception as e:
+            error_msg = f"Failed to initialize modules: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(traceback.format_exc())
+            raise ModuleInitializationError(error_msg)
+    
     def _initialize_homeostasis(self):
-        """Initialize homeostasis regulatory systems"""
+        """
+        Initialize homeostasis regulatory systems
+        
+        Returns:
+            Dict[str, Any]: Initialized homeostasis systems
+            
+        Raises:
+            ModuleInitializationError: If there's an error initializing homeostasis systems
+        """
         logger.info("Initializing homeostasis systems...")
         
         # Import homeostasis components
@@ -107,59 +201,94 @@ class Mind:
         from lmm_project.homeostasis.cognitive_load_balancer import CognitiveLoadBalancer
         from lmm_project.homeostasis.social_need_manager import SocialNeedManager
         
+        initialization_errors = []
+        
         # Initialize energy regulation
         try:
+            energy_config = self.config.get("homeostasis", {}).get("energy", {})
+            initial_energy = energy_config.get("initial_energy", 0.8 if self.age > 0.1 else 0.5)
+            
             energy_regulator = EnergyRegulator(
                 event_bus=self.event_bus,
-                initial_energy=0.8 if self.age > 0.1 else 0.5  # Lower initial energy for prenatal stage
+                initial_energy=initial_energy,
+                **energy_config
             )
             self.homeostasis_systems["energy"] = energy_regulator
             logger.info("Initialized energy regulation system")
         except Exception as e:
-            logger.error(f"Failed to initialize energy regulation: {str(e)}")
-            raise ModuleInitializationError(f"Failed to initialize energy regulation: {str(e)}")
+            error_msg = f"Failed to initialize energy regulation: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(traceback.format_exc())
+            initialization_errors.append(error_msg)
         
         # Initialize arousal control
         try:
+            arousal_config = self.config.get("homeostasis", {}).get("arousal", {})
+            initial_arousal = arousal_config.get("initial_arousal", 0.4 if self.age > 0.1 else 0.2)
+            
             arousal_controller = ArousalController(
                 event_bus=self.event_bus,
-                initial_arousal=0.4 if self.age > 0.1 else 0.2  # Lower arousal for prenatal stage
+                initial_arousal=initial_arousal,
+                **arousal_config
             )
             self.homeostasis_systems["arousal"] = arousal_controller
             logger.info("Initialized arousal control system")
         except Exception as e:
-            logger.error(f"Failed to initialize arousal control: {str(e)}")
-            raise ModuleInitializationError(f"Failed to initialize arousal control: {str(e)}")
+            error_msg = f"Failed to initialize arousal control: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(traceback.format_exc())
+            initialization_errors.append(error_msg)
         
         # Initialize cognitive load balancer
         try:
+            cognitive_config = self.config.get("homeostasis", {}).get("cognitive_load", {})
+            initial_capacity = cognitive_config.get("initial_capacity", 0.3)
+            working_memory_slots = cognitive_config.get("working_memory_slots", 2 + int(self.age * 5))
+            
             cognitive_load_balancer = CognitiveLoadBalancer(
                 event_bus=self.event_bus,
-                initial_capacity=0.3,  # Limited cognitive capacity initially
-                working_memory_slots=2 + int(self.age * 5)  # Working memory scales with development
+                initial_capacity=initial_capacity,
+                working_memory_slots=working_memory_slots,
+                **cognitive_config
             )
             self.homeostasis_systems["cognitive_load"] = cognitive_load_balancer
             logger.info("Initialized cognitive load balancer")
         except Exception as e:
-            logger.error(f"Failed to initialize cognitive load balancer: {str(e)}")
-            raise ModuleInitializationError(f"Failed to initialize cognitive load balancer: {str(e)}")
+            error_msg = f"Failed to initialize cognitive load balancer: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(traceback.format_exc())
+            initialization_errors.append(error_msg)
         
         # Initialize social need manager
         try:
+            social_config = self.config.get("homeostasis", {}).get("social_need", {})
+            initial_social_need = social_config.get("initial_social_need", 0.3 if self.age > 0.1 else 0.1)
+            
             social_need_manager = SocialNeedManager(
                 event_bus=self.event_bus,
-                initial_social_need=0.3 if self.age > 0.1 else 0.1  # Lower social need for prenatal stage
+                initial_social_need=initial_social_need,
+                **social_config
             )
             self.homeostasis_systems["social_need"] = social_need_manager
             logger.info("Initialized social need manager")
         except Exception as e:
-            logger.error(f"Failed to initialize social need manager: {str(e)}")
-            raise ModuleInitializationError(f"Failed to initialize social need manager: {str(e)}")
+            error_msg = f"Failed to initialize social need manager: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(traceback.format_exc())
+            initialization_errors.append(error_msg)
+        
+        # If any homeostasis systems failed to initialize, raise an error with details
+        if initialization_errors:
+            if len(initialization_errors) == 4:  # All systems failed
+                raise ModuleInitializationError(f"All homeostasis systems failed to initialize: {initialization_errors}")
+            else:
+                logger.warning(f"Some homeostasis systems failed to initialize: {initialization_errors}")
         
         # Notify all systems of current developmental stage
         self._update_homeostasis_development()
         
         logger.info(f"Initialized {len(self.homeostasis_systems)} homeostasis systems")
+        return self.homeostasis_systems
     
     def _update_homeostasis_development(self):
         """Update all homeostasis systems with current development level"""
@@ -604,3 +733,58 @@ class Mind:
             Current development level (same as age)
         """
         return self.age
+
+    def _handle_module_error(self, message: Message):
+        """Handle module error events"""
+        error_info = message.content
+        module_type = error_info.get("module_type")
+        error_message = error_info.get("error_message")
+        error_time = datetime.now()
+        
+        if module_type:
+            self._performance_metrics["error_counts"][module_type] += 1
+            self._performance_metrics["last_error_time"] = error_time.isoformat()
+            logger.error(f"Module error: {module_type}, Error: {error_message}")
+        else:
+            logger.error(f"Unspecified module error: {error_message}")
+        
+        # Publish error event
+        self.event_bus.publish(Message(
+            sender="mind",
+            message_type="error",
+            content={
+                "error_type": "module_error",
+                "module_type": module_type,
+                "error_message": error_message,
+                "error_time": error_time.isoformat()
+            }
+        ))
+
+    def _handle_performance_metric(self, message: Message):
+        """Handle performance metric events"""
+        metric_info = message.content
+        metric_type = metric_info.get("metric_type")
+        metric_value = metric_info.get("metric_value")
+        metric_time = datetime.now()
+        
+        if metric_type:
+            if metric_type not in self._performance_metrics:
+                self._performance_metrics[metric_type] = []
+            self._performance_metrics[metric_type].append({
+                "value": metric_value,
+                "timestamp": metric_time.isoformat()
+            })
+            logger.info(f"Performance metric: {metric_type}, Value: {metric_value}")
+        else:
+            logger.info("Unspecified performance metric")
+        
+        # Publish metric event
+        self.event_bus.publish(Message(
+            sender="mind",
+            message_type="performance_metric",
+            content={
+                "metric_type": metric_type,
+                "metric_value": metric_value,
+                "metric_time": metric_time.isoformat()
+            }
+        ))

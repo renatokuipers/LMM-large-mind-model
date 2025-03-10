@@ -74,6 +74,9 @@ class SelfModel(BaseModule):
         """
         super().__init__(module_id=module_id, module_type="self_model", event_bus=event_bus)
         
+        # Set developmental_level attribute to match development_level
+        self.developmental_level = self.development_level
+        
         # Initialize self-model state
         self.state = SelfModelState()
         
@@ -160,15 +163,16 @@ class SelfModel(BaseModule):
         result["developmental_level"] = self.developmental_level
         result["current_milestone"] = self._get_current_milestone()
         
-        # Publish self-model state if update was applied and event bus is available
-        if result.get("update_applied", False) and self.event_bus:
+        # Publish the updated self-model
+        if self.event_bus:
+            from lmm_project.core.message import Message
+            
             self.event_bus.publish(
-                msg_type="self_model_updated",
-                content={
-                    "self_model": self.state.model_dump(),
-                    "update_type": update_type,
-                    "developmental_level": self.developmental_level
-                }
+                Message(
+                    sender="self_model",
+                    message_type="self_model_updated",
+                    content=self.current_state
+                )
             )
         
         return result

@@ -213,7 +213,7 @@ class BeliefSystemModule(BaseModule):
         # Extract context if available in the message
         context = message.content.get("context", {}) if isinstance(message.content, dict) else {}
         
-        if message.msg_type == "perception_input":
+        if message.message_type == "perception_input":
             # Extract perception data, preserving context if available
             perception_data = message.content if not isinstance(message.content, dict) else {
                 k: v for k, v in message.content.items() if k != "context"
@@ -227,7 +227,7 @@ class BeliefSystemModule(BaseModule):
                 "context": context
             })
             
-        elif message.msg_type == "memory_retrieval":
+        elif message.message_type == "memory_retrieval":
             # Extract memory data, preserving context if available
             memory_data = message.content if not isinstance(message.content, dict) else {
                 k: v for k, v in message.content.items() if k != "context"
@@ -241,7 +241,7 @@ class BeliefSystemModule(BaseModule):
                 "context": context
             })
             
-        elif message.msg_type == "language_comprehension":
+        elif message.message_type == "language_comprehension":
             # Extract language data, preserving context if available
             language_data = message.content if not isinstance(message.content, dict) else {
                 k: v for k, v in message.content.items() if k != "context"
@@ -255,7 +255,7 @@ class BeliefSystemModule(BaseModule):
                 "context": context
             })
             
-        elif message.msg_type == "belief_query":
+        elif message.message_type == "belief_query":
             # Handle queries about beliefs
             query_params = {"belief_query": message.content}
             if context:
@@ -263,16 +263,15 @@ class BeliefSystemModule(BaseModule):
                 
             results = self.process_input(query_params)
             
-            # Reply with results
-            if self.event_bus and message.reply_to:
-                reply = Message(
-                    msg_type="belief_query_response",
-                    sender=self.module_id,
-                    recipient=message.sender,
-                    content=results,
-                    reply_to=message.id
+            # Publish the belief query response
+            if self.event_bus:
+                self.event_bus.publish(
+                    Message(
+                        sender="belief_system",
+                        message_type="belief_query_response",
+                        content=results
+                    )
                 )
-                self.event_bus.publish(reply)
     
     def _create_evidence_from_perception(self, perception_data: Dict[str, Any]) -> Evidence:
         """Convert perception data into evidence format"""

@@ -12,6 +12,27 @@ from lmm_project.modules.creativity.concept_combination import ConceptCombinatio
 from lmm_project.modules.creativity.divergent_thinking import DivergentThinking
 from lmm_project.modules.creativity.imagination import Imagination
 from lmm_project.modules.creativity.novelty_detection import NoveltyDetection
+from lmm_project.core.message import Message
+
+def get_module(
+    module_id: str = "creativity",
+    event_bus: Optional[EventBus] = None,
+    development_level: float = 0.0
+) -> "CreativityModule":
+    """
+    Factory function to create and initialize a creativity module
+    
+    Args:
+        module_id: Unique identifier for this module
+        event_bus: Event bus for communication with other modules
+        development_level: Initial developmental level (0.0-1.0)
+        
+    Returns:
+        Initialized creativity module
+    """
+    module = CreativityModule(module_id=module_id, event_bus=event_bus)
+    module.set_development_level(development_level)
+    return module
 
 class CreativityModule(BaseModule):
     """
@@ -183,7 +204,7 @@ class CreativityModule(BaseModule):
     
     def update_development(self, amount: float) -> float:
         """
-        Update the developmental level of this module and its components
+        Update the module's developmental level
         
         Args:
             amount: Amount to increase development
@@ -191,7 +212,7 @@ class CreativityModule(BaseModule):
         Returns:
             New developmental level
         """
-        previous_level = self.developmental_level
+        previous_level = self.development_level
         new_level = super().update_development(amount)
         
         # Update components with proportional development
@@ -229,7 +250,7 @@ class CreativityModule(BaseModule):
         """Get the current developmental milestone"""
         milestone = "pre_creativity"
         for level, name in sorted(self.development_milestones.items()):
-            if self.developmental_level >= level:
+            if self.development_level >= level:
                 milestone = name
         return milestone
     
@@ -261,27 +282,27 @@ class CreativityModule(BaseModule):
         processes.append("novelty_detection")
         
         # Add processes based on developmental level
-        if self.developmental_level >= 0.2:
+        if self.development_level >= 0.2:
             processes.append("concept_combination")
         
-        if self.developmental_level >= 0.4:
+        if self.development_level >= 0.4:
             processes.append("divergent_thinking")
             
-        if self.developmental_level >= 0.6:
+        if self.development_level >= 0.6:
             processes.append("imagination")
             
         # Adjust based on input type
         if input_type == "problem":
             # Prioritize divergent thinking for problems
-            if "divergent_thinking" not in processes and self.developmental_level >= 0.3:
+            if "divergent_thinking" not in processes and self.development_level >= 0.3:
                 processes.append("divergent_thinking")
         elif input_type == "concept":
             # Prioritize concept combination for concepts
-            if "concept_combination" not in processes and self.developmental_level >= 0.1:
+            if "concept_combination" not in processes and self.development_level >= 0.1:
                 processes.append("concept_combination")
         elif input_type == "scenario":
             # Prioritize imagination for scenarios
-            if "imagination" not in processes and self.developmental_level >= 0.3:
+            if "imagination" not in processes and self.development_level >= 0.3:
                 processes.append("imagination")
                 
         return processes
@@ -444,15 +465,18 @@ class CreativityModule(BaseModule):
             self._update_creativity_metrics([message.content])
             
             # Forward to other modules if appropriate
-            if self.event_bus and self.developmental_level > 0.5:
+            if self.event_bus and self.development_level > 0.5:
                 # At higher development levels, we send creative outputs to working memory
                 self.event_bus.publish(
-                    msg_type="working_memory_update",
-                    content={
-                        "type": "creative_output",
-                        "content": message.content,
-                        "priority": message.content.get("novelty_score", 0.5)
-                    }
+                    Message(
+                        sender="creativity",
+                        message_type="working_memory_update",
+                        content={
+                            "type": "creative_output",
+                            "content": message.content,
+                            "priority": message.content.get("novelty_score", 0.5)
+                        }
+                    )
                 )
     
     def _handle_creativity_request(self, message: Message) -> None:
@@ -466,13 +490,14 @@ class CreativityModule(BaseModule):
             # Process the request
             result = self.process_input(message.content)
             
-            # Publish result
+            # Publish the result
             if self.event_bus:
                 self.event_bus.publish(
-                    msg_type="creativity_result",
-                    content=result,
-                    source=self.module_id,
-                    target=message.source
+                    Message(
+                        sender="creativity",
+                        message_type="creativity_result",
+                        content=result
+                    )
                 )
     
     def _handle_evaluation_request(self, message: Message) -> None:
@@ -489,13 +514,14 @@ class CreativityModule(BaseModule):
                 # No content to evaluate
                 if self.event_bus:
                     self.event_bus.publish(
-                        msg_type="creativity_evaluation_result",
-                        content={
-                            "status": "error",
-                            "message": "No content to evaluate"
-                        },
-                        source=self.module_id,
-                        target=message.source
+                        Message(
+                            sender="creativity",
+                            message_type="creativity_evaluation_result",
+                            content={
+                                "status": "error",
+                                "message": "No content to evaluate"
+                            }
+                        )
                     )
                 return
                 
@@ -517,10 +543,10 @@ class CreativityModule(BaseModule):
             }
             
             # Apply developmental modulation
-            if self.developmental_level < 0.3:
+            if self.development_level < 0.3:
                 # Early development: creativity is mostly novelty
                 evaluation["creativity_score"] = novelty_result.get("novelty_score", 0.0) * 0.9 + 0.1
-            elif self.developmental_level < 0.6:
+            elif self.development_level < 0.6:
                 # Middle development: creativity balances novelty with baseline
                 evaluation["creativity_score"] = novelty_result.get("novelty_score", 0.0) * 0.7 + 0.3
             else:
@@ -528,13 +554,14 @@ class CreativityModule(BaseModule):
                 # We would use other factors here, but for simplicity we'll use the formula above
                 pass
                 
-            # Publish evaluation result
+            # Publish the evaluation result
             if self.event_bus:
                 self.event_bus.publish(
-                    msg_type="creativity_evaluation_result",
-                    content=evaluation,
-                    source=self.module_id,
-                    target=message.source
+                    Message(
+                        sender="creativity",
+                        message_type="creativity_evaluation_result",
+                        content=evaluation
+                    )
                 )
     
     def _handle_developmental_update(self, message: Message) -> None:

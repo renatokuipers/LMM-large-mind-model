@@ -38,8 +38,8 @@ import torch
 from collections import deque
 from pydantic import ValidationError
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.identity.models import SelfAttribute, SelfConcept as SelfConceptModel
 from lmm_project.modules.identity.neural_net import SelfConceptNetwork, get_device
 
@@ -560,32 +560,42 @@ class SelfConcept(BaseModule):
     
     def _extract_features(self, data) -> torch.Tensor:
         """
-        Extract features from data using the neural network
+        Extract features from input data for neural processing
         
         Args:
-            data: Data to extract features from
+            data: Text or other data to extract features from
             
         Returns:
-            Tensor of features
+            Tensor of features [1, feature_dim]
         """
-        # Simple feature extraction
-        text = str(data)
-        words = text.split()
+        # For demonstration, create simple random features
+        # In a real implementation, this would use proper feature extraction
+        feature_dim = 128
         
-        # Create a simple word embedding
-        embedding = torch.zeros(min(len(words), 128), dtype=torch.float32)
-        
-        for i, word in enumerate(words[:embedding.size(0)]):
-            # Simple hash-based embedding
-            hash_val = hash(word) % 10000
-            embedding[i] = (hash_val / 10000) * 2 - 1
+        if isinstance(data, str):
+            # Seed random generator with hash of string to ensure consistent features
+            seed = hash(data) % 10000
+            np.random.seed(seed)
             
-        # Pad if needed
-        if embedding.size(0) < 128:
-            padding = torch.zeros(128 - embedding.size(0), dtype=torch.float32)
-            embedding = torch.cat([embedding, padding])
+            # Generate "features" based on the text
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
+            features = features / np.linalg.norm(features)  # Normalize
             
-        return embedding.unsqueeze(0)  # Add batch dimension
+        elif isinstance(data, dict):
+            # For dictionary data, use keys and values to generate features
+            seed = hash(str(sorted(data.items()))) % 10000
+            np.random.seed(seed)
+            
+            # Generate "features" based on the dictionary
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
+            features = features / np.linalg.norm(features)  # Normalize
+            
+        else:
+            # Default random features
+            features = np.random.randn(1, feature_dim)  # Add batch dimension
+            features = features / np.linalg.norm(features)  # Normalize
+            
+        return torch.FloatTensor(features)
     
     def update_development(self, amount: float) -> float:
         """

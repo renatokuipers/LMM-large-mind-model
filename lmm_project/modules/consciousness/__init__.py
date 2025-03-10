@@ -85,6 +85,7 @@ class ConsciousnessSystem(BaseModule):
         super().__init__(module_id=module_id, module_type="consciousness", event_bus=event_bus)
         
         # Set development level
+        self.development_level = development_level
         self._set_development_level(development_level)
         
         # Initialize state
@@ -345,20 +346,22 @@ class ConsciousnessSystem(BaseModule):
         return results
     
     def _handle_query(self, message: Message) -> None:
-        """Handle consciousness query messages"""
+        """Handle query messages"""
         query_type = message.content.get("query_type", "")
-        
         response = {
-            "module_id": self.module_id,
-            "query_type": query_type
+            "status": "success",
+            "query_type": query_type,
+            "timestamp": datetime.now().isoformat()
         }
         
-        if query_type == "consciousness_state":
-            response["state"] = self.state.model_dump()
+        if query_type == "state":
+            response["state"] = self.get_state()
             
-        elif query_type == "development_level":
-            response["developmental_level"] = self.developmental_level
-            response["current_milestone"] = self._get_current_milestone()
+        elif query_type == "global_workspace":
+            response["global_workspace"] = self.global_workspace.state.model_dump() if hasattr(self.global_workspace, "state") else {}
+            
+        elif query_type == "introspection":
+            response["introspection"] = self.introspection.state.model_dump() if hasattr(self.introspection, "state") else {}
             
         elif query_type == "self_model":
             response["self_model"] = self.self_model.state.model_dump() if hasattr(self.self_model, "state") else {}
@@ -368,105 +371,126 @@ class ConsciousnessSystem(BaseModule):
             
         # Publish response if event bus is available
         if self.event_bus:
-            self.event_bus.publish(
-                msg_type="consciousness_response",
+            self.event_bus.publish(Message(
+                sender=self.module_id,
+                message_type="consciousness_response",
                 content=response,
-                source=self.module_id,
-                target=message.source
-            )
+                metadata={"target": message.sender}
+            ))
     
     def _handle_development(self, message: Message) -> None:
         """Handle development update messages"""
-        if message.target in [self.module_id, "all"]:
+        # Check if this message is for all modules or specifically for this module
+        # The target should be in the content or metadata, not directly on the message
+        target = message.content.get("target", "all")
+        
+        if target in [self.module_id, "all"]:
             amount = message.content.get("amount", 0.01)
             self.update_development(amount)
     
     def _handle_save_state(self, message: Message) -> None:
         """Handle save state messages"""
-        if message.target in [self.module_id, "all"]:
+        # Check if this message is for all modules or specifically for this module
+        target = message.content.get("target", "all")
+        
+        if target in [self.module_id, "all"]:
             path = message.content.get("path", "")
             
             if not path:
-                # Default path
-                path = os.path.join("data", "states", f"{self.module_id}_state.json")
+                return
                 
-            # Create directories if needed
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            
-            # Get current state
+            # Save state to the specified path
             state = self.get_state()
             
-            # Save to file
             try:
-                with open(path, 'w') as f:
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                
+                # Save state to file
+                with open(path, "w") as f:
                     json.dump(state, f, indent=2)
                     
                 # Publish success message
                 if self.event_bus:
-                    self.event_bus.publish(
-                        msg_type="state_saved",
+                    self.event_bus.publish(Message(
+                        sender=self.module_id,
+                        message_type="save_state_result",
                         content={
-                            "module_id": self.module_id,
-                            "path": path
+                            "success": True,
+                            "path": path,
+                            "module": self.module_id
                         }
-                    )
+                    ))
             except Exception as e:
                 # Publish error message
                 if self.event_bus:
-                    self.event_bus.publish(
-                        msg_type="save_error",
+                    self.event_bus.publish(Message(
+                        sender=self.module_id,
+                        message_type="save_state_result",
                         content={
-                            "module_id": self.module_id,
-                            "error": str(e)
+                            "success": False,
+                            "error": str(e),
+                            "path": path,
+                            "module": self.module_id
                         }
-                    )
+                    ))
     
     def _handle_load_state(self, message: Message) -> None:
         """Handle load state messages"""
-        if message.target in [self.module_id, "all"]:
+        # Check if this message is for all modules or specifically for this module
+        target = message.content.get("target", "all")
+        
+        if target in [self.module_id, "all"]:
             path = message.content.get("path", "")
             
             if not path:
-                # Default path
-                path = os.path.join("data", "states", f"{self.module_id}_state.json")
+                return
                 
-            # Load from file
+            # Load state from the specified path
             try:
-                if os.path.exists(path):
-                    with open(path, 'r') as f:
-                        state = json.load(f)
-                        
-                    # Apply development level
-                    if "developmental_level" in state:
-                        self._set_development_level(state["developmental_level"])
-                        self._sync_development_levels()
-                        
-                    # Publish success message
+                # Check if file exists
+                if not os.path.exists(path):
                     if self.event_bus:
-                        self.event_bus.publish(
-                            msg_type="state_loaded",
+                        self.event_bus.publish(Message(
+                            sender=self.module_id,
+                            message_type="load_state_result",
                             content={
-                                "module_id": self.module_id,
-                                "path": path
+                                "success": False,
+                                "error": f"File not found: {path}",
+                                "path": path,
+                                "module": self.module_id
                             }
-                        )
-                else:
-                    # Publish error message
-                    if self.event_bus:
-                        self.event_bus.publish(
-                            msg_type="load_error",
-                            content={
-                                "module_id": self.module_id,
-                                "error": f"File not found: {path}"
-                            }
-                        )
+                        ))
+                    return
+                    
+                # Load state from file
+                with open(path, "r") as f:
+                    state = json.load(f)
+                    
+                # Apply state
+                self.load_state(state)
+                
+                # Publish success message
+                if self.event_bus:
+                    self.event_bus.publish(Message(
+                        sender=self.module_id,
+                        message_type="load_state_result",
+                        content={
+                            "success": True,
+                            "path": path,
+                            "module": self.module_id
+                        }
+                    ))
             except Exception as e:
                 # Publish error message
                 if self.event_bus:
-                    self.event_bus.publish(
-                        msg_type="load_error",
+                    self.event_bus.publish(Message(
+                        sender=self.module_id,
+                        message_type="load_state_result",
                         content={
-                            "module_id": self.module_id,
-                            "error": str(e)
+                            "success": False,
+                            "error": str(e),
+                            "path": path,
+                            "module": self.module_id
                         }
-                    )
+                    ))

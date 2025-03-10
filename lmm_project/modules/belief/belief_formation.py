@@ -164,16 +164,20 @@ class BeliefFormation(BaseModule):
         """Request update of an existing belief with new evidence"""
         # Send message to belief updating component
         if self.event_bus:
-            message = Message(
-                msg_type="belief_update_request",
-                sender=self.module_id,
-                content={
-                    "belief_id": belief_id,
-                    "supporting_evidence": evidence_groups["supporting"],
-                    "contradicting_evidence": evidence_groups["contradicting"]
-                }
+            # Publish the belief update request
+            update_request = {
+                "belief_id": belief_id,
+                "supporting_evidence": evidence_groups["supporting"],
+                "contradicting_evidence": evidence_groups["contradicting"]
+            }
+            
+            self.event_bus.publish(
+                Message(
+                    sender="belief_formation",
+                    message_type="belief_update_request",
+                    content=update_request
+                )
             )
-            self.event_bus.publish(message)
     
     def _find_matching_belief(self, belief_system: BeliefSystem, content: Dict[str, Any]) -> Optional[Belief]:
         """Find a belief with matching content"""

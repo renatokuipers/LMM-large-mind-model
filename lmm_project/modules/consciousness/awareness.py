@@ -74,6 +74,9 @@ class Awareness(BaseModule):
         """
         super().__init__(module_id=module_id, module_type="awareness", event_bus=event_bus)
         
+        # Set developmental_level attribute to match development_level
+        self.developmental_level = self.development_level
+        
         # Initialize awareness state
         self.state = AwarenessState()
         
@@ -159,10 +162,12 @@ class Awareness(BaseModule):
         
         # Publish awareness state if event bus is available
         if self.event_bus:
-            self.event_bus.publish(
-                msg_type="awareness_state",
+            from lmm_project.core.message import Message
+            self.event_bus.publish(Message(
+                sender=self.module_id,
+                message_type="awareness_state",
                 content=result
-            )
+            ))
         
         return result
     
@@ -386,7 +391,7 @@ class Awareness(BaseModule):
         self.process_input({
             "type": "perception",
             "state": message.content,
-            "source": message.source
+            "source": message.sender
         })
     
     def _handle_emotion(self, message: Message) -> None:
@@ -394,7 +399,7 @@ class Awareness(BaseModule):
         self.process_input({
             "type": "emotion",
             "state": message.content,
-            "source": message.source
+            "source": message.sender
         })
     
     def _handle_cognitive(self, message: Message) -> None:
@@ -402,13 +407,13 @@ class Awareness(BaseModule):
         self.process_input({
             "type": "cognitive",
             "state": message.content,
-            "source": message.source
+            "source": message.sender
         })
     
     def _handle_motivation(self, message: Message) -> None:
-        """Handle goal and motivation messages"""
+        """Handle motivation state messages"""
         self.process_input({
             "type": "motivation",
             "state": message.content,
-            "source": message.source
+            "source": message.sender
         }) 

@@ -59,12 +59,25 @@ class LongTermMemory(BaseModule):
             **data
         )
         
+        # Extract storage_dir from Field if needed
+        storage_path = self.storage_dir
+        if hasattr(storage_path, "default"):  # If it's still a Field object
+            storage_path = storage_path.default
+        elif isinstance(storage_path, Field):  # Direct check for Field type
+            storage_path = "storage/memories"  # Use default value
+        
+        # Set storage directory
+        self.storage_dir = storage_path
+        
+        # Set embedding dimension
+        self.embedding_dimension = data.get("embedding_dimension", 768)
+        
         # Create storage directory
         os.makedirs(self.storage_dir, exist_ok=True)
         
         # Initialize vector store
         self.vector_store = VectorStore(
-            dimension=self.embedding_dimension,
+            dimension=int(self.embedding_dimension),
             storage_dir="storage/embeddings/memories"
         )
         
@@ -429,6 +442,11 @@ class LongTermMemory(BaseModule):
         """Load memories from disk"""
         try:
             memory_path = Path(self.storage_dir)
+            if not memory_path.exists():
+                print(f"Memory storage directory {memory_path} does not exist, creating it")
+                memory_path.mkdir(parents=True, exist_ok=True)
+                return
+                
             for file_path in memory_path.glob("*.json"):
                 try:
                     with open(file_path, "r") as f:

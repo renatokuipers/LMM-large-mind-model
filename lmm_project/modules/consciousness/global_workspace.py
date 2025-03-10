@@ -38,6 +38,7 @@ from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus, Message
 from lmm_project.modules.consciousness.models import WorkspaceState, GlobalWorkspaceItem
 from lmm_project.modules.consciousness.neural_net import GlobalWorkspaceNetwork
+from lmm_project.core.message import Message
 
 class GlobalWorkspace(BaseModule):
     """
@@ -72,6 +73,9 @@ class GlobalWorkspace(BaseModule):
             event_bus: Event bus for communication with other modules
         """
         super().__init__(module_id=module_id, module_type="global_workspace", event_bus=event_bus)
+        
+        # Set development level
+        self.developmental_level = self.development_level
         
         # Initialize workspace state
         self.state = WorkspaceState()
@@ -162,10 +166,12 @@ class GlobalWorkspace(BaseModule):
                 "developmental_level": self.developmental_level
             }
             
-            self.event_bus.publish(
-                msg_type="global_workspace_broadcast",
+            # Publish broadcast if event bus is available
+            self.event_bus.publish(Message(
+                sender=self.module_id,
+                message_type="global_workspace_broadcast",
                 content=broadcast
-            )
+            ))
         
         return result
     
@@ -322,69 +328,111 @@ class GlobalWorkspace(BaseModule):
     def _handle_awareness(self, message: Message) -> None:
         """Handle awareness state messages"""
         if isinstance(message.content, dict) and "state" in message.content:
-            self.process_input({
-                "content": message.content["state"],
-                "source": "awareness",
-                "activation": 0.7  # Awareness typically has high activation
-            })
+            # Create a workspace item from the awareness state
+            item = GlobalWorkspaceItem(
+                content=message.content["state"],
+                source_module="awareness",
+                activation_level=0.7,  # Awareness typically has high activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_perception(self, message: Message) -> None:
-        """Handle processed perception messages"""
-        self.process_input({
-            "content": message.content,
-            "source": "perception",
-            "activation": 0.6  # Perception typically has high activation
-        })
+        """Handle perception input messages"""
+        if isinstance(message.content, dict):
+            # Create a workspace item from the perception input
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="perception",
+                activation_level=0.6,  # Perception typically has medium-high activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_memory(self, message: Message) -> None:
         """Handle memory retrieval messages"""
-        self.process_input({
-            "content": message.content,
-            "source": "memory",
-            "activation": 0.5  # Moderate activation for memory
-        })
+        if isinstance(message.content, dict):
+            # Create a workspace item from the memory retrieval
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="memory",
+                activation_level=0.5,  # Memory typically has medium activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_language(self, message: Message) -> None:
         """Handle language processing messages"""
-        self.process_input({
-            "content": message.content,
-            "source": "language",
-            "activation": 0.6  # High activation for language
-        })
+        if isinstance(message.content, dict):
+            # Create a workspace item from the language processing
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="language",
+                activation_level=0.6,  # Language typically has medium-high activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_reasoning(self, message: Message) -> None:
-        """Handle reasoning result messages"""
-        self.process_input({
-            "content": message.content,
-            "source": "reasoning",
-            "activation": 0.7  # High activation for reasoning
-        })
+        """Handle reasoning process messages"""
+        if isinstance(message.content, dict):
+            # Create a workspace item from the reasoning process
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="reasoning",
+                activation_level=0.7,  # Reasoning typically has high activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_emotion(self, message: Message) -> None:
         """Handle emotion state messages"""
-        # Emotions have variable activation based on intensity
-        intensity = 0.5  # Default intensity
-        if isinstance(message.content, dict) and "intensity" in message.content:
-            intensity = message.content["intensity"]
-        
-        self.process_input({
-            "content": message.content,
-            "source": "emotion",
-            "activation": intensity
-        })
+        if isinstance(message.content, dict):
+            # Create a workspace item from the emotion state
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="emotion",
+                activation_level=0.6,  # Emotions typically have medium-high activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_attention(self, message: Message) -> None:
         """Handle attention focus messages"""
-        self.process_input({
-            "content": message.content,
-            "source": "attention",
-            "activation": 0.8  # Very high activation for attention
-        })
+        if isinstance(message.content, dict):
+            # Create a workspace item from the attention focus
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="attention",
+                activation_level=0.8,  # Attention typically has very high activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item)
     
     def _handle_motor(self, message: Message) -> None:
-        """Handle motor state messages"""
-        self.process_input({
-            "content": message.content,
-            "source": "motor",
-            "activation": 0.4  # Lower activation for motor information
-        }) 
+        """Handle motor action messages"""
+        if isinstance(message.content, dict):
+            # Create a workspace item from the motor action
+            item = GlobalWorkspaceItem(
+                content=message.content,
+                source_module="motor",
+                activation_level=0.5,  # Motor actions typically have medium activation
+                timestamp=datetime.now()
+            )
+            
+            # Add to workspace
+            self._add_to_workspace(item) 

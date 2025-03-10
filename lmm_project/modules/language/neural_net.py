@@ -426,8 +426,13 @@ class GrammarNetwork(nn.Module):
             # Process sequence through GRU
             outputs, hidden = self.sequence_predictor(sequence)
             
-            # Predict next element
-            prediction = self.prediction_head(outputs[:, -1, :])
+            # Predict next element - handle both 2D and 3D outputs
+            if outputs.dim() == 3:
+                # Batch x Sequence x Features
+                prediction = self.prediction_head(outputs[:, -1, :])
+            else:
+                # Batch x Features (single timestep output)
+                prediction = self.prediction_head(outputs)
             
             # Prediction quality improves with development
             quality = torch.norm(prediction, dim=1, keepdim=True) * dev_factor

@@ -19,9 +19,9 @@
 
 # TODO: Implement different word types and learning patterns:
 # - Concrete nouns: Objects, people, places
-# - Action verbs: Physical and mental actions
-# - Descriptive words: Adjectives and adverbs
-# - Relational words: Prepositions, conjunctions, etc.
+# - Action verbs: Movement, change, activities
+# - Descriptive adjectives: Properties, qualities
+# - Abstract concepts: Ideas, emotions, principles
 
 # TODO: Connect to memory and perception systems
 # Word learning should be tied to perceptual experiences
@@ -34,8 +34,8 @@ import numpy as np
 from datetime import datetime
 from collections import deque
 
-from lmm_project.base.module import BaseModule
-from lmm_project.event_bus import EventBus
+from lmm_project.modules.base_module import BaseModule
+from lmm_project.core.event_bus import EventBus
 from lmm_project.modules.language.models import WordModel, LanguageNeuralState
 from lmm_project.modules.language.neural_net import WordNetwork, get_device
 from lmm_project.utils.llm_client import LLMClient
@@ -141,37 +141,133 @@ class WordLearning(BaseModule):
             self._initialize_word_embeddings()
     
     def _initialize_word_embeddings(self):
-        """Initialize embeddings for words in vocabulary"""
+        """
+        Initialize embeddings for words in vocabulary using LLM API
+        
+        Processes all words that need embeddings in batches for efficiency
+        and uses a retry mechanism to handle API failures.
+        """
         # Only get embeddings for words we don't already have
         words_to_embed = [w for w in self.word_model.vocabulary 
                           if w not in self.word_model.word_embeddings]
         
         if not words_to_embed:
             return
+            
+        # Create a logging list of failed words for retry
+        if not hasattr(self, "_failed_embeddings"):
+            self._failed_embeddings = set()
         
-        try:
-            # Get embeddings from LLM client
-            embeddings = self.llm_client.get_embedding(words_to_embed)
+        # Process in batches of up to 20 words for efficiency
+        batch_size = 20
+        for batch_start in range(0, len(words_to_embed), batch_size):
+            batch_end = min(batch_start + batch_size, len(words_to_embed))
+            current_batch = words_to_embed[batch_start:batch_end]
             
-            # Add embeddings to model
-            for i, word in enumerate(words_to_embed):
-                if isinstance(embeddings, list) and i < len(embeddings):
-                    # Handle nested list structure or flat list
-                    embedding = embeddings[i] if isinstance(embeddings[0], list) else embeddings
-                    self.word_model.word_embeddings[word] = embedding
+            # Skip tiny batches
+            if len(current_batch) == 0:
+                continue
+                
+            # Try primary model first
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    # Get embeddings from LLM client
+                    embeddings = self.llm_client.get_embedding(
+                        current_batch,
+                        embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                    )
                     
-                    # Also initialize word associations for more developed vocabulary
-                    if self.development_level >= 0.6:
-                        self.word_model.word_associations[word] = []
-        except Exception as e:
-            # Fall back to simplified embeddings if LLM client fails
-            print(f"Warning: Failed to get embeddings from LLM client: {e}")
-            
-            # Create simple hash-based embeddings
-            for word in words_to_embed:
-                # Create a simple embedding based on hash
-                simple_embedding = [(hash(word + str(i)) % 10000) / 10000 for i in range(64)]
-                self.word_model.word_embeddings[word] = simple_embedding
+                    # Process successful embeddings
+                    if isinstance(embeddings, list):
+                        # Check if we got a list of lists (one per word) or a single embedding
+                        if len(current_batch) == 1:
+                            # Single word case
+                            if isinstance(embeddings[0], list):
+                                # Nested structure - use inner list
+                                self.word_model.word_embeddings[current_batch[0]] = embeddings[0]
+                            else:
+                                # Flat list - use as is
+                                self.word_model.word_embeddings[current_batch[0]] = embeddings
+                                
+                            # Initialize associations if developed enough
+                            if self.development_level >= 0.6 and current_batch[0] not in self.word_model.word_associations:
+                                self.word_model.word_associations[current_batch[0]] = []
+                        else:
+                            # Multiple words case
+                            for i, word in enumerate(current_batch):
+                                if i < len(embeddings):
+                                    if isinstance(embeddings[i], list):
+                                        self.word_model.word_embeddings[word] = embeddings[i]
+                                    else:
+                                        # If embeddings is a list of values instead of list of lists
+                                        # This shouldn't happen with current API but handle it
+                                        print(f"Warning: Unexpected embedding format for batch. Creating per-word embeddings.")
+                                        # Try to get individual embeddings
+                                        try:
+                                            word_embedding = self.llm_client.get_embedding(word)
+                                            if isinstance(word_embedding, list):
+                                                if isinstance(word_embedding[0], list):
+                                                    self.word_model.word_embeddings[word] = word_embedding[0]
+                                                else:
+                                                    self.word_model.word_embeddings[word] = word_embedding
+                                        except Exception as e:
+                                            print(f"Error getting embedding for single word '{word}': {e}")
+                                            self._failed_embeddings.add(word)
+                                    
+                                    # Initialize associations if developed enough
+                                    if self.development_level >= 0.6 and word not in self.word_model.word_associations:
+                                        self.word_model.word_associations[word] = []
+                    
+                    # If we got here, this batch was successful
+                    break
+                    
+                except Exception as e:
+                    print(f"Warning: Embedding batch attempt {attempt+1} failed: {e}")
+                    
+                    if attempt == max_retries - 1:
+                        # Last attempt, try fallback model
+                        try:
+                            # Get embeddings with fallback model
+                            embeddings = self.llm_client.get_embedding(
+                                current_batch,
+                                embedding_model="text-embedding-ada-002"
+                            )
+                            
+                            # Process successful embeddings (same logic as above)
+                            if isinstance(embeddings, list):
+                                # Handle single word vs. multiple word cases
+                                if len(current_batch) == 1:
+                                    if isinstance(embeddings[0], list):
+                                        self.word_model.word_embeddings[current_batch[0]] = embeddings[0]
+                                    else:
+                                        self.word_model.word_embeddings[current_batch[0]] = embeddings
+                                        
+                                    # Initialize associations if developed enough
+                                    if self.development_level >= 0.6 and current_batch[0] not in self.word_model.word_associations:
+                                        self.word_model.word_associations[current_batch[0]] = []
+                                else:
+                                    for i, word in enumerate(current_batch):
+                                        if i < len(embeddings):
+                                            if isinstance(embeddings[i], list):
+                                                self.word_model.word_embeddings[word] = embeddings[i]
+                                            
+                                            # Initialize associations if developed enough
+                                            if self.development_level >= 0.6 and word not in self.word_model.word_associations:
+                                                self.word_model.word_associations[word] = []
+                            
+                            print(f"Successfully used fallback embedding model for batch")
+                            
+                        except Exception as fallback_error:
+                            print(f"ERROR: Fallback embedding also failed: {fallback_error}")
+                            # Add words to failed list for later retry
+                            for word in current_batch:
+                                self._failed_embeddings.add(word)
+        
+        # Check if we have any failed words and log them
+        if self._failed_embeddings:
+            print(f"Words that couldn't be embedded: {len(self._failed_embeddings)}")
+            # We'll try these again in future calls
     
     def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -439,21 +535,65 @@ class WordLearning(BaseModule):
         
         # Get word embedding if development level is sufficient and meaning is provided
         if self.development_level >= 0.5 and (meaning or word not in self.word_model.word_embeddings):
-            # Try to get embedding from LLM client
+            # Track if embedding is needed
+            embedding_needed = True
+            
+            # Check if we should use meaning for a more accurate embedding
+            if meaning and len(meaning) > 0:
+                embedding_text = word + ": " + meaning  # Include meaning for better embedding
+            else:
+                embedding_text = word
+            
+            # Try primary embedding model first
             try:
-                embedding = self.llm_client.get_embedding(word)
+                embedding = self.llm_client.get_embedding(
+                    embedding_text,
+                    embedding_model="text-embedding-nomic-embed-text-v1.5@q4_k_m"
+                )
+                
+                # Process embedding based on format
                 if isinstance(embedding, list):
                     if isinstance(embedding[0], list):
-                        # Handle nested list output
                         self.word_model.word_embeddings[word] = embedding[0]
                     else:
-                        # Handle flat list output
                         self.word_model.word_embeddings[word] = embedding
-            except Exception as e:
-                # Fall back to simplified embedding
-                print(f"Warning: Failed to get embedding for '{word}': {e}")
-                # Create a simple hash-based embedding
-                self.word_model.word_embeddings[word] = [(hash(word + str(i)) % 10000) / 10000 for i in range(64)]
+                
+                # Mark as successful
+                embedding_needed = False
+            except Exception as primary_error:
+                print(f"Warning: Primary embedding model failed for '{word}': {primary_error}")
+            
+            # Try fallback model if primary failed
+            if embedding_needed:
+                try:
+                    embedding = self.llm_client.get_embedding(
+                        embedding_text,
+                        embedding_model="text-embedding-ada-002"
+                    )
+                    
+                    # Process embedding based on format
+                    if isinstance(embedding, list):
+                        if isinstance(embedding[0], list):
+                            self.word_model.word_embeddings[word] = embedding[0]
+                        else:
+                            self.word_model.word_embeddings[word] = embedding
+                    
+                    # Mark as successful
+                    embedding_needed = False
+                    print(f"Successfully used fallback embedding model for '{word}'")
+                except Exception as fallback_error:
+                    print(f"Warning: Fallback embedding also failed for '{word}': {fallback_error}")
+            
+            # If both attempts failed, mark for later retry
+            if embedding_needed:
+                if not hasattr(self, "_failed_embeddings"):
+                    self._failed_embeddings = set()
+                
+                self._failed_embeddings.add(word)
+                print(f"Added '{word}' to failed embeddings list for future retry")
+                
+                # We don't use hash-based embeddings anymore - we'll retry later
+                # and use similarity search based on word form instead
         
         # Record activation in neural state
         self.neural_state.add_activation("word_learning", {
