@@ -21,6 +21,7 @@ from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.message import Message
 from lmm_project.utils.llm_client import LLMClient, Message as LLMMessage
+from lmm_project.modules.emotion.models import EmotionNeuralState
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -94,6 +95,10 @@ class ValenceArousalSystem(BaseModule):
         # Try to use GPU if available
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.network.to(self.device)
+        
+        # Neural state for tracking activations and development
+        self.neural_state = EmotionNeuralState()
+        self.neural_state.encoder_development = development_level
         
         # Valence-Arousal history
         self.history = deque(maxlen=100)
@@ -437,6 +442,14 @@ class ValenceArousalSystem(BaseModule):
         valence = valence_tensor.item()
         arousal = arousal_tensor.item()
         
+        # Record activation for tracking
+        if hasattr(self, "neural_state"):
+            self.neural_state.add_activation('encoder', {
+                'features': features,
+                'valence': valence,
+                'arousal': arousal
+            })
+        
         return {
             "valence": valence,
             "arousal": arousal,
@@ -576,6 +589,11 @@ class ValenceArousalSystem(BaseModule):
         
         # Adjust parameters for new development level
         self._adjust_params_for_development()
+        
+        # Update neural state
+        if hasattr(self, "neural_state"):
+            self.neural_state.encoder_development = new_level
+            self.neural_state.last_updated = datetime.now()
         
         # More sophisticated neural network as development progresses
         if new_level > 0.5 and self.hidden_dim < 40:

@@ -18,7 +18,7 @@ from collections import defaultdict
 from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.message import Message
-from lmm_project.modules.emotion.models import EmotionState, EmotionRegulationRequest, EmotionRegulationResult
+from lmm_project.modules.emotion.models import EmotionState, EmotionRegulationRequest, EmotionRegulationResult, EmotionNeuralState
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -63,6 +63,10 @@ class EmotionRegulator(BaseModule):
         
         # Initialize regulation strategies
         self._initialize_regulation_strategies()
+        
+        # Neural state for tracking activations and development
+        self.neural_state = EmotionNeuralState()
+        self.neural_state.regulation_development = development_level
         
         # Regulation parameters
         self.params = {
@@ -519,6 +523,19 @@ class EmotionRegulator(BaseModule):
         else:
             # No specific target, success is based on regulation strength
             success_level = regulation_strength
+        
+        # Record activation for tracking
+        if hasattr(self, "neural_state"):
+            self.neural_state.add_activation('regulation', {
+                'strategy': strategy,
+                'effectiveness': effectiveness,
+                'regulation_strength': regulation_strength,
+                'original_valence': current_state.valence,
+                'original_arousal': current_state.arousal,
+                'new_valence': regulated_state.valence,
+                'new_arousal': regulated_state.arousal,
+                'success_level': success_level
+            })
             
         # Create regulation result
         result = {
@@ -546,6 +563,11 @@ class EmotionRegulator(BaseModule):
         
         # Adjust parameters for new development level
         self._adjust_parameters_for_development()
+        
+        # Update neural state
+        if hasattr(self, "neural_state"):
+            self.neural_state.regulation_development = new_level
+            self.neural_state.last_updated = datetime.now()
         
         return new_level
     

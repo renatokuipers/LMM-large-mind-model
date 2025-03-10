@@ -50,7 +50,7 @@ except ImportError:
 from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.message import Message
-from lmm_project.modules.emotion.models import SentimentAnalysis
+from lmm_project.modules.emotion.models import SentimentAnalysis, EmotionNeuralState
 from lmm_project.utils.llm_client import LLMClient, Message as LLMMessage
 
 # Initialize logger
@@ -121,6 +121,10 @@ class SentimentAnalyzer(BaseModule):
             "intensity_threshold": 0.3, # Threshold for emotion detection
             "development_factor": development_level
         }
+        
+        # Neural state for tracking activations and development
+        self.neural_state = EmotionNeuralState()
+        self.neural_state.sentiment_development = development_level
         
         # Adjust parameters based on development level
         self._adjust_parameters_for_development()
@@ -728,6 +732,16 @@ class SentimentAnalyzer(BaseModule):
         # Calculate compound score
         compound_score = positive_score - negative_score
         
+        # Record activation for tracking purposes
+        if hasattr(self, "neural_state") and self.neural_state is not None:
+            self.neural_state.add_activation('sentiment', {
+                'inputs': len(tokens),
+                'positive': positive_score,
+                'negative': negative_score,
+                'neutral': neutral_score,
+                'compound': compound_score
+            })
+        
         # Detect emotions
         # In a real implementation, this would be done by the neural network
         # Here we'll use a hybrid approach combining neural sentiment with lexical emotion detection
@@ -924,6 +938,11 @@ class SentimentAnalyzer(BaseModule):
         """
         # Update base module development
         new_level = super().update_development(amount)
+        
+        # Update neural state development level
+        if hasattr(self, "neural_state"):
+            self.neural_state.sentiment_development = new_level
+            self.neural_state.last_updated = datetime.now()
         
         # Adjust parameters for new development level
         self._adjust_parameters_for_development()

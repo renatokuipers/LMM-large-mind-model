@@ -138,3 +138,178 @@ class EmotionalParameters(BaseModel):
     baseline_valence: float = Field(..., ge=-1.0, le=1.0, description="Default valence state")
     baseline_arousal: float = Field(..., ge=0.0, le=1.0, description="Default arousal state")
     regulation_capacity: float = Field(..., ge=0.0, le=1.0, description="Ability to regulate emotions")
+
+class EmotionNeuralState(BaseModel):
+    """
+    State information for the emotion neural networks
+    
+    This tracks the state of neural networks used for emotional processing,
+    including developmental levels and recent activations.
+    """
+    encoder_development: float = Field(0.0, ge=0.0, le=1.0, description="Development level of emotion encoder")
+    classifier_development: float = Field(0.0, ge=0.0, le=1.0, description="Development level of emotion classifier")
+    sentiment_development: float = Field(0.0, ge=0.0, le=1.0, description="Development level of sentiment analyzer")
+    regulation_development: float = Field(0.0, ge=0.0, le=1.0, description="Development level of emotion regulator")
+    
+    # Track recent activations for each neural component
+    recent_encoder_activations: List[Dict[str, Any]] = Field(
+        default_factory=list, 
+        description="Recent activations of the emotion encoder"
+    )
+    recent_classifier_activations: List[Dict[str, Any]] = Field(
+        default_factory=list, 
+        description="Recent activations of the emotion classifier"
+    )
+    recent_sentiment_activations: List[Dict[str, Any]] = Field(
+        default_factory=list, 
+        description="Recent activations of the sentiment analyzer"
+    )
+    recent_regulation_activations: List[Dict[str, Any]] = Field(
+        default_factory=list, 
+        description="Recent activations of the emotion regulator"
+    )
+    
+    # Network performance metrics
+    encoder_accuracy: float = Field(0.5, ge=0.0, le=1.0, description="Accuracy of emotion encoder")
+    classifier_accuracy: float = Field(0.5, ge=0.0, le=1.0, description="Accuracy of emotion classifier")
+    sentiment_accuracy: float = Field(0.5, ge=0.0, le=1.0, description="Accuracy of sentiment analyzer")
+    regulation_success_rate: float = Field(0.5, ge=0.0, le=1.0, description="Success rate of emotion regulation")
+    
+    # Last update timestamp
+    last_updated: datetime = Field(default_factory=datetime.now, description="When neural state was last updated")
+    
+    def dict(self, *args, **kwargs):
+        """Convert datetime to timestamp for serialization"""
+        result = super().dict(*args, **kwargs)
+        result['last_updated'] = self.last_updated.isoformat()
+        return result
+    
+    def update_accuracy(self, component: str, accuracy: float) -> None:
+        """
+        Update the accuracy for a specific neural component
+        
+        Args:
+            component: The component to update ('encoder', 'classifier', 'sentiment', 'regulation')
+            accuracy: The new accuracy value (0.0 to 1.0)
+        """
+        if component == 'encoder':
+            self.encoder_accuracy = max(0.0, min(1.0, accuracy))
+        elif component == 'classifier':
+            self.classifier_accuracy = max(0.0, min(1.0, accuracy))
+        elif component == 'sentiment':
+            self.sentiment_accuracy = max(0.0, min(1.0, accuracy))
+        elif component == 'regulation':
+            self.regulation_success_rate = max(0.0, min(1.0, accuracy))
+        
+        self.last_updated = datetime.now()
+    
+    def add_activation(self, component: str, activation: Dict[str, Any]) -> None:
+        """
+        Add a recent activation for a neural component
+        
+        Args:
+            component: The component that was activated
+            activation: Dictionary with activation details
+        """
+        activation_with_timestamp = {
+            **activation,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if component == 'encoder':
+            self.recent_encoder_activations.append(activation_with_timestamp)
+            if len(self.recent_encoder_activations) > 10:  # Keep last 10
+                self.recent_encoder_activations = self.recent_encoder_activations[-10:]
+        elif component == 'classifier':
+            self.recent_classifier_activations.append(activation_with_timestamp)
+            if len(self.recent_classifier_activations) > 10:
+                self.recent_classifier_activations = self.recent_classifier_activations[-10:]
+        elif component == 'sentiment':
+            self.recent_sentiment_activations.append(activation_with_timestamp)
+            if len(self.recent_sentiment_activations) > 10:
+                self.recent_sentiment_activations = self.recent_sentiment_activations[-10:]
+        elif component == 'regulation':
+            self.recent_regulation_activations.append(activation_with_timestamp)
+            if len(self.recent_regulation_activations) > 10:
+                self.recent_regulation_activations = self.recent_regulation_activations[-10:]
+            
+        self.last_updated = datetime.now()
+
+class EmotionSystemState(BaseModel):
+    """
+    Complete state of the emotion system
+    
+    This combines the current emotional state, parameters, and neural state
+    """
+    current_state: EmotionState
+    parameters: EmotionalParameters
+    neural_state: EmotionNeuralState = Field(default_factory=EmotionNeuralState)
+    
+    # History of emotional states
+    emotion_history: List[EmotionState] = Field(default_factory=list, description="Recent emotion states")
+    
+    # History of emotional responses
+    response_history: List[EmotionalResponse] = Field(default_factory=list, description="Recent emotional responses")
+    
+    # History of regulation attempts
+    regulation_history: List[EmotionRegulationResult] = Field(default_factory=list, description="Recent regulation attempts")
+    
+    # System metadata
+    module_id: str
+    developmental_level: float = Field(0.0, ge=0.0, le=1.0)
+    last_updated: datetime = Field(default_factory=datetime.now)
+    
+    class Config:
+        arbitrary_types_allowed = True
+    
+    def dict(self, *args, **kwargs):
+        """Convert datetime to timestamp for serialization"""
+        result = super().dict(*args, **kwargs)
+        result['last_updated'] = self.last_updated.isoformat()
+        
+        # Convert emotional states to dictionaries
+        result['current_state'] = self.current_state.dict()
+        result['emotion_history'] = [state.dict() for state in self.emotion_history]
+        result['response_history'] = [response.dict() for response in self.response_history]
+        result['regulation_history'] = [regulation.dict() for regulation in self.regulation_history]
+        
+        return result
+    
+    def add_emotion_state(self, state: EmotionState, max_history: int = 20) -> None:
+        """
+        Add an emotion state to history
+        
+        Args:
+            state: The emotion state to add
+            max_history: Maximum number of states to keep
+        """
+        self.emotion_history.append(state)
+        if len(self.emotion_history) > max_history:
+            self.emotion_history = self.emotion_history[-max_history:]
+        self.last_updated = datetime.now()
+    
+    def add_emotional_response(self, response: EmotionalResponse, max_history: int = 20) -> None:
+        """
+        Add an emotional response to history
+        
+        Args:
+            response: The emotional response to add
+            max_history: Maximum number of responses to keep
+        """
+        self.response_history.append(response)
+        if len(self.response_history) > max_history:
+            self.response_history = self.response_history[-max_history:]
+        self.last_updated = datetime.now()
+    
+    def add_regulation_result(self, result: EmotionRegulationResult, max_history: int = 20) -> None:
+        """
+        Add a regulation result to history
+        
+        Args:
+            result: The regulation result to add
+            max_history: Maximum number of results to keep
+        """
+        self.regulation_history.append(result)
+        if len(self.regulation_history) > max_history:
+            self.regulation_history = self.regulation_history[-max_history:]
+        self.last_updated = datetime.now()

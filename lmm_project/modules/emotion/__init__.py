@@ -24,7 +24,14 @@ from lmm_project.modules.emotion.valence_arousal import ValenceArousalSystem
 from lmm_project.modules.emotion.emotion_classifier import EmotionClassifier
 from lmm_project.modules.emotion.sentiment_analyzer import SentimentAnalyzer
 from lmm_project.modules.emotion.regulation import EmotionRegulator
-from lmm_project.modules.emotion.models import EmotionState, EmotionalResponse, SentimentAnalysis
+from lmm_project.modules.emotion.models import (
+    EmotionState, EmotionalResponse, SentimentAnalysis, 
+    EmotionalParameters, EmotionNeuralState, EmotionSystemState
+)
+from lmm_project.modules.emotion.neural_net import (
+    EmotionEncoder, EmotionClassifierNetwork, 
+    SentimentNetwork, EmotionRegulationNetwork, get_device
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +99,8 @@ class EmotionSystem(BaseModule):
             development_level=development_level
         )
         
-        # Emotional state tracking
-        self.current_state = EmotionState(
+        # Initialize emotional state
+        initial_state = EmotionState(
             valence=0.0,      # Neutral valence initially
             arousal=0.1,      # Low arousal initially
             dominant_emotion="neutral",
@@ -111,11 +118,76 @@ class EmotionSystem(BaseModule):
             timestamp=datetime.now()
         )
         
-        # Emotional memory - recent emotional states
+        # Initialize emotional parameters
+        initial_params = EmotionalParameters(
+            emotional_inertia=0.8,    # How quickly emotions change
+            stimulus_sensitivity=0.6, # How strongly stimulus affects emotion
+            emotion_decay_rate=0.05,  # How quickly emotions decay over time
+            baseline_valence=0.1,     # Baseline valence to return to
+            baseline_arousal=0.2,     # Baseline arousal to return to
+            regulation_capacity=0.2   # Emotional regulation strength
+        )
+        
+        # Initialize the system state
+        self.system_state = EmotionSystemState(
+            current_state=initial_state,
+            parameters=initial_params,
+            neural_state=EmotionNeuralState(),
+            module_id=module_id,
+            developmental_level=development_level
+        )
+        
+        # Keep current_state as a direct reference for backward compatibility
+        self.current_state = self.system_state.current_state
+        self.emotional_params = {
+            "emotional_inertia": self.system_state.parameters.emotional_inertia,
+            "stimulus_sensitivity": self.system_state.parameters.stimulus_sensitivity,
+            "emotion_decay_rate": self.system_state.parameters.emotion_decay_rate,
+            "baseline_valence": self.system_state.parameters.baseline_valence,
+            "baseline_arousal": self.system_state.parameters.baseline_arousal,
+            "regulation_capacity": self.system_state.parameters.regulation_capacity
+        }
+        
+        # Keep emotion history reference for backward compatibility
         self.emotion_history = deque(maxlen=50)
         self.emotion_history.append(self.current_state)
         
-        # Create emotional subsystems
+        # Get the device to use (CPU or CUDA)
+        self.device = get_device()
+        
+        # Initialize neural network models
+        self.emotion_encoder = EmotionEncoder(
+            input_dim=128,
+            hidden_dim=256,
+            output_dim=32
+        ).to(self.device)
+        
+        self.emotion_classifier_net = EmotionClassifierNetwork(
+            input_dim=2,
+            hidden_dim=128,
+            num_emotions=9  # 8 primary emotions + neutral
+        ).to(self.device)
+        
+        self.sentiment_net = SentimentNetwork(
+            vocab_size=10000,
+            embedding_dim=64,
+            hidden_dim=128,
+            output_dim=4
+        ).to(self.device)
+        
+        self.regulation_net = EmotionRegulationNetwork(
+            input_dim=10,
+            hidden_dim=128,
+            output_dim=2
+        ).to(self.device)
+        
+        # Set the development level for neural networks
+        self.emotion_encoder.set_development_level(development_level)
+        self.emotion_classifier_net.set_development_level(development_level)
+        self.sentiment_net.set_development_level(development_level)
+        self.regulation_net.set_development_level(development_level)
+        
+        # Create emotional subsystems (module classes)
         self.valence_arousal_system = ValenceArousalSystem(
             module_id=f"{module_id}_va",
             event_bus=event_bus,
@@ -140,30 +212,8 @@ class EmotionSystem(BaseModule):
             development_level=development_level
         )
         
-        # Emotional parameters - adjust based on development
-        self.emotional_params = {
-            # How quickly emotions change
-            "emotional_inertia": 0.8,
-            
-            # How strongly stimulus affects emotion
-            "stimulus_sensitivity": 0.6,
-            
-            # How quickly emotions decay over time
-            "emotion_decay_rate": 0.05,
-            
-            # Baseline emotional state to return to
-            "baseline_valence": 0.1,
-            "baseline_arousal": 0.2,
-            
-            # Emotional regulation strength
-            "regulation_capacity": 0.2
-        }
-        
         # Adjust parameters based on development level
         self._adjust_parameters_for_development()
-        
-        # Try to use GPU if available
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Subscribe to relevant events
         if self.event_bus:
@@ -179,54 +229,79 @@ class EmotionSystem(BaseModule):
         """Adjust emotional parameters based on developmental level"""
         if self.development_level < 0.2:
             # Early development - basic emotional reactions
-            self.emotional_params.update({
+            new_params = {
                 "emotional_inertia": 0.4,         # Emotions change quickly
                 "stimulus_sensitivity": 0.8,      # Strong reactions to stimuli
                 "emotion_decay_rate": 0.1,        # Quick return to baseline
                 "baseline_valence": 0.2,          # Slightly positive baseline
                 "baseline_arousal": 0.3,          # Moderate arousal baseline
                 "regulation_capacity": 0.1        # Very limited regulation
-            })
+            }
         elif self.development_level < 0.4:
             # Developing primary emotions
-            self.emotional_params.update({
+            new_params = {
                 "emotional_inertia": 0.5,
                 "stimulus_sensitivity": 0.7,
                 "emotion_decay_rate": 0.08,
                 "baseline_valence": 0.15,
                 "baseline_arousal": 0.25,
                 "regulation_capacity": 0.2
-            })
+            }
         elif self.development_level < 0.6:
             # Developing secondary emotions
-            self.emotional_params.update({
+            new_params = {
                 "emotional_inertia": 0.6,
                 "stimulus_sensitivity": 0.6,
                 "emotion_decay_rate": 0.06,
                 "baseline_valence": 0.1,
                 "baseline_arousal": 0.2,
                 "regulation_capacity": 0.4
-            })
+            }
         elif self.development_level < 0.8:
             # Developing emotional self-awareness
-            self.emotional_params.update({
+            new_params = {
                 "emotional_inertia": 0.7,
                 "stimulus_sensitivity": 0.5,
                 "emotion_decay_rate": 0.04,
                 "baseline_valence": 0.05,
                 "baseline_arousal": 0.15,
                 "regulation_capacity": 0.6
-            })
+            }
         else:
             # Advanced emotional intelligence
-            self.emotional_params.update({
+            new_params = {
                 "emotional_inertia": 0.8,
                 "stimulus_sensitivity": 0.4,
                 "emotion_decay_rate": 0.02,
                 "baseline_valence": 0.0,
                 "baseline_arousal": 0.1,
                 "regulation_capacity": 0.8
-            })
+            }
+            
+        # Update both the dictionary (for backwards compatibility) and the model
+        self.emotional_params.update(new_params)
+        
+        # Update the parameters model
+        self.system_state.parameters = EmotionalParameters(
+            emotional_inertia=new_params["emotional_inertia"],
+            stimulus_sensitivity=new_params["stimulus_sensitivity"],
+            emotion_decay_rate=new_params["emotion_decay_rate"],
+            baseline_valence=new_params["baseline_valence"],
+            baseline_arousal=new_params["baseline_arousal"],
+            regulation_capacity=new_params["regulation_capacity"]
+        )
+        
+        # Update neural network development levels
+        self.emotion_encoder.set_development_level(self.development_level)
+        self.emotion_classifier_net.set_development_level(self.development_level)
+        self.sentiment_net.set_development_level(self.development_level)
+        self.regulation_net.set_development_level(self.development_level)
+        
+        # Update neural state in system state
+        self.system_state.neural_state.encoder_development = self.development_level
+        self.system_state.neural_state.classifier_development = self.development_level
+        self.system_state.neural_state.sentiment_development = self.development_level
+        self.system_state.neural_state.regulation_development = self.development_level
     
     def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -676,6 +751,21 @@ class EmotionSystem(BaseModule):
         self.sentiment_analyzer.update_development(amount)
         self.emotion_regulator.update_development(amount)
         
+        # Update system state
+        self.system_state.developmental_level = new_level
+        
+        # Update neural networks
+        self.emotion_encoder.set_development_level(new_level)
+        self.emotion_classifier_net.set_development_level(new_level)
+        self.sentiment_net.set_development_level(new_level) 
+        self.regulation_net.set_development_level(new_level)
+        
+        # Update neural state in system state
+        self.system_state.neural_state.encoder_development = new_level
+        self.system_state.neural_state.classifier_development = new_level
+        self.system_state.neural_state.sentiment_development = new_level
+        self.system_state.neural_state.regulation_development = new_level
+        
         # Adjust parameters for new development level
         self._adjust_parameters_for_development()
         
@@ -688,9 +778,18 @@ class EmotionSystem(BaseModule):
         Returns:
             Dictionary with current state
         """
+        # Get the base state from parent
         base_state = super().get_state()
         
-        # Add emotion-specific state
+        # Update the system state with current information
+        self.system_state.current_state = self.current_state
+        self.system_state.developmental_level = self.development_level
+        self.system_state.last_updated = datetime.now()
+        
+        # Convert the system state to a dictionary
+        system_state_dict = self.system_state.dict()
+        
+        # For backwards compatibility, also include these directly
         emotion_state = {
             "current_emotion": self.current_state.dict(),
             "emotion_history_length": len(self.emotion_history),
@@ -698,7 +797,7 @@ class EmotionSystem(BaseModule):
             "emotional_capacity": self._get_emotional_capacity()
         }
         
-        # Combine states
-        combined_state = {**base_state, **emotion_state}
+        # Combine all states
+        combined_state = {**base_state, **emotion_state, "system_state": system_state_dict}
         
         return combined_state

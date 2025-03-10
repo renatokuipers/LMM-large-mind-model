@@ -12,7 +12,7 @@ import random
 from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.message import Message
-from lmm_project.modules.emotion.models import EmotionState
+from lmm_project.modules.emotion.models import EmotionState, EmotionNeuralState
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -131,6 +131,10 @@ class EmotionClassifier(BaseModule):
                 "neither", "indifferent", "impartial", "uninvolved", "dispassionate"
             }
         }
+        
+        # Neural state for tracking activations and development
+        self.neural_state = EmotionNeuralState()
+        self.neural_state.classifier_development = development_level
         
         # Classification parameters
         self.params = {
@@ -453,6 +457,15 @@ class EmotionClassifier(BaseModule):
         # Determine dominant emotion (highest intensity)
         dominant_emotion = max(intensities.items(), key=lambda x: x[1])[0]
         
+        # Record activation for tracking
+        if hasattr(self, "neural_state"):
+            self.neural_state.add_activation('classifier', {
+                'valence': valence,
+                'arousal': arousal,
+                'intensities': intensities,
+                'dominant_emotion': dominant_emotion
+            })
+        
         return {
             "dominant_emotion": dominant_emotion,
             "emotion_intensities": intensities,
@@ -612,6 +625,11 @@ class EmotionClassifier(BaseModule):
         
         # Adjust parameters for new development level
         self._adjust_parameters_for_development()
+        
+        # Update neural state
+        if hasattr(self, "neural_state"):
+            self.neural_state.classifier_development = new_level
+            self.neural_state.last_updated = datetime.now()
         
         return new_level
     
