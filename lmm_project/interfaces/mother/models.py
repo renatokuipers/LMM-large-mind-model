@@ -1,133 +1,116 @@
-from typing import Dict, List, Any, Optional, Union
-from pydantic import BaseModel, Field
 from enum import Enum
-from datetime import datetime
+from typing import List, Dict, Optional, Union, Literal
+from pydantic import BaseModel, Field, field_validator
 
-class TeachingStyle(str, Enum):
-    """Teaching styles for the Mother LLM"""
-    SOCRATIC = "socratic"
-    DIRECT = "direct"
-    MONTESSORI = "montessori"
-    CONSTRUCTIVIST = "constructivist"
+# Personality traits models
+class PersonalityDimension(str, Enum):
+    """Core personality dimensions for the Mother figure"""
+    WARMTH = "warmth"                 # Cold vs. Warm
+    PATIENCE = "patience"             # Impatient vs. Patient
+    EXPRESSIVENESS = "expressiveness" # Reserved vs. Expressive
+    STRUCTURE = "structure"           # Flexible vs. Structured
+    CHALLENGE = "challenge"           # Nurturing vs. Challenging
+    
+class PersonalityTrait(BaseModel):
+    """A specific personality trait with a value ranging from -1.0 to 1.0"""
+    dimension: PersonalityDimension
+    value: float = Field(default=0.0, ge=-1.0, le=1.0)
+    
+    model_config = {"extra": "forbid"}
+    
+class PersonalityProfile(BaseModel):
+    """Complete personality profile for the Mother"""
+    traits: List[PersonalityTrait] = Field(default_factory=list)
+    preset_name: Optional[str] = None
+    
+    model_config = {"extra": "forbid"}
+    
+    @field_validator('traits')
+    @classmethod
+    def validate_traits(cls, v: List[PersonalityTrait]) -> List[PersonalityTrait]:
+        # Ensure we have a value for each dimension
+        dimensions = {trait.dimension for trait in v}
+        
+        # Add missing dimensions with neutral values
+        all_dimensions = set(PersonalityDimension)
+        for dimension in all_dimensions - dimensions:
+            v.append(PersonalityTrait(dimension=dimension, value=0.0))
+            
+        return v
+
+# Teaching strategy models
+class TeachingMethod(str, Enum):
+    """Teaching methods available to the Mother"""
+    DIRECT_INSTRUCTION = "direct_instruction"
     SCAFFOLDING = "scaffolding"
+    SOCRATIC_QUESTIONING = "socratic_questioning"
+    REPETITION = "repetition"
+    REINFORCEMENT = "reinforcement"
+    EXPERIENTIAL = "experiential"
+    DISCOVERY = "discovery"
+    ANALOGICAL = "analogical"
 
-class EmotionalValence(str, Enum):
-    """Types of emotional valence for responses"""
-    VERY_POSITIVE = "very_positive"
-    POSITIVE = "positive"
-    NEUTRAL = "neutral"
+class TeachingStrategy(BaseModel):
+    """Configuration for a specific teaching strategy"""
+    method: TeachingMethod
+    priority: float = Field(default=1.0, ge=0.0, le=10.0) 
+    applicability: Dict[str, float] = Field(default_factory=dict)
+    
+    model_config = {"extra": "forbid"}
+    
+class TeachingProfile(BaseModel):
+    """Complete teaching profile for the Mother"""
+    strategies: List[TeachingStrategy] = Field(default_factory=list)
+    adaptive: bool = True
+    preset_name: Optional[str] = None
+    
+    model_config = {"extra": "forbid"}
+
+# Interaction models
+class EmotionalTone(str, Enum):
+    """Emotional tones for Mother's communication"""
+    SOOTHING = "soothing"
+    ENCOURAGING = "encouraging"
+    PLAYFUL = "playful"
+    CURIOUS = "curious"
+    SERIOUS = "serious"
+    EXCITED = "excited"
     CONCERNED = "concerned"
     FIRM = "firm"
 
-class PersonalityProfile(str, Enum):
-    """Pre-defined personality profiles for the Mother LLM"""
-    NURTURING = "nurturing"
-    ACADEMIC = "academic"
-    BALANCED = "balanced"
-    PLAYFUL = "playful"
-    SOCRATIC = "socratic"
-    MINDFUL = "mindful"
-
-class InteractionType(str, Enum):
-    """Types of interaction patterns"""
-    REPETITION = "repetition"
-    MIRRORING = "mirroring"
-    TURN_TAKING = "turn_taking"
-    ELABORATION = "elaboration"
+class InteractionStyle(str, Enum):
+    """Interaction styles for Mother's communication"""
+    CONVERSATIONAL = "conversational"
+    INSTRUCTIONAL = "instructional"
     QUESTIONING = "questioning"
     STORYTELLING = "storytelling"
-    PLAYFUL = "playful"
-    INSTRUCTIONAL = "instructional"
-    CONVERSATIONAL = "conversational"
-    SOCRATIC = "socratic"
-    PROBLEM_SOLVING = "problem_solving"
-    EMOTIONAL_SUPPORT = "emotional_support"
-
-class InteractionComplexity(str, Enum):
-    """Complexity levels for interactions"""
-    VERY_SIMPLE = "very_simple"
-    SIMPLE = "simple"
-    MODERATE = "moderate"
-    COMPLEX = "complex"
-    VERY_COMPLEX = "very_complex"
-
-class LearningGoalCategory(str, Enum):
-    """Categories of learning goals for curriculum development"""
-    PATTERN_RECOGNITION = "pattern_recognition"
-    LANGUAGE_ACQUISITION = "language_acquisition"
-    OBJECT_PERMANENCE = "object_permanence"
-    EMOTIONAL_UNDERSTANDING = "emotional_understanding"
-    SOCIAL_AWARENESS = "social_awareness"
-    CAUSAL_REASONING = "causal_reasoning"
-    ABSTRACT_THINKING = "abstract_thinking"
-    IDENTITY_FORMATION = "identity_formation"
-    CREATIVE_THINKING = "creative_thinking"
-    METACOGNITION = "metacognition"
-
-class LearningMode(str, Enum):
-    """Different modes of learning interaction"""
-    EXPLORATION = "exploration"
-    INSTRUCTION = "instruction"
-    PRACTICE = "practice"
-    REFLECTION = "reflection"
-    ASSESSMENT = "assessment"
-    PLAY = "play"
-    CONVERSATION = "conversation"
-
-class ComprehensionLevel(str, Enum):
-    """Levels of comprehension for a concept or topic"""
-    NONE = "none"
-    MINIMAL = "minimal"
-    PARTIAL = "partial"
-    FUNCTIONAL = "functional"
-    SOLID = "solid"
-    MASTERY = "mastery"
-
-class PersonalityTrait(BaseModel):
-    """A personality trait with a value between 0 and 1"""
-    name: str
-    value: float = Field(default=0.5, ge=0.0, le=1.0)
-    description: Optional[str] = None
-
-class MotherPersonality(BaseModel):
-    """Personality configuration for the Mother LLM"""
-    traits: Dict[str, float] = Field(default_factory=lambda: {
-        "nurturing": 0.8,
-        "patient": 0.9,
-        "encouraging": 0.8,
-        "structured": 0.7,
-        "responsive": 0.9
-    })
-    teaching_style: TeachingStyle = Field(default=TeachingStyle.SOCRATIC)
-    voice_characteristics: Dict[str, Any] = Field(default_factory=dict)
+    RESPONSIVE = "responsive"
+    CORRECTIVE = "corrective"
+    REFLECTIVE = "reflective"
     
-    def to_prompt_section(self) -> str:
-        """Convert personality to a prompt section for the LLM"""
-        traits_str = ", ".join([f"{k} ({v:.1f})" for k, v in self.traits.items()])
-        return f"""
-        Your personality is defined by these traits: {traits_str}
-        Your teaching style is {self.teaching_style.value}
-        Please embody these traits in your responses.
-        """
-
 class InteractionPattern(BaseModel):
-    """A pattern of interaction for the Mother LLM"""
-    name: str
-    description: str
-    prompt_template: str
-    suitable_stages: List[str] = Field(default_factory=list)
+    """Configuration for a specific interaction pattern"""
+    style: InteractionStyle
+    primary_tone: EmotionalTone
+    secondary_tone: Optional[EmotionalTone] = None
+    complexity_level: float = Field(default=1.0, ge=0.1, le=10.0)
     
-class ConversationEntry(BaseModel):
-    """An entry in the conversation history"""
-    role: str
-    content: str
-    timestamp: datetime = Field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    model_config = {"extra": "forbid"}
 
-class TeachingStrategy(BaseModel):
-    """A teaching strategy for the Mother LLM"""
-    name: str
-    description: str
-    suitable_stages: List[str]
-    prompt_guidance: str
-    examples: List[str] = Field(default_factory=list)
+# Mother instruction and response models
+class MotherInput(BaseModel):
+    """Input from the child to the Mother"""
+    content: str
+    age: float
+    context: Optional[Dict[str, Union[str, float, bool]]] = None
+    
+    model_config = {"extra": "forbid"}
+    
+class MotherResponse(BaseModel):
+    """Response from the Mother to the child"""
+    content: str
+    tone: EmotionalTone
+    teaching_method: Optional[TeachingMethod] = None
+    voice_settings: Optional[Dict[str, Union[str, float]]] = None
+    
+    model_config = {"extra": "forbid"}

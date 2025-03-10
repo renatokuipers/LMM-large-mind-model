@@ -1,572 +1,357 @@
 """
-Development Package
+Development module for the LMM project.
 
-This package contains the modules that manage the developmental processes in the LMM.
-The development system handles stages, critical periods, milestones, and growth rates
-to create a realistic and psychologically-grounded cognitive development process.
-
-Main Components:
-- DevelopmentalStageManager: Manages progression through developmental stages
-- CriticalPeriodManager: Handles critical/sensitive periods for capabilities
-- MilestoneTracker: Tracks developmental milestones across various domains
-- GrowthRateController: Controls the rate of development for different capabilities
-- DevelopmentSystem: Integrates all components into a cohesive system
+This module implements the developmental framework for the LMM system,
+managing cognitive growth, developmental stages, critical periods,
+and developmental milestones to create authentic cognitive development.
 """
 
-from typing import Dict, List, Optional, Any, Tuple, Set
-import logging
-import threading
-from datetime import datetime
-import traceback
-import json
-import os
-from pathlib import Path
+from typing import Dict, Optional, Any, List
 
-from lmm_project.core.event_bus import EventBus
-from lmm_project.core.exceptions import DevelopmentError, InitializationError
+# Import all components from submodules
 from lmm_project.development.models import (
-    DevelopmentalStage, CriticalPeriod, Milestone, DevelopmentalTrajectory,
-    DevelopmentalEvent, GrowthRateParameters
+    DevelopmentalStage,
+    StageRange,
+    StageDefinition,
+    MilestoneStatus,
+    MilestoneDefinition,
+    MilestoneRecord,
+    CriticalPeriodType,
+    CriticalPeriodDefinition,
+    GrowthRateModel,
+    DevelopmentConfig
 )
-from lmm_project.development.developmental_stages import DevelopmentalStageManager
-from lmm_project.development.critical_periods import CriticalPeriodManager
-from lmm_project.development.milestone_tracker import MilestoneTracker
+
+from lmm_project.development.developmental_stages import DevelopmentalStages
+from lmm_project.development.critical_periods import CriticalPeriods
 from lmm_project.development.growth_rate_controller import GrowthRateController
+from lmm_project.development.milestone_tracker import MilestoneTracker
 
-logger = logging.getLogger(__name__)
+# Make all imported components available
+__all__ = [
+    # Model classes
+    "DevelopmentalStage",
+    "StageRange",
+    "StageDefinition",
+    "MilestoneStatus",
+    "MilestoneDefinition",
+    "MilestoneRecord",
+    "CriticalPeriodType",
+    "CriticalPeriodDefinition",
+    "GrowthRateModel",
+    "DevelopmentConfig",
+    
+    # Core components
+    "DevelopmentalStages",
+    "CriticalPeriods",
+    "GrowthRateController",
+    "MilestoneTracker",
+    
+    # Main development manager
+    "DevelopmentManager",
+    "create_development_manager",
+    "get_development_manager"
+]
 
-def get_development_system(event_bus: Optional[EventBus] = None) -> "DevelopmentSystem":
-    """
-    Factory function to create a complete development system
-    
-    Args:
-        event_bus: Optional event bus for system communication
-        
-    Returns:
-        A fully configured DevelopmentSystem instance
-        
-    Raises:
-        InitializationError: If the development system cannot be initialized
-    """
-    try:
-        return DevelopmentSystem(event_bus=event_bus)
-    except Exception as e:
-        error_msg = f"Failed to initialize development system: {str(e)}"
-        logger.error(error_msg)
-        logger.debug(traceback.format_exc())
-        raise InitializationError(error_msg, component="DevelopmentSystem", 
-                                 details={"original_error": str(e)})
+# Singleton instance
+_development_manager = None
 
-class DevelopmentSystem:
+class DevelopmentManager:
     """
-    Integrated development system for the LMM
+    Central manager for all developmental components.
     
-    This class integrates all developmental components:
-    - Stage management
-    - Critical period tracking
-    - Milestone achievement
-    - Growth rate control
-    
-    It provides a unified interface for managing the mind's developmental progression.
-    
-    Thread Safety:
-    - All public methods are thread-safe
-    - Internal state is protected by a lock
-    
-    Performance Optimizations:
-    - Caches frequently accessed data
-    - Batches event processing
-    - Optimizes memory usage for developmental events
+    This class provides a unified interface to all developmental subsystems,
+    managing cognitive growth, developmental stages, critical periods, and milestones.
     """
     
-    def __init__(self, event_bus: Optional[EventBus] = None):
+    def __init__(self, config: Optional[DevelopmentConfig] = None):
         """
-        Initialize the development system with all components
+        Initialize the development manager.
         
-        Args:
-            event_bus: Optional event bus for system communication
-            
-        Raises:
-            InitializationError: If any component fails to initialize
+        Parameters:
+        -----------
+        config : Optional[DevelopmentConfig]
+            Configuration for all developmental subsystems.
+            If None, default settings will be used.
         """
-        self.event_bus = event_bus
-        self._lock = threading.RLock()
+        # Create all subsystems
+        self.dev_stages = DevelopmentalStages(config)
+        self.critical_periods = CriticalPeriods(self.dev_stages, config)
+        self.milestone_tracker = MilestoneTracker(self.dev_stages, config)
+        self.growth_controller = GrowthRateController(
+            self.dev_stages, 
+            self.critical_periods,
+            config
+        )
         
-        try:
-            # Initialize all development components
-            self.stage_manager = DevelopmentalStageManager(event_bus=event_bus)
-            self.critical_period_manager = CriticalPeriodManager(event_bus=event_bus)
-            self.milestone_tracker = MilestoneTracker(event_bus=event_bus)
-            self.growth_controller = GrowthRateController()
-            
-            # Track developmental events with a maximum history size
-            self.developmental_events: List[DevelopmentalEvent] = []
-            self.max_events_history = 1000  # Limit event history to prevent memory issues
-            
-            # Cache for frequently accessed data
-            self._cache = {
-                "active_periods": [],
-                "achieved_milestones": [],
-                "developmental_status": {},
-                "last_cache_update": datetime.now()
-            }
-            self._cache_ttl = 5.0  # Cache time-to-live in seconds
-            
-            logger.info("Development system initialized successfully")
-        except Exception as e:
-            error_msg = f"Failed to initialize development system component: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise InitializationError(error_msg, component="DevelopmentSystem", 
-                                     details={"original_error": str(e)})
+        # Store config
+        self._config = config
     
-    def update_development(self, 
-                          capabilities: Dict[str, float], 
-                          module_capabilities: Dict[str, Dict[str, float]],
-                          delta_age: float) -> Dict[str, Any]:
+    def update(self) -> None:
         """
-        Update the developmental state based on the current capabilities
+        Update all developmental subsystems.
         
-        Args:
-            capabilities: The overall system capabilities
-            module_capabilities: Module-specific capabilities
-            delta_age: How much to increase the developmental age
-            
-        Returns:
-            Dictionary with development update results and events
-            
-        Raises:
-            DevelopmentError: If the update process fails
-            ValueError: If invalid parameters are provided
+        This method should be called regularly to update the developmental state.
         """
-        if delta_age < 0:
-            raise ValueError("delta_age must be non-negative")
-            
-        if not capabilities:
-            raise ValueError("capabilities dictionary cannot be empty")
-            
-        events = []
-        development_updates = {}
-        
-        try:
-            with self._lock:
-                # Update the developmental age
-                current_age = self.stage_manager.trajectory.current_age
-                self.stage_manager.update_age(delta_age)
-                new_age = self.stage_manager.trajectory.current_age
-                
-                # Update critical periods based on new age
-                critical_period_events = self.critical_period_manager.update_periods_for_age(new_age)
-                events.extend(critical_period_events)
-                
-                # Update age in events
-                for event in critical_period_events:
-                    event.age = new_age
-                
-                # Check for milestone achievements
-                milestone_events = self.milestone_tracker.evaluate_milestones(capabilities)
-                events.extend(milestone_events)
-                
-                # Update age in events
-                for event in milestone_events:
-                    event.age = new_age
-                
-                # Evaluate stage transitions
-                next_stage = self.stage_manager.evaluate_stage_transition(capabilities)
-                if next_stage:
-                    # Transition to the next stage
-                    self.stage_manager.transition_to_stage(next_stage)
-                    
-                    # Record transition in results
-                    development_updates["stage_transition"] = {
-                        "from": self.stage_manager.current_stage,
-                        "to": next_stage,
-                        "age": new_age
-                    }
-                
-                # Store developmental events with size limit
-                self.developmental_events.extend(events)
-                if len(self.developmental_events) > self.max_events_history:
-                    self.developmental_events = self.developmental_events[-self.max_events_history:]
-                
-                # Invalidate cache
-                self._invalidate_cache()
-                
-                # Prepare result dictionary
-                result = {
-                    "age": {
-                        "previous": current_age,
-                        "current": new_age,
-                        "delta": delta_age
-                    },
-                    "stage": self.stage_manager.current_stage,
-                    "events": [event.dict() for event in events],
-                    "active_critical_periods": [period.dict() for period in self.critical_period_manager.get_active_periods()],
-                    "achieved_milestones": [m.dict() for m in self.milestone_tracker.get_achieved_milestones()],
-                    "updates": development_updates
-                }
-                
-                # Publish development update event if event bus is available
-                if self.event_bus:
-                    self.event_bus.publish(Message(
-                        sender="development_system",
-                        message_type="development_update",
-                        content={
-                            "age": new_age,
-                            "stage": self.stage_manager.current_stage,
-                            "event_count": len(events)
-                        }
-                    ))
-                
-                return result
-                
-        except Exception as e:
-            error_msg = f"Failed to update development: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  current_level=self.stage_manager.trajectory.current_age,
-                                  current_stage=self.stage_manager.current_stage,
-                                  details={"original_error": str(e)})
+        # Update in dependency order
+        self.dev_stages.update()
+        self.critical_periods.update()
+        self.milestone_tracker.update()
+        self.growth_controller.update_all()
     
-    def get_growth_rates(self, 
-                        module: str, 
-                        capabilities: Dict[str, float]) -> Dict[str, float]:
+    def get_age(self) -> float:
         """
-        Get growth rates for all capabilities in a module
-        
-        Args:
-            module: The module to get growth rates for
-            capabilities: Current capability levels
-            
-        Returns:
-            Dictionary mapping capabilities to growth rates
-            
-        Raises:
-            ValueError: If module is not recognized or capabilities is empty
-        """
-        if not module:
-            raise ValueError("Module name cannot be empty")
-            
-        if not capabilities:
-            raise ValueError("Capabilities dictionary cannot be empty")
-            
-        try:
-            with self._lock:
-                growth_rates = {}
-                current_age = self.stage_manager.trajectory.current_age
-                
-                for capability, level in capabilities.items():
-                    # Get critical period multiplier if any
-                    critical_multiplier = self.critical_period_manager.get_development_multiplier(
-                        capability, module
-                    )
-                    
-                    # Get capability limitation factor from missed critical periods
-                    limitation = self.critical_period_manager.get_capability_limitation_factor(capability)
-                    
-                    # Get stage-based capability ceiling
-                    ceiling = self.stage_manager.get_capability_ceiling(capability)
-                    
-                    # Adjust ceiling based on limitations from missed critical periods
-                    adjusted_ceiling = ceiling * limitation
-                    
-                    # Calculate proximity to ceiling (slows growth as approaching ceiling)
-                    ceiling_proximity = level / adjusted_ceiling if adjusted_ceiling > 0 else 1.0
-                    ceiling_factor = 1.0 - (ceiling_proximity ** 2) * 0.9
-                    
-                    # Calculate growth rate
-                    growth_rate = self.growth_controller.get_growth_rate(
-                        capability=capability,
-                        module=module,
-                        age=current_age,
-                        critical_period_multiplier=critical_multiplier
-                    )
-                    
-                    # Apply ceiling factor
-                    growth_rate *= max(0.1, ceiling_factor)
-                    
-                    growth_rates[capability] = growth_rate
-                
-                return growth_rates
-                
-        except Exception as e:
-            error_msg = f"Failed to calculate growth rates for module {module}: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  current_level=self.stage_manager.trajectory.current_age,
-                                  current_stage=self.stage_manager.current_stage,
-                                  details={"module": module, "original_error": str(e)})
-    
-    def get_recommended_experiences(self) -> Dict[str, Any]:
-        """
-        Get recommended experiences based on current developmental state
-        
-        This includes recommendations from critical periods, milestone
-        requirements, and other developmental considerations.
+        Get the current developmental age.
         
         Returns:
-            Dictionary with experience recommendations
-            
-        Raises:
-            DevelopmentError: If recommendation generation fails
+        --------
+        float
+            Current age in age units
         """
-        try:
-            with self._lock:
-                current_age = self.stage_manager.trajectory.current_age
-                
-                # Get recommendations from critical periods
-                critical_period_recommendations = self.critical_period_manager.get_recommended_experiences(current_age)
-                
-                # Get pending milestones to focus on
-                pending_milestones = self.milestone_tracker.get_pending_milestones()
-                achievable_milestones = [
-                    m for m in pending_milestones
-                    if all(prereq in self.milestone_tracker.achieved_milestones 
-                          for prereq in m.prerequisite_milestones)
-                ]
-                
-                # Prepare milestone recommendations
-                milestone_recommendations = []
-                for milestone in achievable_milestones[:5]:  # Limit to 5 most relevant
-                    # Generate recommendations based on milestone capabilities
-                    capabilities_needed = []
-                    for capability, required in milestone.capability_requirements.items():
-                        capabilities_needed.append({
-                            "capability": capability,
-                            "required_level": required,
-                            "priority": "high" if milestone.is_essential else "medium"
-                        })
-                    
-                    milestone_recommendations.append({
-                        "milestone_name": milestone.name,
-                        "description": milestone.description,
-                        "category": milestone.category,
-                        "is_essential": milestone.is_essential,
-                        "capabilities_needed": capabilities_needed
-                    })
-                
-                return {
-                    "critical_period_recommendations": critical_period_recommendations,
-                    "milestone_recommendations": milestone_recommendations,
-                    "current_stage": self.stage_manager.current_stage,
-                    "current_age": current_age
-                }
-                
-        except Exception as e:
-            error_msg = f"Failed to generate recommended experiences: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  current_level=self.stage_manager.trajectory.current_age,
-                                  current_stage=self.stage_manager.current_stage,
-                                  details={"original_error": str(e)})
+        return self.dev_stages.get_age()
+    
+    def get_stage(self) -> DevelopmentalStage:
+        """
+        Get the current developmental stage.
+        
+        Returns:
+        --------
+        DevelopmentalStage
+            Current developmental stage
+        """
+        return self.dev_stages.get_current_stage()
+    
+    def set_age(self, age: float) -> None:
+        """
+        Set the developmental age manually.
+        
+        Parameters:
+        -----------
+        age : float
+            New developmental age in age units
+        """
+        self.dev_stages.set_age(age)
+        
+        # Update dependent systems to reflect new age
+        self.critical_periods.update()
+        self.milestone_tracker.update()
+    
+    def register_module(self, module_name: str, capabilities: List[str]) -> None:
+        """
+        Register a module and its capabilities for growth tracking.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module to register
+        capabilities : List[str]
+            List of capabilities provided by the module
+        """
+        self.growth_controller.register_module(module_name, capabilities)
+    
+    def record_capability_usage(
+        self, 
+        module_name: str, 
+        capability: str, 
+        usage_intensity: float = 1.0
+    ) -> None:
+        """
+        Record usage of a capability to model practice effects.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability being used
+        usage_intensity : float
+            Intensity of usage (0.0-2.0)
+        """
+        self.growth_controller.record_capability_usage(
+            module_name, capability, usage_intensity
+        )
+    
+    def get_capability_progress(self, module_name: str, capability: str) -> float:
+        """
+        Get the current progress level for a capability.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability to get progress for
+            
+        Returns:
+        --------
+        float
+            Current progress level (0.0-1.0)
+        """
+        return self.growth_controller.get_capability_progress(module_name, capability)
+    
+    def get_growth_rate(self, module_name: str, capability: str) -> float:
+        """
+        Get the current growth rate for a capability.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability to calculate growth rate for
+            
+        Returns:
+        --------
+        float
+            Growth rate multiplier for the capability
+        """
+        return self.growth_controller.calculate_growth_rate(module_name, capability)
+    
+    def evaluate_milestone(
+        self, 
+        milestone_id: str, 
+        evaluation_data: Optional[Dict[str, Any]] = None
+    ) -> float:
+        """
+        Evaluate progress on a specific milestone.
+        
+        Parameters:
+        -----------
+        milestone_id : str
+            ID of the milestone to evaluate
+        evaluation_data : Optional[Dict[str, Any]]
+            Data to use for evaluation
+            
+        Returns:
+        --------
+        float
+            Current progress on milestone (0.0-1.0)
+        """
+        return self.milestone_tracker.evaluate_milestone(milestone_id, evaluation_data)
+    
+    def get_active_milestones(self) -> List[str]:
+        """
+        Get list of currently active milestones.
+        
+        Returns:
+        --------
+        List[str]
+            List of milestone IDs that are currently in progress
+        """
+        return self.milestone_tracker.get_active_milestones()
     
     def get_developmental_status(self) -> Dict[str, Any]:
         """
-        Get the complete developmental status
+        Get comprehensive developmental status report.
         
         Returns:
-            Dictionary with comprehensive developmental information
-            
-        Raises:
-            DevelopmentError: If status generation fails
+        --------
+        Dict[str, Any]
+            Dictionary with all developmental status metrics
         """
-        try:
-            with self._lock:
-                # Check if we can use cached data
-                if self._is_cache_valid("developmental_status"):
-                    return self._cache["developmental_status"]
-                    
-                status = {
-                    "age": self.stage_manager.trajectory.current_age,
-                    "stage": {
-                        "current": self.stage_manager.current_stage,
-                        "name": self.stage_manager.get_current_stage().name,
-                        "description": self.stage_manager.get_current_stage().description
-                    },
-                    "critical_periods": {
-                        "active": [p.dict() for p in self.critical_period_manager.get_active_periods()],
-                        "completed": len(self.critical_period_manager.completed_periods),
-                        "missed": len(self.critical_period_manager.missed_periods)
-                    },
-                    "milestones": {
-                        "achieved": len(self.milestone_tracker.achieved_milestones),
-                        "pending": len(self.milestone_tracker.pending_milestones),
-                        "recent": [
-                            m.dict() for m in self.milestone_tracker.get_achieved_milestones()[-5:]
-                        ] if self.milestone_tracker.get_achieved_milestones() else []
-                    },
-                    "capabilities": {
-                        # Expected capability levels for current stage
-                        "expected": self.stage_manager.get_current_capabilities()
-                    },
-                    "trajectory": self.stage_manager.trajectory.dict()
-                }
-                
-                # Update cache
-                self._cache["developmental_status"] = status
-                self._cache["last_cache_update"] = datetime.now()
-                
-                return status
-                
-        except Exception as e:
-            error_msg = f"Failed to generate developmental status: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  current_level=self.stage_manager.trajectory.current_age,
-                                  current_stage=self.stage_manager.current_stage,
-                                  details={"original_error": str(e)})
+        # Get status from milestone tracker
+        milestone_status = self.milestone_tracker.get_developmental_status()
+        
+        # Add critical period information
+        active_periods = self.critical_periods.get_active_periods()
+        upcoming_periods = self.critical_periods.get_upcoming_periods()
+        
+        # Add growth controller information
+        overall_progress = self.growth_controller.get_overall_progress()
+        
+        # Combine all information
+        return {
+            "age": self.dev_stages.get_age(),
+            "stage": self.dev_stages.get_current_stage(),
+            "milestones": milestone_status,
+            "active_critical_periods": [
+                {"id": period_id, "name": period.name, "type": period.period_type}
+                for period_id, period in active_periods.items()
+            ],
+            "upcoming_critical_periods": upcoming_periods,
+            "overall_capability_progress": overall_progress,
+            "time_to_next_stage": self.dev_stages.estimate_time_to_next_stage()
+        }
     
     def get_state(self) -> Dict[str, Any]:
         """
-        Get the current state of the developmental system
+        Get combined state from all developmental subsystems.
         
         Returns:
-            Dictionary with the complete state for persistence
-            
-        Raises:
-            DevelopmentError: If state retrieval fails
+        --------
+        Dict[str, Any]
+            Combined state dictionary
         """
-        try:
-            with self._lock:
-                return {
-                    "stage_manager": self.stage_manager.get_state(),
-                    "critical_period_manager": self.critical_period_manager.get_state(),
-                    "milestone_tracker": self.milestone_tracker.get_state(),
-                    "growth_controller": self.growth_controller.get_state(),
-                    "developmental_events": [event.dict() for event in self.developmental_events[-100:]]  # Last 100 events
-                }
-        except Exception as e:
-            error_msg = f"Failed to retrieve development system state: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  current_level=self.stage_manager.trajectory.current_age,
-                                  current_stage=self.stage_manager.current_stage,
-                                  details={"original_error": str(e)})
+        return {
+            "dev_stages": self.dev_stages.get_state(),
+            "critical_periods": self.critical_periods.get_state(),
+            "milestone_tracker": self.milestone_tracker.get_state(),
+            "growth_controller": self.growth_controller.get_state()
+        }
     
     def load_state(self, state: Dict[str, Any]) -> None:
         """
-        Load a previously saved state
+        Load state for all developmental subsystems.
         
-        Args:
-            state: The state dictionary to load
-            
-        Raises:
-            DevelopmentError: If state loading fails
-            ValueError: If state dictionary is invalid
+        Parameters:
+        -----------
+        state : Dict[str, Any]
+            Combined state dictionary
         """
-        if not state:
-            raise ValueError("State dictionary cannot be empty")
+        if "dev_stages" in state:
+            self.dev_stages.load_state(state["dev_stages"])
             
-        try:
-            with self._lock:
-                if "stage_manager" in state:
-                    self.stage_manager.load_state(state["stage_manager"])
-                    
-                if "critical_period_manager" in state:
-                    self.critical_period_manager.load_state(state["critical_period_manager"])
-                    
-                if "milestone_tracker" in state:
-                    self.milestone_tracker.load_state(state["milestone_tracker"])
-                    
-                if "growth_controller" in state:
-                    self.growth_controller.load_state(state["growth_controller"])
-                    
-                if "developmental_events" in state:
-                    self.developmental_events = [
-                        DevelopmentalEvent(**event_data) 
-                        for event_data in state["developmental_events"]
-                    ]
-                    
-                # Invalidate cache after state load
-                self._invalidate_cache()
-                    
-                logger.info("Development system state loaded successfully")
-                
-                # Publish state loaded event if event bus is available
-                if self.event_bus:
-                    self.event_bus.publish(Message(
-                        sender="development_system",
-                        message_type="state_loaded",
-                        content={
-                            "age": self.stage_manager.trajectory.current_age,
-                            "stage": self.stage_manager.current_stage
-                        }
-                    ))
-                    
-        except Exception as e:
-            error_msg = f"Failed to load development system state: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  details={"original_error": str(e)})
+        if "critical_periods" in state:
+            self.critical_periods.load_state(state["critical_periods"])
+            
+        if "milestone_tracker" in state:
+            self.milestone_tracker.load_state(state["milestone_tracker"])
+            
+        if "growth_controller" in state:
+            self.growth_controller.load_state(state["growth_controller"])
+
+def create_development_manager(config: Optional[DevelopmentConfig] = None) -> DevelopmentManager:
+    """
+    Create the global development manager.
     
-    def save_state_to_file(self, filepath: str) -> None:
-        """
-        Save the current state to a file
+    Parameters:
+    -----------
+    config : Optional[DevelopmentConfig]
+        Configuration for all developmental subsystems
         
-        Args:
-            filepath: Path to save the state file
-            
-        Raises:
-            DevelopmentError: If state saving fails
-        """
-        try:
-            state = self.get_state()
-            os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-            
-            with open(filepath, 'w') as f:
-                json.dump(state, f, indent=2, default=str)
-                
-            logger.info(f"Development system state saved to {filepath}")
-            
-        except Exception as e:
-            error_msg = f"Failed to save development system state to file: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  details={"filepath": filepath, "original_error": str(e)})
+    Returns:
+    --------
+    DevelopmentManager
+        The created development manager instance
+    """
+    global _development_manager
     
-    def load_state_from_file(self, filepath: str) -> None:
-        """
-        Load state from a file
+    if _development_manager is not None:
+        raise RuntimeError("Development manager has already been created")
         
-        Args:
-            filepath: Path to the state file
-            
-        Raises:
-            DevelopmentError: If state loading fails
-            FileNotFoundError: If the file doesn't exist
-        """
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"State file not found: {filepath}")
-            
-        try:
-            with open(filepath, 'r') as f:
-                state = json.load(f)
-                
-            self.load_state(state)
-            logger.info(f"Development system state loaded from {filepath}")
-            
-        except Exception as e:
-            error_msg = f"Failed to load development system state from file: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, 
-                                  details={"filepath": filepath, "original_error": str(e)})
+    _development_manager = DevelopmentManager(config)
+    return _development_manager
+
+def get_development_manager() -> DevelopmentManager:
+    """
+    Get the global development manager instance.
     
-    def _invalidate_cache(self) -> None:
-        """Invalidate all cached data"""
-        self._cache["last_cache_update"] = datetime.min
+    Returns:
+    --------
+    DevelopmentManager
+        The global development manager instance
+        
+    Raises:
+    -------
+    RuntimeError
+        If the development manager has not been created yet
+    """
+    global _development_manager
     
-    def _is_cache_valid(self, cache_key: str) -> bool:
-        """Check if a cache entry is still valid"""
-        if cache_key not in self._cache:
-            return False
-            
-        time_diff = (datetime.now() - self._cache["last_cache_update"]).total_seconds()
-        return time_diff < self._cache_ttl 
+    if _development_manager is None:
+        raise RuntimeError(
+            "Development manager has not been created yet. "
+            "Call create_development_manager() first."
+        )
+        
+    return _development_manager

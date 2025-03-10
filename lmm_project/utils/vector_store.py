@@ -1,378 +1,469 @@
-"""
-Vector Store Utility
-
-Provides functionality for generating, storing, and retrieving embeddings.
-This module serves as a unified interface for embedding operations throughout
-the LMM system.
-"""
-
 import os
-import json
+import pickle
 import numpy as np
 import faiss
-import logging
-import pickle
-from typing import List, Dict, Any, Optional, Tuple, Union
 from pathlib import Path
-from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 from lmm_project.core.exceptions import StorageError
+from lmm_project.utils.config_manager import get_config
+from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.utils.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_module_logger("vector_store")
 
-# Global LLM client for embeddings - lazily initialized
-_llm_client = None
+# Get configuration
+config = get_config()
 
-def get_llm_client():
-    """Get or initialize the LLM client"""
-    global _llm_client
-    if _llm_client is None:
-        _llm_client = LLMClient(base_url="http://192.168.2.12:1234")
-    return _llm_client
-
-def get_embedding(text: Union[str, List[str]], model: str = "text-embedding-nomic-embed-text-v1.5@q4_k_m") -> np.ndarray:
-    """
-    Get embedding vector for text using the LLM API
-    
-    Args:
-        text: Text or list of texts to generate embeddings for
-        model: Embedding model to use
-        
-    Returns:
-        Numpy array of embeddings
-    """
-    try:
-        # Get LLM client
-        client = get_llm_client()
-        
-        # Get embedding from API
-        embedding = client.get_embedding(text, embedding_model=model)
-        
-        # Convert to numpy array if not already
-        if isinstance(embedding, list):
-            if isinstance(embedding[0], list):
-                # Multiple embeddings
-                return np.array(embedding)
-            else:
-                # Single embedding
-                return np.array(embedding)
-        
-        return embedding
-        
-    except Exception as e:
-        logger.error(f"Error generating embedding: {e}")
-        
-        # Return zero embedding as fallback
-        # Determine dimension based on the model
-        if "nomic" in model:
-            dim = 768
-        else:
-            dim = 1536  # Default for OpenAI models
-            
-        # Return zero vector(s)
-        if isinstance(text, list):
-            return np.zeros((len(text), dim))
-        else:
-            return np.zeros(dim)
 
 class VectorStore:
     """
-    Vector store for embedding storage and retrieval
-    
-    This class provides methods for storing and retrieving embeddings
-    using FAISS for efficient similarity search.
+    Vector storage and retrieval system using FAISS.
+    Supports GPU acceleration when available.
     """
+
     def __init__(
-        self, 
-        dimension: int = 768, 
-        index_type: str = "Flat", 
-        storage_dir: str = "storage/embeddings",
-        use_gpu: bool = False
+        self,
+        dimension: int = None,
+        index_type: str = "Flat",
+        use_gpu: bool = None,
+        storage_dir: str = None
     ):
         """
-        Initialize the vector store
+        Initialize vector store.
         
         Parameters:
-        dimension: Dimension of the embeddings
-        index_type: Type of FAISS index to use
-        storage_dir: Directory to store index files
-        use_gpu: Whether to use GPU acceleration
+        dimension: Dimension of vectors (default from config)
+        index_type: FAISS index type ("Flat", "IVF", "HNSW")
+        use_gpu: Whether to use GPU acceleration (default based on config)
+        storage_dir: Directory to store indices
         """
-        self.dimension = dimension
-        self.index_type = index_type
-        self.storage_dir = Path(storage_dir)
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.use_gpu = use_gpu
+        # Set dimension from config if not provided
+        self.dimension = dimension or config.get_int("storage.vector_dimension", 768)
         
-        # Create index
-        if index_type == "Flat":
-            self.index = faiss.IndexFlatL2(dimension)
-        elif index_type == "IVF":
-            # IVF index requires training, so we start with a base index
-            quantizer = faiss.IndexFlatL2(dimension)
-            self.index = faiss.IndexIVFFlat(quantizer, dimension, 100)
-            self.index.is_trained = False
-        else:
-            raise ValueError(f"Unsupported index type: {index_type}")
-            
-        # Move to GPU if requested and available
-        if use_gpu:
-            try:
-                res = faiss.StandardGpuResources()
-                self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
-                print("FAISS index moved to GPU")
-            except Exception as e:
-                print(f"Failed to use GPU: {e}")
-                self.use_gpu = False
-                
-        # Metadata storage
-        self.metadata: List[Dict[str, Any]] = []
+        # Set index type from config if not provided
+        self.index_type = index_type or config.get_string("storage.vector_index_type", "Flat")
         
-    def add(self, embeddings: Union[List[List[float]], np.ndarray], metadata_list: List[Dict[str, Any]]) -> List[int]:
-        """
-        Add embeddings to the index
+        # Use GPU based on config if not explicitly set
+        if use_gpu is None:
+            use_gpu = config.get_boolean("system.cuda_enabled", True)
+        self.use_gpu = use_gpu and self._is_gpu_available()
         
-        Parameters:
-        embeddings: List of embedding vectors
-        metadata_list: List of metadata dictionaries
+        # Set storage directory
+        self.storage_dir = storage_dir or config.get_string("storage_dir", "storage")
+        os.makedirs(Path(self.storage_dir) / "vectors", exist_ok=True)
         
-        Returns:
-        List of assigned IDs
-        """
-        if len(embeddings) != len(metadata_list):
-            raise ValueError("Number of embeddings and metadata entries must match")
-            
-        # Convert to numpy array if needed
-        if isinstance(embeddings, list):
-            embeddings_array = np.array(embeddings, dtype=np.float32)
-        else:
-            embeddings_array = embeddings
-            
-        # Check if IVF index needs training
-        if self.index_type == "IVF" and not self.index.is_trained:
-            if len(embeddings_array) < 100:
-                # Not enough data to train, use random data
-                random_data = np.random.random((100, self.dimension)).astype(np.float32)
-                self.index.train(random_data)
+        # Initialize index and metadata
+        self.index = None
+        self.metadata: Dict[int, Dict[str, Any]] = {}
+        self.next_id = 0
+        
+        # Create the index
+        self._create_index()
+        
+        logger.info(f"Vector store initialized (dimension: {self.dimension}, "
+                    f"index_type: {self.index_type}, use_gpu: {self.use_gpu})")
+
+    def _is_gpu_available(self) -> bool:
+        """Check if FAISS GPU is available."""
+        try:
+            gpu_count = faiss.get_num_gpus()
+            return gpu_count > 0
+        except Exception as e:
+            logger.warning(f"Error checking GPU availability: {str(e)}")
+            return False
+
+    def _create_index(self) -> None:
+        """Create FAISS index based on configuration."""
+        try:
+            if self.index_type == "Flat":
+                self.index = faiss.IndexFlatL2(self.dimension)
+            elif self.index_type == "IVF":
+                # IVF index requires training, so we'll use a more basic one initially
+                # and then train it when we have enough data
+                quantizer = faiss.IndexFlatL2(self.dimension)
+                self.index = faiss.IndexIVFFlat(quantizer, self.dimension, 100)
+                self.index.nprobe = 10  # Number of cells to visit during search
+            elif self.index_type == "HNSW":
+                # Hierarchical Navigable Small World graph
+                self.index = faiss.IndexHNSWFlat(self.dimension, 32)  # 32 is the number of links per node
             else:
-                self.index.train(embeddings_array)
-                
-        # Get starting ID
-        start_id = len(self.metadata)
-        
-        # Add to index
-        self.index.add(embeddings_array)
-        
-        # Add metadata
-        for meta in metadata_list:
-            # Add timestamp if not present
-            if "timestamp" not in meta:
-                meta["timestamp"] = datetime.now().isoformat()
-            # Add ID
-            meta["id"] = start_id + len(self.metadata)
-            self.metadata.append(meta)
+                logger.warning(f"Unknown index type: {self.index_type}, using Flat index")
+                self.index = faiss.IndexFlatL2(self.dimension)
             
-        # Return assigned IDs
-        return list(range(start_id, start_id + len(metadata_list)))
-    
-    def search(self, query_embedding: Union[List[float], np.ndarray], k: int = 5) -> Tuple[List[int], List[float], List[Dict[str, Any]]]:
+            # Move to GPU if available and requested
+            if self.use_gpu:
+                try:
+                    gpu_resources = faiss.StandardGpuResources()
+                    self.index = faiss.index_cpu_to_gpu(gpu_resources, 0, self.index)
+                    logger.info("Using GPU acceleration for vector store")
+                except Exception as e:
+                    logger.warning(f"Failed to use GPU acceleration: {str(e)}")
+                    self.use_gpu = False
+        
+        except Exception as e:
+            logger.error(f"Error creating FAISS index: {str(e)}")
+            # Fall back to basic index
+            self.index = faiss.IndexFlatL2(self.dimension)
+            self.index_type = "Flat"
+
+    def add_vectors(
+        self,
+        vectors: Union[np.ndarray, List[List[float]]],
+        metadata_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[int]:
         """
-        Search for similar embeddings
+        Add vectors to the index.
         
         Parameters:
-        query_embedding: Query embedding vector
-        k: Number of results to return
+        vectors: Vectors to add (must be numpy array or list of lists)
+        metadata_list: Optional metadata for each vector
         
         Returns:
-        Tuple of (IDs, distances, metadata)
-        """
-        # Convert to numpy array if needed
-        if isinstance(query_embedding, list):
-            query_array = np.array([query_embedding], dtype=np.float32)
-        else:
-            query_array = query_embedding.reshape(1, -1)
-            
-        # Search
-        distances, indices = self.index.search(query_array, k)
-        
-        # Get metadata
-        result_metadata = []
-        valid_indices = []
-        valid_distances = []
-        
-        for i, idx in enumerate(indices[0]):
-            if idx >= 0 and idx < len(self.metadata):  # FAISS may return -1 for not enough results
-                valid_indices.append(int(idx))
-                valid_distances.append(float(distances[0][i]))
-                result_metadata.append(self.metadata[idx])
-                
-        return valid_indices, valid_distances, result_metadata
-    
-    def save(self, filename: Optional[str] = None) -> str:
-        """
-        Save the index and metadata to disk
-        
-        Parameters:
-        filename: Optional filename to save to
-        
-        Returns:
-        Path to saved files
+        List of IDs for the added vectors
         """
         try:
-            # Generate filename if not provided
-            if not filename:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"index_{timestamp}"
+            # Convert to numpy array if needed
+            if not isinstance(vectors, np.ndarray):
+                vectors = np.array(vectors, dtype=np.float32)
+            
+            # Ensure vectors are float32
+            if vectors.dtype != np.float32:
+                vectors = vectors.astype(np.float32)
+            
+            # Check dimensions
+            if vectors.shape[1] != self.dimension:
+                raise StorageError(f"Vector dimension mismatch: expected {self.dimension}, got {vectors.shape[1]}")
+            
+            # Training for IVF index if needed
+            if self.index_type == "IVF" and not self.index.is_trained and vectors.shape[0] >= 100:
+                logger.info("Training IVF index")
+                if self.use_gpu:
+                    # Need to move back to CPU for training
+                    cpu_index = faiss.index_gpu_to_cpu(self.index)
+                    cpu_index.train(vectors)
+                    # Move back to GPU
+                    gpu_resources = faiss.StandardGpuResources()
+                    self.index = faiss.index_cpu_to_gpu(gpu_resources, 0, cpu_index)
+                else:
+                    self.index.train(vectors)
+            
+            # Assign IDs
+            start_id = self.next_id
+            ids = np.arange(start_id, start_id + vectors.shape[0], dtype=np.int64)
+            self.next_id = start_id + vectors.shape[0]
+            
+            # Add vectors
+            self.index.add_with_ids(vectors, ids)
+            
+            # Add metadata if provided
+            if metadata_list is not None:
+                if len(metadata_list) != vectors.shape[0]:
+                    raise StorageError(f"Metadata list length ({len(metadata_list)}) must match vector count ({vectors.shape[0]})")
+                for i, idx in enumerate(ids):
+                    self.metadata[int(idx)] = metadata_list[i]
+            
+            return ids.tolist()
+            
+        except Exception as e:
+            logger.error(f"Error adding vectors: {str(e)}")
+            raise StorageError(f"Failed to add vectors: {str(e)}") from e
+
+    def search(
+        self,
+        query_vector: Union[np.ndarray, List[float]],
+        k: int = 5,
+        metadata_filter: Optional[Dict[str, Any]] = None
+    ) -> Tuple[List[int], List[float], List[Dict[str, Any]]]:
+        """
+        Search for similar vectors.
+        
+        Parameters:
+        query_vector: Query vector
+        k: Number of results to return
+        metadata_filter: Optional filter for metadata
+        
+        Returns:
+        Tuple of (ids, distances, metadata)
+        """
+        try:
+            # Convert query to numpy array if needed
+            if not isinstance(query_vector, np.ndarray):
+                query_vector = np.array([query_vector], dtype=np.float32)
+            else:
+                # Ensure it's 2D
+                if query_vector.ndim == 1:
+                    query_vector = query_vector.reshape(1, -1)
+                query_vector = query_vector.astype(np.float32)
+            
+            # Check dimension
+            if query_vector.shape[1] != self.dimension:
+                raise StorageError(f"Query vector dimension mismatch: expected {self.dimension}, got {query_vector.shape[1]}")
+            
+            # Search index
+            distances, indices = self.index.search(query_vector, k)
+            
+            # Convert to lists
+            ids = indices[0].tolist()
+            dists = distances[0].tolist()
+            
+            # Get metadata and apply filter if needed
+            meta_list = []
+            filtered_ids = []
+            filtered_dists = []
+            
+            for i, idx in enumerate(ids):
+                # Skip if ID is -1 (can happen with some index types)
+                if idx == -1:
+                    continue
                 
-            # Ensure it doesn't have an extension
-            filename = Path(filename).stem
+                # Get metadata
+                meta = self.metadata.get(int(idx), {})
+                
+                # Apply filter if provided
+                if metadata_filter is not None:
+                    match = True
+                    for key, value in metadata_filter.items():
+                        if key not in meta or meta[key] != value:
+                            match = False
+                            break
+                    if not match:
+                        continue
+                
+                # Keep this result
+                filtered_ids.append(idx)
+                filtered_dists.append(dists[i])
+                meta_list.append(meta)
+                
+                # Stop if we have enough results
+                if len(filtered_ids) >= k:
+                    break
+            
+            return filtered_ids, filtered_dists, meta_list
+            
+        except Exception as e:
+            logger.error(f"Error searching vectors: {str(e)}")
+            raise StorageError(f"Failed to search vectors: {str(e)}") from e
+
+    def delete(self, ids: List[int]) -> None:
+        """
+        Delete vectors by ID.
+        Note: FAISS does not support direct deletion with all index types.
+        For unsupported indices, this marks vectors as deleted in metadata.
+        
+        Parameters:
+        ids: List of vector IDs to delete
+        """
+        try:
+            # Check if direct removal is supported
+            if hasattr(self.index, "remove_ids"):
+                # Convert to numpy array
+                id_array = np.array(ids, dtype=np.int64)
+                self.index.remove_ids(id_array)
+                
+                # Remove from metadata
+                for idx in ids:
+                    if idx in self.metadata:
+                        del self.metadata[idx]
+            else:
+                # Mark as deleted in metadata
+                logger.warning("Direct deletion not supported for this index type, marking as deleted in metadata")
+                for idx in ids:
+                    if idx in self.metadata:
+                        self.metadata[idx]["_deleted"] = True
+        
+        except Exception as e:
+            logger.error(f"Error deleting vectors: {str(e)}")
+            raise StorageError(f"Failed to delete vectors: {str(e)}") from e
+
+    def update_metadata(self, id: int, metadata: Dict[str, Any]) -> None:
+        """
+        Update metadata for a vector.
+        
+        Parameters:
+        id: Vector ID
+        metadata: New metadata (will be merged with existing)
+        """
+        if id not in self.metadata:
+            self.metadata[id] = {}
+        
+        # Update metadata
+        self.metadata[id].update(metadata)
+
+    def get_metadata(self, id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get metadata for a vector.
+        
+        Parameters:
+        id: Vector ID
+        
+        Returns:
+        Metadata or None if not found
+        """
+        return self.metadata.get(id)
+
+    def save(self, name: str) -> str:
+        """
+        Save the index and metadata to disk.
+        
+        Parameters:
+        name: Name for the saved index
+        
+        Returns:
+        Path to the saved index
+        """
+        try:
+            # Create directory
+            index_dir = Path(self.storage_dir) / "vectors"
+            os.makedirs(index_dir, exist_ok=True)
+            
+            # Base path for files
+            base_path = index_dir / name
+            
+            # Save metadata
+            metadata_path = f"{base_path}.metadata"
+            with open(metadata_path, "wb") as f:
+                pickle.dump({
+                    "metadata": self.metadata,
+                    "next_id": self.next_id,
+                    "dimension": self.dimension,
+                    "index_type": self.index_type
+                }, f)
             
             # Save index
-            index_path = self.storage_dir / f"{filename}.index"
+            index_path = f"{base_path}.index"
             
-            # Convert to CPU if on GPU
+            # If using GPU, move to CPU for saving
             if self.use_gpu:
                 cpu_index = faiss.index_gpu_to_cpu(self.index)
-                faiss.write_index(cpu_index, str(index_path))
+                faiss.write_index(cpu_index, index_path)
             else:
-                faiss.write_index(self.index, str(index_path))
-                
-            # Save metadata
-            metadata_path = self.storage_dir / f"{filename}.meta"
-            with open(metadata_path, "wb") as f:
-                pickle.dump(self.metadata, f)
-                
-            # Save config
-            config_path = self.storage_dir / f"{filename}.config"
-            config = {
-                "dimension": self.dimension,
-                "index_type": self.index_type,
-                "count": len(self.metadata),
-                "saved_at": datetime.now().isoformat()
-            }
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2)
-                
-            return str(index_path)
+                faiss.write_index(self.index, index_path)
+            
+            logger.info(f"Vector store saved to {base_path}")
+            return str(base_path)
+            
         except Exception as e:
-            raise StorageError(f"Failed to save vector store: {e}")
-    
-    def load(self, filename: str) -> None:
+            logger.error(f"Error saving vector store: {str(e)}")
+            raise StorageError(f"Failed to save vector store: {str(e)}") from e
+
+    @classmethod
+    def load(cls, name: str, storage_dir: Optional[str] = None, use_gpu: Optional[bool] = None) -> "VectorStore":
         """
-        Load the index and metadata from disk
+        Load an index and metadata from disk.
         
         Parameters:
-        filename: Path to the index file
+        name: Name of the saved index
+        storage_dir: Storage directory (default from config)
+        use_gpu: Whether to use GPU (default based on config)
+        
+        Returns:
+        VectorStore instance
         """
         try:
-            # Handle with or without extension
-            filepath = Path(filename)
-            base_path = self.storage_dir / filepath.stem
+            # Get storage directory from config if not provided
+            if storage_dir is None:
+                storage_dir = config.get_string("storage_dir", "storage")
+            
+            index_dir = Path(storage_dir) / "vectors"
+            
+            # Base path for files
+            base_path = index_dir / name
+            
+            # Load metadata
+            metadata_path = f"{base_path}.metadata"
+            if not os.path.exists(metadata_path):
+                raise StorageError(f"Metadata file not found: {metadata_path}")
+            
+            with open(metadata_path, "rb") as f:
+                data = pickle.load(f)
             
             # Load index
             index_path = f"{base_path}.index"
-            self.index = faiss.read_index(str(index_path))
+            if not os.path.exists(index_path):
+                raise StorageError(f"Index file not found: {index_path}")
+            
+            # Create instance
+            instance = cls(
+                dimension=data["dimension"],
+                index_type=data["index_type"],
+                use_gpu=use_gpu,
+                storage_dir=storage_dir
+            )
+            
+            # Load saved index
+            index = faiss.read_index(index_path)
             
             # Move to GPU if requested
-            if self.use_gpu:
+            if instance.use_gpu:
                 try:
-                    res = faiss.StandardGpuResources()
-                    self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
+                    gpu_resources = faiss.StandardGpuResources()
+                    index = faiss.index_cpu_to_gpu(gpu_resources, 0, index)
                 except Exception as e:
-                    print(f"Failed to use GPU: {e}")
-                    self.use_gpu = False
-                    
-            # Load metadata
-            metadata_path = f"{base_path}.meta"
-            with open(metadata_path, "rb") as f:
-                self.metadata = pickle.load(f)
-                
-            # Update dimension from loaded index
-            self.dimension = self.index.d
+                    logger.warning(f"Failed to move index to GPU: {str(e)}")
+                    instance.use_gpu = False
             
-            # Determine index type
-            if isinstance(self.index, faiss.IndexFlatL2) or isinstance(self.index, faiss.GpuIndexFlatL2):
-                self.index_type = "Flat"
-            elif isinstance(self.index, faiss.IndexIVFFlat) or isinstance(self.index, faiss.GpuIndexIVFFlat):
-                self.index_type = "IVF"
-                
+            # Set index and metadata
+            instance.index = index
+            instance.metadata = data["metadata"]
+            instance.next_id = data["next_id"]
+            
+            logger.info(f"Vector store loaded from {base_path}")
+            return instance
+            
         except Exception as e:
-            raise StorageError(f"Failed to load vector store: {e}")
+            logger.error(f"Error loading vector store: {str(e)}")
+            raise StorageError(f"Failed to load vector store: {str(e)}") from e
+
+
+# Get embeddings using the LLM client
+def get_embeddings(texts: Union[str, List[str]]) -> Union[List[float], List[List[float]]]:
+    """
+    Get embeddings for texts using the LLM client.
     
-    def get_item(self, idx: int) -> Optional[Dict[str, Any]]:
-        """
-        Get metadata for a specific item
-        
-        Parameters:
-        idx: Index of the item
-        
-        Returns:
-        Metadata dictionary or None if not found
-        """
-        if 0 <= idx < len(self.metadata):
-            return self.metadata[idx]
-        return None
+    Parameters:
+    texts: Text or list of texts to embed
     
-    def update_metadata(self, idx: int, metadata: Dict[str, Any]) -> bool:
-        """
-        Update metadata for a specific item
-        
-        Parameters:
-        idx: Index of the item
-        metadata: New metadata dictionary
-        
-        Returns:
-        True if successful, False otherwise
-        """
-        if 0 <= idx < len(self.metadata):
-            # Preserve ID
-            metadata["id"] = self.metadata[idx]["id"]
-            self.metadata[idx] = metadata
-            return True
-        return False
+    Returns:
+    Embedding vector or list of embedding vectors
+    """
+    client = LLMClient()
+    embedding_model = config.get_string("DEFAULT_EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5@q4_k_m")
     
-    def delete(self, indices: List[int]) -> bool:
-        """
-        Delete items from the index
-        
-        Note: FAISS doesn't support true deletion, so this is a soft delete
-        that only removes metadata. The vectors remain in the index but
-        won't be returned in search results.
-        
-        Parameters:
-        indices: List of indices to delete
-        
-        Returns:
-        True if successful
-        """
-        for idx in indices:
-            if 0 <= idx < len(self.metadata):
-                # Mark as deleted in metadata
-                self.metadata[idx]["deleted"] = True
-                
-        return True
+    return client.get_embedding(texts, embedding_model)
+
+
+# Create vector store singleton
+_vector_store_instance = None
+
+
+def get_vector_store(
+    dimension: Optional[int] = None,
+    index_type: Optional[str] = None,
+    use_gpu: Optional[bool] = None,
+    storage_dir: Optional[str] = None
+) -> VectorStore:
+    """
+    Get or create a singleton vector store instance.
     
-    def clear(self) -> None:
-        """
-        Clear the index and metadata
-        """
-        # Recreate index
-        if self.index_type == "Flat":
-            self.index = faiss.IndexFlatL2(self.dimension)
-        elif self.index_type == "IVF":
-            quantizer = faiss.IndexFlatL2(self.dimension)
-            self.index = faiss.IndexIVFFlat(quantizer, self.dimension, 100)
-            self.index.is_trained = False
-            
-        # Move to GPU if requested
-        if self.use_gpu:
-            try:
-                res = faiss.StandardGpuResources()
-                self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
-            except Exception as e:
-                print(f"Failed to use GPU: {e}")
-                self.use_gpu = False
-                
-        # Clear metadata
-        self.metadata = []
+    Parameters:
+    dimension: Vector dimension
+    index_type: Index type
+    use_gpu: Whether to use GPU
+    storage_dir: Storage directory
+    
+    Returns:
+    VectorStore instance
+    """
+    global _vector_store_instance
+    
+    if _vector_store_instance is None:
+        _vector_store_instance = VectorStore(
+            dimension=dimension,
+            index_type=index_type,
+            use_gpu=use_gpu,
+            storage_dir=storage_dir
+        )
+    
+    return _vector_store_instance

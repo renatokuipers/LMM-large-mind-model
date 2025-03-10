@@ -1,69 +1,128 @@
-# Core module for the Large Mind Model (LMM) project
 """
-Core module for the Large Mind Model (LMM) project.
-
-This module provides the foundational architecture components including:
-- Mind: Central coordinator for all cognitive modules
-- EventBus: Communication system for inter-module messaging
-- Message: Structured message format for module communication
-- StateManager: System for tracking and persisting cognitive state
-- Exception classes: Specialized error types for the LMM system
+Core module for the LMM system.
+Contains fundamental components for the cognitive architecture.
 """
+import logging
 
-from lmm_project.core.mind import Mind
-from lmm_project.core.event_bus import EventBus
-from lmm_project.core.message import Message
-from lmm_project.core.state_manager import StateManager
-from lmm_project.core.types import (
-    DevelopmentalStage, ModuleType, ActivationType, LearningType,
-    ConnectionType, EmotionType, MemoryType, RelationshipType,
-    HomeostaticSignalType, Activation, ModuleStateDict,
-    HomeostasisStateDict, SystemStateDict
-)
-from lmm_project.core.exceptions import (
-    LMMBaseException, LMMError, ModuleInitializationError, ModuleProcessingError,
-    EventBusError, StateManagerError, NeuralSubstrateError,
-    MotherLLMError, DevelopmentError, StorageError, VisualizationError,
-    ConfigurationError, InitializationError, ValidationError,
-    CommunicationError, ResourceNotFoundError, PerformanceError, SecurityError
+# Configure basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
+# Import key types
+from .types import (
+    ModuleType,
+    MessageType,
+    DevelopmentalStage,
+    ModuleID,
+    MessageID,
+    Timestamp,
+    Age,
+    DevelopmentLevel,
+    Vector,
+    StateDict,
+    generate_id,
+    current_timestamp
+)
+
+# Import exceptions
+from .exceptions import (
+    LMMException,
+    ModuleError,
+    EventBusError,
+    MessageError,
+    StateError,
+    DevelopmentError,
+    StorageError,
+    NeuralError,
+    ConfigurationError,
+    ResourceUnavailableError,
+    InterfaceError
+)
+
+# Import message classes
+from .message import (
+    Content,
+    TextContent,
+    VectorContent,
+    ImageContent,
+    AudioContent,
+    StructuredContent,
+    Message
+)
+
+# Import event bus
+from .event_bus import (
+    EventBus,
+    get_event_bus
+)
+
+# Import state manager
+from .state_manager import (
+    StateManager,
+    get_state_manager
+)
+
+# Import mind
+from .mind import (
+    Mind,
+    get_mind
+)
+
+# Version information
+__version__ = "0.1.0"
+
+# Export key components
 __all__ = [
-    'Mind',
-    'EventBus',
-    'Message',
-    'StateManager',
     # Types
-    'DevelopmentalStage',
     'ModuleType',
-    'ActivationType',
-    'LearningType',
-    'ConnectionType',
-    'EmotionType',
-    'MemoryType',
-    'RelationshipType',
-    'HomeostaticSignalType',
-    'Activation',
-    'ModuleStateDict',
-    'HomeostasisStateDict',
-    'SystemStateDict',
+    'MessageType',
+    'DevelopmentalStage',
+    'ModuleID',
+    'MessageID',
+    'Timestamp',
+    'Age',
+    'DevelopmentLevel',
+    'Vector',
+    'StateDict',
+    'generate_id',
+    'current_timestamp',
+    
     # Exceptions
-    'LMMBaseException',
-    'LMMError',
-    'ModuleInitializationError',
-    'ModuleProcessingError',
+    'LMMException',
+    'ModuleError',
     'EventBusError',
-    'StateManagerError',
-    'NeuralSubstrateError',
-    'MotherLLMError',
+    'MessageError',
+    'StateError',
     'DevelopmentError',
     'StorageError',
-    'VisualizationError',
+    'NeuralError',
     'ConfigurationError',
-    'InitializationError',
-    'ValidationError',
-    'CommunicationError',
-    'ResourceNotFoundError',
-    'PerformanceError',
-    'SecurityError'
-] 
+    'ResourceUnavailableError',
+    'InterfaceError',
+    
+    # Message classes
+    'Content',
+    'TextContent',
+    'VectorContent',
+    'ImageContent',
+    'AudioContent',
+    'StructuredContent',
+    'Message',
+    
+    # Event bus
+    'EventBus',
+    'get_event_bus',
+    
+    # State manager
+    'StateManager',
+    'get_state_manager',
+    
+    # Mind
+    'Mind',
+    'get_mind',
+    
+    # Version
+    '__version__'
+]

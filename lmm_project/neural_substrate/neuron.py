@@ -1,102 +1,245 @@
-from typing import Dict, List, Any, Optional, Callable
-from pydantic import BaseModel, Field
+"""
+Neuron implementation for the neural substrate.
+
+This module defines the Neuron class, which is the basic processing unit
+in the LMM neural substrate. Neurons receive inputs, apply activation
+functions, and produce outputs.
+"""
 import uuid
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
 import numpy as np
-import math
-from datetime import datetime
+import torch
+from pydantic import BaseModel, Field
 
-from .activation_functions import get_activation_function
+from lmm_project.neural_substrate.activation_functions import (
+    ActivationType, get_activation_function
+)
+from lmm_project.utils.logging_utils import get_module_logger
 
-class Neuron(BaseModel):
-    """
-    Basic neuron implementation for the neural substrate
-    
-    This represents a single neuron in the neural network, with
-    activation state, connections, and learning capability.
-    """
-    neuron_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    activation: float = Field(default=0.0, ge=0.0, le=1.0)
-    activation_function: str = "sigmoid"
-    activation_threshold: float = Field(default=0.5)
-    refractory_period: float = Field(default=0.0)
-    last_fired: Optional[datetime] = None
-    connections: Dict[str, float] = Field(default_factory=dict)
+logger = get_module_logger("neural_substrate.neuron")
+
+
+class NeuronConfig(BaseModel):
+    """Configuration for a neuron."""
+    activation_type: ActivationType = Field(default=ActivationType.SIGMOID)
     bias: float = Field(default=0.0)
+    threshold: float = Field(default=0.5)
     learning_rate: float = Field(default=0.01)
+    is_inhibitory: bool = Field(default=False)
+    refractory_period: float = Field(default=0.0)  # In milliseconds
+    adaptation_rate: float = Field(default=0.0)
+    noise_level: float = Field(default=0.0)
+    leak_rate: float = Field(default=0.1)
+
+
+class Neuron:
+    """
+    Basic processing unit in the neural substrate.
     
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
+    Neurons receive inputs from other neurons, process them using
+    an activation function, and produce an output that can be sent
+    to other neurons.
+    """
     
-    def activate(self, input_value: float) -> float:
+    def __init__(
+        self,
+        neuron_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        device: Optional[torch.device] = None
+    ):
         """
-        Activate the neuron with the given input
+        Initialize a neuron.
         
         Parameters:
-        input_value: Input value to the neuron
-        
-        Returns:
-        Activation level after processing input
+        neuron_id: Unique identifier for this neuron
+        config: Configuration dictionary
+        device: Torch device for tensor operations
         """
-        # Check if neuron is in refractory period
-        if self.last_fired:
-            time_since_fired = (datetime.now() - self.last_fired).total_seconds()
-            if time_since_fired < self.refractory_period:
-                return self.activation
+        self.neuron_id = neuron_id or str(uuid.uuid4())
+        self.config = NeuronConfig(**(config or {}))
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Apply activation function
-        activation_func = get_activation_function(self.activation_function)
-        self.activation = activation_func(input_value + self.bias)
+        # Get activation function and its derivative
+        self.activation_fn, self.activation_derivative = get_activation_function(
+            self.config.activation_type
+        )
         
-        # Record firing time if threshold exceeded
-        if self.activation >= self.activation_threshold:
-            self.last_fired = datetime.now()
-            
-        return self.activation
+        # Initialize state
+        self.bias = torch.tensor(self.config.bias, device=self.device)
+        self.activation = 0.0
+        self.last_activation = 0.0
+        self.threshold = self.config.threshold
+        
+        # Learning and adaptation parameters
+        self.learning_rate = self.config.learning_rate
+        self.adaptation = 0.0
+        self.adaptation_rate = self.config.adaptation_rate
+        
+        # Timing and refractory properties
+        self.last_spike_time = 0.0
+        self.refractory_period = self.config.refractory_period
+        
+        # Tracking input connections
+        self.input_connections: Set[str] = set()
+        
+        # Input buffers for incoming signals
+        self.input_buffer: Dict[str, float] = {}
+        
+        # Track learning history
+        self.activation_history: List[float] = []
+        self.max_history_size = 100
     
-    def connect_to(self, target_neuron_id: str, weight: float = 0.1) -> None:
+    def add_input_connection(self, source_id: str) -> None:
         """
-        Create or update a connection to another neuron
+        Register an input connection from another neuron.
         
         Parameters:
-        target_neuron_id: ID of the target neuron
+        source_id: ID of the source neuron
+        """
+        self.input_connections.add(source_id)
+        self.input_buffer[source_id] = 0.0
+    
+    def remove_input_connection(self, source_id: str) -> None:
+        """
+        Remove an input connection.
+        
+        Parameters:
+        source_id: ID of the source neuron
+        """
+        if source_id in self.input_connections:
+            self.input_connections.remove(source_id)
+            del self.input_buffer[source_id]
+    
+    def receive_input(self, source_id: str, value: float, weight: float) -> None:
+        """
+        Receive input from a connected neuron.
+        
+        Parameters:
+        source_id: ID of the source neuron
+        value: Activation value from source neuron
         weight: Connection weight
         """
-        self.connections[target_neuron_id] = weight
+        # Apply weight to the incoming signal
+        weighted_input = value * weight
+        
+        # If inhibitory connection, negate the signal
+        if self.config.is_inhibitory:
+            weighted_input = -abs(weighted_input)
+            
+        # Store in input buffer
+        self.input_buffer[source_id] = weighted_input
     
-    def get_outgoing_activation(self, target_neuron_id: str) -> float:
+    def compute_activation(self, current_time: float = 0.0) -> float:
         """
-        Get the activation value being sent to a specific target neuron
+        Compute neuron activation based on current inputs and state.
         
         Parameters:
-        target_neuron_id: ID of the target neuron
+        current_time: Current simulation time in milliseconds
         
         Returns:
-        Weighted activation value
+        New activation value
         """
-        if target_neuron_id not in self.connections:
-            return 0.0
+        # Check if neuron is in refractory period
+        if current_time - self.last_spike_time < self.refractory_period:
+            self.activation = 0.0
+            return self.activation
+        
+        # Store previous activation for learning
+        self.last_activation = self.activation
+        
+        # Sum all inputs with bias
+        total_input = sum(self.input_buffer.values()) + self.bias.item()
+        
+        # Apply adaptation
+        total_input -= self.adaptation
+        
+        # Add noise if configured
+        if self.config.noise_level > 0:
+            noise = np.random.normal(0, self.config.noise_level)
+            total_input += noise
+        
+        # Apply activation function
+        self.activation = float(self.activation_fn(total_input))
+        
+        # Update adaptation
+        if self.adaptation_rate > 0:
+            self.adaptation += self.adaptation_rate * self.activation
+            self.adaptation *= (1.0 - self.config.leak_rate)  # Leaky adaptation
+        
+        # Track if neuron spiked (exceeded threshold)
+        if self.activation >= self.threshold:
+            self.last_spike_time = current_time
             
-        return self.activation * self.connections[target_neuron_id]
+        # Track activation history
+        self.activation_history.append(self.activation)
+        if len(self.activation_history) > self.max_history_size:
+            self.activation_history = self.activation_history[-self.max_history_size:]
+        
+        return self.activation
     
-    def adjust_weight(self, target_neuron_id: str, delta: float) -> float:
+    def adapt(self, factor: float) -> None:
         """
-        Adjust the weight of a connection
+        Apply homeostatic adaptation to the neuron.
         
         Parameters:
-        target_neuron_id: ID of the target neuron
-        delta: Amount to adjust the weight
-        
-        Returns:
-        New weight value
+        factor: Adaptation factor
         """
-        if target_neuron_id not in self.connections:
-            return 0.0
-            
-        self.connections[target_neuron_id] += delta * self.learning_rate
-        return self.connections[target_neuron_id]
+        self.adaptation += factor * self.adaptation_rate
     
-    def reset(self) -> None:
-        """Reset the neuron's activation"""
+    def update_bias(self, error: float) -> None:
+        """
+        Update the bias based on error signal.
+        
+        Parameters:
+        error: Error signal for learning
+        """
+        # Calculate gradient using activation derivative
+        input_sum = sum(self.input_buffer.values())
+        gradient = error * self.activation_derivative(input_sum + self.bias.item())
+        
+        # Update bias using gradient descent
+        with torch.no_grad():
+            self.bias -= self.learning_rate * gradient
+    
+    def reset_state(self) -> None:
+        """Reset the neuron's state."""
         self.activation = 0.0
-        self.last_fired = None
+        self.last_activation = 0.0
+        self.adaptation = 0.0
+        self.last_spike_time = 0.0
+        self.input_buffer = {source_id: 0.0 for source_id in self.input_connections}
+    
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the neuron.
+        
+        Returns:
+        Dictionary containing the neuron state
+        """
+        return {
+            "neuron_id": self.neuron_id,
+            "activation": self.activation,
+            "bias": self.bias.item(),
+            "is_inhibitory": self.config.is_inhibitory,
+            "input_connections": list(self.input_connections),
+            "activation_type": self.config.activation_type.name,
+            "adaptation": self.adaptation,
+            "last_spike_time": self.last_spike_time
+        }
+    
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """
+        Load neuron state from a dictionary.
+        
+        Parameters:
+        state: Dictionary containing neuron state
+        """
+        if "activation" in state:
+            self.activation = state["activation"]
+        if "bias" in state:
+            self.bias = torch.tensor(state["bias"], device=self.device)
+        if "adaptation" in state:
+            self.adaptation = state["adaptation"]
+        if "last_spike_time" in state:
+            self.last_spike_time = state["last_spike_time"]

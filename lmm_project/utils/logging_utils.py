@@ -1,200 +1,153 @@
 import logging
 import os
-from pathlib import Path
+import sys
 from datetime import datetime
-from typing import Optional, Dict, Any
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Dict, Optional, Union
 
-def setup_logger(
-    name: str = "LMM",
-    log_level: int = logging.INFO,
-    log_file: Optional[str] = None,
+# Default log format
+DEFAULT_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# More detailed format for debugging
+DEBUG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+
+# Log levels mapping
+LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL
+}
+
+# Store configured loggers to avoid duplicate setup
+_configured_loggers: Dict[str, logging.Logger] = {}
+
+
+def get_logger(
+    name: str,
+    log_level: str = "INFO",
+    log_file: Optional[Union[str, Path]] = None,
+    max_file_size: int = 10 * 1024 * 1024,  # 10 MB
+    backup_count: int = 5,
     console_output: bool = True,
-    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    detailed_format: bool = False
 ) -> logging.Logger:
     """
-    Set up a logger with file and/or console output
+    Get a configured logger.
     
     Parameters:
-    name: Logger name
-    log_level: Logging level (e.g., logging.INFO)
-    log_file: Path to log file (if None, will use default path)
+    name: Logger name (typically module name)
+    log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    log_file: Path to log file (if None, no file logging)
+    max_file_size: Maximum log file size in bytes before rotation
+    backup_count: Number of backup log files to keep
     console_output: Whether to output logs to console
-    log_format: Format string for log messages
+    detailed_format: Whether to use detailed format with file and line info
     
     Returns:
     Configured logger
     """
+    # Check if logger already configured
+    if name in _configured_loggers:
+        return _configured_loggers[name]
+    
     # Create logger
     logger = logging.getLogger(name)
-    logger.setLevel(log_level)
+    
+    # Set log level
+    level = LOG_LEVELS.get(log_level.upper(), logging.INFO)
+    logger.setLevel(level)
+    
+    # Avoid duplicate handlers if logger already exists
+    if logger.handlers:
+        return logger
     
     # Create formatter
+    log_format = DEBUG_FORMAT if detailed_format else DEFAULT_FORMAT
     formatter = logging.Formatter(log_format)
     
-    # Create handlers
-    handlers = []
-    
-    # File handler
-    if log_file is None:
-        # Create logs directory if it doesn't exist
-        logs_dir = Path("logs")
-        logs_dir.mkdir(exist_ok=True)
-        
-        # Default log file name with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = logs_dir / f"{name.lower()}_{timestamp}.log"
-    
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(formatter)
-    handlers.append(file_handler)
-    
-    # Console handler
+    # Add console handler if requested
     if console_output:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(log_level)
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
-        handlers.append(console_handler)
+        logger.addHandler(console_handler)
     
-    # Add handlers to logger
-    for handler in handlers:
-        logger.addHandler(handler)
+    # Add file handler if log file specified
+    if log_file:
+        # Create directory if it doesn't exist
+        log_path = Path(log_file)
+        os.makedirs(log_path.parent, exist_ok=True)
+        
+        # Create rotating file handler
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=max_file_size,
+            backupCount=backup_count
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    # Cache the configured logger
+    _configured_loggers[name] = logger
     
     return logger
 
-def log_state_change(
-    logger: logging.Logger,
-    component: str,
-    old_state: Dict[str, Any],
-    new_state: Dict[str, Any],
-    message: Optional[str] = None
-) -> None:
-    """
-    Log a state change with detailed information
-    
-    Parameters:
-    logger: Logger to use
-    component: Component name
-    old_state: Previous state
-    new_state: New state
-    message: Optional message to include
-    """
-    # Find changed keys
-    changed_keys = []
-    for key in new_state:
-        if key in old_state:
-            if new_state[key] != old_state[key]:
-                changed_keys.append(key)
-        else:
-            changed_keys.append(key)
-    
-    # Create log message
-    log_msg = f"State change in {component}: "
-    if message:
-        log_msg += message + " "
-    
-    # Add changed values
-    changes = []
-    for key in changed_keys:
-        old_val = old_state.get(key, "N/A")
-        new_val = new_state.get(key, "N/A")
-        changes.append(f"{key}: {old_val} -> {new_val}")
-    
-    log_msg += ", ".join(changes)
-    
-    # Log the message
-    logger.info(log_msg)
 
-def log_development_milestone(
-    logger: logging.Logger,
-    module: str,
-    milestone: str,
-    details: Dict[str, Any]
-) -> None:
-    """
-    Log a developmental milestone
-    
-    Parameters:
-    logger: Logger to use
-    module: Module name
-    milestone: Milestone description
-    details: Additional details about the milestone
-    """
-    logger.info(f"MILESTONE: {module} - {milestone}")
-    for key, value in details.items():
-        logger.info(f"  {key}: {value}")
-
-def get_log_level(level_name: str) -> int:
-    """
-    Convert a log level name to its numeric value
-    
-    Parameters:
-    level_name: Log level name (e.g., "INFO", "DEBUG")
-    
-    Returns:
-    Numeric log level
-    """
-    levels = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-        "CRITICAL": logging.CRITICAL
-    }
-    
-    return levels.get(level_name.upper(), logging.INFO)
-
-def setup_module_logging(
-    module_name: str,
-    log_level: int = logging.INFO,
-    log_to_file: bool = True,
-    log_to_console: bool = True,
-    log_dir: str = "logs"
+def setup_system_logging(
+    log_dir: Union[str, Path] = "logs",
+    log_level: str = "INFO",
+    detailed_format: bool = False
 ) -> logging.Logger:
     """
-    Set up logging for a specific module
+    Set up system-wide logging for the LMM project.
+    
+    Parameters:
+    log_dir: Directory to store log files
+    log_level: Logging level for the system logger
+    detailed_format: Whether to use detailed format
+    
+    Returns:
+    System logger
+    """
+    # Create logs directory if it doesn't exist
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Create log file name with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = Path(log_dir) / f"lmm_system_{timestamp}.log"
+    
+    # Get system logger
+    logger = get_logger(
+        name="lmm.system",
+        log_level=log_level,
+        log_file=log_file,
+        detailed_format=detailed_format
+    )
+    
+    # Log system startup
+    logger.info(f"LMM System logging initialized (level: {log_level})")
+    
+    return logger
+
+
+def get_module_logger(module_name: str, log_level: Optional[str] = None) -> logging.Logger:
+    """
+    Get a logger for a specific module.
     
     Parameters:
     module_name: Name of the module
-    log_level: Logging level
-    log_to_file: Whether to log to a file
-    log_to_console: Whether to log to console
-    log_dir: Directory for log files
+    log_level: Optional override for log level
     
     Returns:
-    Configured logger
+    Module logger
     """
-    # Create logger with module name
-    logger = logging.getLogger(module_name)
-    logger.setLevel(log_level)
+    # Default to INFO if not specified
+    if log_level is None:
+        # Try to get from environment, default to INFO
+        log_level = os.environ.get("LOG_LEVEL", "INFO")
     
-    # Remove existing handlers to avoid duplicates
-    if logger.handlers:
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-    
-    # Formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Add file handler if requested
-    if log_to_file:
-        log_path = Path(log_dir)
-        log_path.mkdir(exist_ok=True, parents=True)
-        
-        file_handler = logging.FileHandler(
-            log_path / f"{module_name.lower().replace('.', '_')}.log"
-        )
-        file_handler.setFormatter(formatter)
-        file_handler.setLevel(log_level)
-        logger.addHandler(file_handler)
-    
-    # Add console handler if requested
-    if log_to_console:
-        console = logging.StreamHandler()
-        console.setFormatter(formatter)
-        console.setLevel(log_level)
-        logger.addHandler(console)
+    # Create logger with standard console output
+    logger = get_logger(f"lmm.{module_name}", log_level=log_level)
     
     return logger

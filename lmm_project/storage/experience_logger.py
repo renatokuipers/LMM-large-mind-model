@@ -1,485 +1,448 @@
 """
-Experience Logger
+Experience logger implementation for the LMM project.
 
-This module provides functionality for logging and retrieving experiences
-in the LMM system. Experiences include interactions with the Mother,
-sensory inputs, emotional states, and developmental milestones.
-
-Experiences are stored with rich metadata to support retrieval by various
-dimensions including time, emotional valence, developmental stage, etc.
+This module provides mechanisms for logging and retrieving experiences
+with embeddings for semantic search, temporal sequencing, and categorization.
 """
-
 import os
 import json
-import sqlite3
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Union, Tuple
+import uuid
+import time
+from datetime import datetime
 from pathlib import Path
-import numpy as np
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
-# Set up logging
-logger = logging.getLogger(__name__)
+import numpy as np
+from pydantic import BaseModel, Field, root_validator
+
+from lmm_project.storage.vector_db import VectorDB
+from lmm_project.utils.llm_client import LLMClient
+from lmm_project.utils.logging_utils import get_module_logger
+
+logger = get_module_logger("storage.experience_logger")
+
+
+class ExperienceMetadata(BaseModel):
+    """Metadata for an experience entry."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    experience_type: str
+    source: str
+    emotional_valence: str = Field(default="neutral")
+    emotional_intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    importance_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    tags: List[str] = Field(default_factory=list)
+
 
 class ExperienceLogger:
     """
-    Records and retrieves experiences for the LMM system.
+    Logger for recording and retrieving experiences.
     
-    Experiences are stored in both a SQLite database (for efficient querying)
-    and a file-based system (for complex objects and embeddings).
+    Maintains a database of experiences with embeddings for semantic search,
+    emotional tagging, and temporally-ordered retrieval for the development of
+    episodic memory and self-concept.
     """
     
-    def __init__(self, storage_dir: str = "storage"):
+    def __init__(
+        self,
+        vector_db: Optional[VectorDB] = None,
+        experience_collection: str = "experiences",
+        storage_dir: str = "storage/experiences",
+        embedding_dimension: int = 768
+    ):
         """
-        Initialize the experience logger
+        Initialize the experience logger.
         
-        Args:
-            storage_dir: Base directory for storing experiences
+        Parameters:
+        vector_db: Optional existing vector database
+        experience_collection: Collection name for experiences
+        storage_dir: Directory to store experience data
+        embedding_dimension: Dimension of experience embeddings
         """
-        # Ensure storage directory exists
-        self.base_dir = Path(storage_dir)
-        self.experiences_dir = self.base_dir / "experiences"
-        self.experiences_dir.mkdir(parents=True, exist_ok=True)
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
         
-        # Connect to database
-        self.db_path = self.base_dir / "experiences.db"
-        self.conn = self._initialize_database()
+        # Initialize or use provided vector database
+        if vector_db is None:
+            self.vector_db = VectorDB({
+                "dimension": embedding_dimension,
+                "storage_dir": str(self.storage_dir / "vectors")
+            })
+        else:
+            self.vector_db = vector_db
+            
+        # Create experience collection if it doesn't exist
+        self.experience_collection = experience_collection
+        self.vector_db.create_collection(experience_collection)
         
-    def _initialize_database(self) -> sqlite3.Connection:
-        """Initialize the experiences database"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
+        # Experience timeline (for sequential access)
+        self.timeline_path = self.storage_dir / "timeline.json"
+        self.timeline: List[Dict[str, Any]] = []
+        self._load_timeline()
         
-        # Create experiences table
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS experiences (
-            id TEXT PRIMARY KEY,
-            timestamp TEXT,
-            type TEXT,
-            source TEXT,
-            developmental_stage TEXT,
-            age REAL,
-            emotional_valence TEXT,
-            emotional_intensity REAL,
-            importance_score REAL,
-            tags TEXT,
-            metadata TEXT,
-            file_path TEXT
-        )
-        ''')
+        # Initialize LLM client for generating embeddings
+        self.llm_client = None  # Lazy initialization
         
-        # Create index on timestamp for efficient retrieval
-        cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_timestamp ON experiences(timestamp)
-        ''')
-        
-        # Create index on type for efficient filtering
-        cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_type ON experiences(type)
-        ''')
-        
-        # Create index on developmental_stage
-        cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_stage ON experiences(developmental_stage)
-        ''')
-        
-        conn.commit()
-        return conn
+        logger.info(f"Initialized ExperienceLogger with collection '{experience_collection}'")
+    
+    def _load_timeline(self) -> None:
+        """Load experience timeline from disk."""
+        if self.timeline_path.exists():
+            try:
+                with open(self.timeline_path, 'r') as f:
+                    self.timeline = json.load(f)
+                logger.info(f"Loaded {len(self.timeline)} experiences from timeline")
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to load experience timeline: {e}")
+                self.timeline = []
+    
+    def _save_timeline(self) -> None:
+        """Save experience timeline to disk."""
+        try:
+            with open(self.timeline_path, 'w') as f:
+                json.dump(self.timeline, f)
+            logger.debug(f"Saved {len(self.timeline)} experiences to timeline")
+        except IOError as e:
+            logger.error(f"Failed to save experience timeline: {e}")
+    
+    def _get_llm_client(self) -> LLMClient:
+        """Get or initialize LLM client."""
+        if self.llm_client is None:
+            # Use the default URL from environment variables
+            self.llm_client = LLMClient()
+        return self.llm_client
     
     def log_experience(
         self,
-        experience_data: Dict[str, Any],
+        content: Dict[str, Any],
         experience_type: str,
         source: str,
+        embedding_text: Optional[str] = None,
         emotional_valence: str = "neutral",
         emotional_intensity: float = 0.5,
         importance_score: float = 0.5,
-        tags: List[str] = None,
-        metadata: Dict[str, Any] = None,
+        tags: Optional[List[str]] = None,
         embedding: Optional[np.ndarray] = None
     ) -> str:
         """
-        Log a new experience
+        Log an experience to the database.
         
-        Args:
-            experience_data: The actual experience data
-            experience_type: Type of experience (e.g., 'interaction', 'perception', 'milestone')
-            source: Source of the experience (e.g., 'mother', 'self', 'environment')
-            emotional_valence: Emotional tone of the experience
-            emotional_intensity: Intensity of the emotion (0.0-1.0)
-            importance_score: Subjective importance (0.0-1.0)
-            tags: List of tags for categorization
-            metadata: Additional metadata about the experience
-            embedding: Vector embedding of the experience for similarity retrieval
-            
-        Returns:
-            ID of the logged experience
-        """
-        try:
-            # Generate a unique ID based on timestamp
-            timestamp = datetime.now().isoformat()
-            experience_id = f"exp_{timestamp.replace(':', '-').replace('.', '-')}"
-            
-            # Prepare tags
-            if tags is None:
-                tags = []
-            tags_str = json.dumps(tags)
-            
-            # Prepare metadata
-            if metadata is None:
-                metadata = {}
-            metadata_str = json.dumps(metadata)
-            
-            # Create file path for the experience data
-            file_path = self.experiences_dir / f"{experience_id}.json"
-            
-            # Save the complete experience to file
-            with open(file_path, 'w') as f:
-                # Combine all data into a single structure
-                full_experience = {
-                    "id": experience_id,
-                    "timestamp": timestamp,
-                    "type": experience_type,
-                    "source": source,
-                    "emotional_valence": emotional_valence,
-                    "emotional_intensity": emotional_intensity,
-                    "importance_score": importance_score,
-                    "tags": tags,
-                    "metadata": metadata,
-                    "data": experience_data
-                }
-                
-                # Add embedding if provided
-                if embedding is not None:
-                    # Convert numpy array to list for JSON serialization
-                    full_experience["embedding"] = embedding.tolist()
-                    
-                json.dump(full_experience, f, indent=2)
-            
-            # Store summary in the database for efficient querying
-            cursor = self.conn.cursor()
-            cursor.execute('''
-            INSERT INTO experiences (
-                id, timestamp, type, source, developmental_stage, age,
-                emotional_valence, emotional_intensity, importance_score,
-                tags, metadata, file_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                experience_id,
-                timestamp,
-                experience_type,
-                source,
-                metadata.get("developmental_stage", "unknown"),
-                metadata.get("age", 0.0),
-                emotional_valence,
-                emotional_intensity,
-                importance_score,
-                tags_str,
-                metadata_str,
-                str(file_path)
-            ))
-            
-            self.conn.commit()
-            logger.info(f"Logged experience {experience_id} of type {experience_type}")
-            
-            return experience_id
-            
-        except Exception as e:
-            logger.error(f"Error logging experience: {e}")
-            self.conn.rollback()
-            return ""
-    
-    def get_experience(self, experience_id: str) -> Dict[str, Any]:
-        """
-        Retrieve a specific experience by ID
+        Parameters:
+        content: Experience content
+        experience_type: Type of experience
+        source: Source of the experience
+        embedding_text: Optional text to use for generating embedding
+        emotional_valence: Emotional valence (positive, negative, neutral)
+        emotional_intensity: Intensity of emotion (0.0-1.0)
+        importance_score: Importance of the experience (0.0-1.0)
+        tags: Optional list of tags
+        embedding: Optional pre-computed embedding vector
         
-        Args:
-            experience_id: ID of the experience to retrieve
-            
         Returns:
-            Dictionary containing the experience data
+        ID of the logged experience
         """
-        try:
-            # Get file path from database
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT file_path FROM experiences WHERE id = ?", (experience_id,))
-            result = cursor.fetchone()
+        # Create metadata
+        metadata = ExperienceMetadata(
+            experience_type=experience_type,
+            source=source,
+            emotional_valence=emotional_valence,
+            emotional_intensity=emotional_intensity,
+            importance_score=importance_score,
+            tags=tags or []
+        )
+        
+        # Generate embedding if needed
+        if embedding is None and embedding_text is not None:
+            try:
+                client = self._get_llm_client()
+                embedding = client.get_embedding(embedding_text)
+                # Convert to numpy array if needed
+                if not isinstance(embedding, np.ndarray):
+                    embedding = np.array(embedding)
+            except Exception as e:
+                logger.error(f"Failed to generate embedding: {e}")
+                # Use zero vector as fallback
+                embedding = np.zeros(self.vector_db.config.dimension)
+        
+        # Use zero vector if still no embedding
+        if embedding is None:
+            embedding = np.zeros(self.vector_db.config.dimension)
             
-            if not result:
-                logger.warning(f"Experience {experience_id} not found")
-                return {}
-                
-            file_path = result[0]
-            
-            # Load experience from file
-            with open(file_path, 'r') as f:
-                experience = json.load(f)
-                
-            return experience
-            
-        except Exception as e:
-            logger.error(f"Error retrieving experience {experience_id}: {e}")
-            return {}
+        # Add experience metadata to content
+        full_metadata = {
+            "id": metadata.id,
+            "timestamp": metadata.timestamp,
+            "experience_type": metadata.experience_type,
+            "source": metadata.source,
+            "emotional_valence": metadata.emotional_valence,
+            "emotional_intensity": metadata.emotional_intensity,
+            "importance_score": metadata.importance_score,
+            "tags": metadata.tags,
+            "content": content
+        }
+        
+        # Add to vector database
+        ids = self.vector_db.add_vectors(
+            vectors=[embedding],
+            metadata_list=[full_metadata],
+            collection=self.experience_collection
+        )
+        
+        # Add to timeline
+        timeline_entry = {
+            "id": metadata.id,
+            "vector_id": ids[0] if ids else None,
+            "timestamp": metadata.timestamp,
+            "experience_type": metadata.experience_type,
+            "source": metadata.source,
+            "importance_score": metadata.importance_score,
+            "tags": metadata.tags
+        }
+        self.timeline.append(timeline_entry)
+        self._save_timeline()
+        
+        logger.debug(f"Logged experience {metadata.id} of type {experience_type}")
+        return metadata.id
     
-    def query_experiences(
+    def search_similar_experiences(
         self,
-        experience_type: Optional[str] = None,
-        source: Optional[str] = None,
-        developmental_stage: Optional[str] = None,
-        time_range: Optional[Tuple[datetime, datetime]] = None,
-        emotional_valence: Optional[str] = None,
-        min_importance: float = 0.0,
-        tags: Optional[List[str]] = None,
-        limit: int = 100,
-        order_by: str = "timestamp",
-        order_direction: str = "DESC"
+        query_text: str,
+        k: int = 10,
+        filter_by_type: Optional[str] = None,
+        filter_by_source: Optional[str] = None,
+        min_importance: float = 0.0
     ) -> List[Dict[str, Any]]:
         """
-        Query experiences based on various criteria
+        Search for experiences by semantic similarity.
         
-        Args:
-            experience_type: Filter by experience type
-            source: Filter by source
-            developmental_stage: Filter by developmental stage
-            time_range: Filter by time range (start, end)
-            emotional_valence: Filter by emotional valence
-            min_importance: Minimum importance score
-            tags: Filter by tags (any match)
-            limit: Maximum number of results
-            order_by: Field to sort by
-            order_direction: Sort direction (ASC or DESC)
-            
+        Parameters:
+        query_text: Text to search for
+        k: Number of results to return
+        filter_by_type: Optional experience type filter
+        filter_by_source: Optional source filter
+        min_importance: Minimum importance score
+        
         Returns:
-            List of matching experiences
+        List of matching experiences
         """
+        # Create embedding for query
         try:
-            query_parts = ["SELECT * FROM experiences WHERE 1=1"]
-            params = []
+            client = self._get_llm_client()
+            query_embedding = client.get_embedding(query_text)
+        except Exception as e:
+            logger.error(f"Failed to generate query embedding: {e}")
+            return []
             
-            # Add filters
-            if experience_type:
-                query_parts.append("AND type = ?")
-                params.append(experience_type)
-                
-            if source:
-                query_parts.append("AND source = ?")
-                params.append(source)
-                
-            if developmental_stage:
-                query_parts.append("AND developmental_stage = ?")
-                params.append(developmental_stage)
-                
-            if time_range:
-                start_time, end_time = time_range
-                query_parts.append("AND timestamp BETWEEN ? AND ?")
-                params.append(start_time.isoformat())
-                params.append(end_time.isoformat())
-                
-            if emotional_valence:
-                query_parts.append("AND emotional_valence = ?")
-                params.append(emotional_valence)
-                
+        # Create metadata filter
+        metadata_filter = {}
+        if filter_by_type:
+            metadata_filter["experience_type"] = filter_by_type
+        if filter_by_source:
+            metadata_filter["source"] = filter_by_source
+        if min_importance > 0.0:
+            # This will be handled in post-processing as vector_db doesn't support numeric comparisons
+            pass
+            
+        # Search vector database
+        results = self.vector_db.search(
+            query_vector=query_embedding,
+            k=k * 2,  # Get more results for post-filtering
+            collection=self.experience_collection,
+            metadata_filter=metadata_filter
+        )
+        
+        # Post-process results for importance filter
+        filtered_results = []
+        for result in results:
+            # Filter by importance if needed
             if min_importance > 0.0:
-                query_parts.append("AND importance_score >= ?")
-                params.append(min_importance)
-                
-            if tags:
-                # For each tag, check if it exists in the JSON array
-                for tag in tags:
-                    query_parts.append("AND tags LIKE ?")
-                    params.append(f"%{tag}%")  # Simple but imperfect approach
+                importance = result["metadata"].get("importance_score", 0.0)
+                if importance < min_importance:
+                    continue
+                    
+            # Format result
+            filtered_results.append({
+                "id": result["metadata"].get("id"),
+                "timestamp": result["metadata"].get("timestamp"),
+                "experience_type": result["metadata"].get("experience_type"),
+                "source": result["metadata"].get("source"),
+                "emotional_valence": result["metadata"].get("emotional_valence"),
+                "emotional_intensity": result["metadata"].get("emotional_intensity"),
+                "importance_score": result["metadata"].get("importance_score"),
+                "tags": result["metadata"].get("tags", []),
+                "content": result["metadata"].get("content", {}),
+                "similarity": result["similarity"]
+            })
             
-            # Add order by clause
-            query_parts.append(f"ORDER BY {order_by} {order_direction}")
-            
-            # Add limit
-            query_parts.append("LIMIT ?")
-            params.append(limit)
-            
-            # Execute query
-            cursor = self.conn.cursor()
-            cursor.execute(" ".join(query_parts), tuple(params))
-            results = cursor.fetchall()
-            
-            # Get column names for dictionary conversion
-            column_names = [desc[0] for desc in cursor.description]
-            
-            # Convert to list of dictionaries
-            experiences = []
-            for row in results:
-                # Create dictionary from row and column names
-                exp_dict = dict(zip(column_names, row))
-                
-                # Load full experience data from file
-                try:
-                    with open(exp_dict["file_path"], 'r') as f:
-                        full_experience = json.load(f)
-                        experiences.append(full_experience)
-                except FileNotFoundError:
-                    # If file is missing, just return the database record
-                    experiences.append(exp_dict)
-            
-            return experiences
-            
-        except Exception as e:
-            logger.error(f"Error querying experiences: {e}")
-            return []
+        # Return limited results
+        return filtered_results[:k]
     
-    def update_experience_metadata(
-        self,
-        experience_id: str,
-        metadata_updates: Dict[str, Any]
-    ) -> bool:
+    def get_experience_by_id(self, experience_id: str) -> Optional[Dict[str, Any]]:
         """
-        Update metadata for an experience
+        Get an experience by its ID.
         
-        Args:
-            experience_id: ID of the experience to update
-            metadata_updates: New metadata values
-            
+        Parameters:
+        experience_id: ID of the experience
+        
         Returns:
-            True if successful, False otherwise
+        Experience data or None if not found
         """
-        try:
-            # Get current experience
-            experience = self.get_experience(experience_id)
-            if not experience:
-                return False
+        # Find the vector ID from timeline
+        vector_id = None
+        for entry in self.timeline:
+            if entry["id"] == experience_id:
+                vector_id = entry.get("vector_id")
+                break
                 
-            # Update metadata
-            if "metadata" not in experience:
-                experience["metadata"] = {}
-                
-            experience["metadata"].update(metadata_updates)
+        if vector_id is None:
+            logger.warning(f"Experience {experience_id} not found in timeline")
+            return None
             
-            # Save updated experience back to file
-            with open(experience.get("file_path", ""), 'w') as f:
-                json.dump(experience, f, indent=2)
-                
-            # Update database record
-            cursor = self.conn.cursor()
-            cursor.execute(
-                "UPDATE experiences SET metadata = ? WHERE id = ?",
-                (json.dumps(experience["metadata"]), experience_id)
-            )
-            self.conn.commit()
+        # Get metadata from vector database
+        metadata = self.vector_db.vector_store.get_metadata(vector_id)
+        if not metadata:
+            logger.warning(f"Experience {experience_id} metadata not found in vector database")
+            return None
             
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating experience metadata: {e}")
-            self.conn.rollback()
-            return False
+        # Format result
+        result = {
+            "id": metadata.get("id"),
+            "timestamp": metadata.get("timestamp"),
+            "experience_type": metadata.get("experience_type"),
+            "source": metadata.get("source"),
+            "emotional_valence": metadata.get("emotional_valence"),
+            "emotional_intensity": metadata.get("emotional_intensity"),
+            "importance_score": metadata.get("importance_score"),
+            "tags": metadata.get("tags", []),
+            "content": metadata.get("content", {})
+        }
+        
+        return result
     
-    def get_experience_timeline(
+    def get_recent_experiences(
         self,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-        limit: int = 100,
-        group_by_day: bool = False
+        limit: int = 10,
+        filter_by_type: Optional[str] = None,
+        filter_by_source: Optional[str] = None,
+        min_importance: float = 0.0
     ) -> List[Dict[str, Any]]:
         """
-        Get a timeline of experiences
+        Get the most recent experiences.
         
-        Args:
-            start_time: Start time for the timeline
-            end_time: End time for the timeline
-            limit: Maximum number of experiences to retrieve
-            group_by_day: Group experiences by day
-            
+        Parameters:
+        limit: Maximum number of experiences to return
+        filter_by_type: Optional experience type filter
+        filter_by_source: Optional source filter
+        min_importance: Minimum importance score
+        
         Returns:
-            List of experiences or grouped experiences
+        List of recent experiences
         """
-        try:
-            # Set default time range if not provided
-            if not start_time:
-                start_time = datetime.now() - timedelta(days=30)
-            if not end_time:
-                end_time = datetime.now()
+        # Copy and reverse timeline (newest first)
+        timeline = list(reversed(self.timeline))
+        
+        # Filter timeline
+        filtered_timeline = []
+        for entry in timeline:
+            if filter_by_type and entry["experience_type"] != filter_by_type:
+                continue
                 
-            # Base query
-            query = """
-            SELECT * FROM experiences 
-            WHERE timestamp BETWEEN ? AND ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """
-            
-            # Execute query
-            cursor = self.conn.cursor()
-            cursor.execute(query, (start_time.isoformat(), end_time.isoformat(), limit))
-            results = cursor.fetchall()
-            
-            # Get column names
-            column_names = [desc[0] for desc in cursor.description]
-            
-            # Convert to list of dictionaries
-            experiences = [dict(zip(column_names, row)) for row in results]
-            
-            # Group by day if requested
-            if group_by_day:
-                grouped = {}
-                for exp in experiences:
-                    timestamp = datetime.fromisoformat(exp["timestamp"])
-                    day_key = timestamp.date().isoformat()
-                    
-                    if day_key not in grouped:
-                        grouped[day_key] = []
-                        
-                    grouped[day_key].append(exp)
-                    
-                # Convert to list sorted by day
-                return [{"date": day, "experiences": exps} for day, exps in sorted(grouped.items(), reverse=True)]
+            if filter_by_source and entry["source"] != filter_by_source:
+                continue
                 
-            return experiences
-            
-        except Exception as e:
-            logger.error(f"Error retrieving experience timeline: {e}")
-            return []
+            if min_importance > 0.0 and entry["importance_score"] < min_importance:
+                continue
+                
+            # Fetch full experience
+            experience = self.get_experience_by_id(entry["id"])
+            if experience:
+                filtered_timeline.append(experience)
+                
+            # Check limit
+            if len(filtered_timeline) >= limit:
+                break
+                
+        return filtered_timeline
     
     def delete_experience(self, experience_id: str) -> bool:
         """
-        Delete an experience
+        Delete an experience.
         
-        Args:
-            experience_id: ID of the experience to delete
-            
+        Parameters:
+        experience_id: ID of the experience to delete
+        
         Returns:
-            True if successful, False otherwise
+        True if successfully deleted
         """
-        try:
-            # Get file path
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT file_path FROM experiences WHERE id = ?", (experience_id,))
-            result = cursor.fetchone()
-            
-            if not result:
-                logger.warning(f"Experience {experience_id} not found for deletion")
-                return False
+        # Find the vector ID from timeline
+        vector_id = None
+        timeline_index = None
+        for i, entry in enumerate(self.timeline):
+            if entry["id"] == experience_id:
+                vector_id = entry.get("vector_id")
+                timeline_index = i
+                break
                 
-            file_path = result[0]
+        if vector_id is None:
+            logger.warning(f"Experience {experience_id} not found in timeline")
+            return False
             
-            # Delete from database
-            cursor.execute("DELETE FROM experiences WHERE id = ?", (experience_id,))
-            self.conn.commit()
+        # Delete from vector database
+        if vector_id is not None:
+            self.vector_db.delete_vectors([vector_id], collection=self.experience_collection)
             
-            # Delete file
-            if os.path.exists(file_path):
-                os.remove(file_path)
+        # Remove from timeline
+        if timeline_index is not None:
+            self.timeline.pop(timeline_index)
+            self._save_timeline()
+            
+        logger.debug(f"Deleted experience {experience_id}")
+        return True
+    
+    def add_tag(self, experience_id: str, tag: str) -> bool:
+        """
+        Add a tag to an experience.
+        
+        Parameters:
+        experience_id: ID of the experience
+        tag: Tag to add
+        
+        Returns:
+        True if successfully added
+        """
+        # Find the vector ID from timeline
+        vector_id = None
+        for entry in self.timeline:
+            if entry["id"] == experience_id:
+                vector_id = entry.get("vector_id")
                 
-            logger.info(f"Deleted experience {experience_id}")
+                # Add tag to timeline entry
+                if tag not in entry["tags"]:
+                    entry["tags"].append(tag)
+                    
+                break
+                
+        if vector_id is None:
+            logger.warning(f"Experience {experience_id} not found in timeline")
+            return False
+            
+        # Update metadata in vector database
+        metadata = self.vector_db.vector_store.get_metadata(vector_id)
+        if metadata:
+            if "tags" not in metadata:
+                metadata["tags"] = []
+                
+            if tag not in metadata["tags"]:
+                metadata["tags"].append(tag)
+                self.vector_db.vector_store.update_metadata(vector_id, metadata)
+                
+            self._save_timeline()
             return True
             
-        except Exception as e:
-            logger.error(f"Error deleting experience {experience_id}: {e}")
-            self.conn.rollback()
-            return False
+        return False
     
-    def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-    
-    def __del__(self):
-        """Ensure connection is closed on deletion"""
-        self.close() 
+    def save(self) -> None:
+        """Save all data to disk."""
+        self.vector_db.save()
+        self._save_timeline()
+        logger.info("Saved experience logger data to disk")

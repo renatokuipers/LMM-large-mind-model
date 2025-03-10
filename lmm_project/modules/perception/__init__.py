@@ -1,487 +1,258 @@
 """
 Perception Module
 
-This module integrates various components for processing and understanding
-sensory input. It serves as the primary interface between the Mind and
-external stimuli, converting text input into meaningful patterns and
-features for higher cognitive processing.
+This module handles sensory input processing and pattern recognition,
+serving as the input gateway for the LMM system. It receives sensory
+data (primarily from the Mother interface), processes it to extract
+features, and identifies patterns in the input.
 
-For this LMM implementation, perception is text-based, as the system does
-not have physical sensory organs like eyes or ears.
+Components:
+    - SensoryInputProcessor: Processes raw sensory input and extracts features
+    - PatternRecognizer: Recognizes patterns in processed inputs
+    - PerceptionNetwork: Neural networks for perception processing
+
+The perception module develops in sophistication with age, gradually
+recognizing more complex patterns and features as the mind matures.
 """
 
-from typing import Optional, Dict, Any, List
-import numpy as np
-from dataclasses import dataclass, field
-import logging
-import uuid
-import torch
-from datetime import datetime
+from typing import Optional, Dict, List, Any, Set
 
 from lmm_project.core.event_bus import EventBus
-from lmm_project.modules.base_module import BaseModule
-from lmm_project.core.message import Message
-from lmm_project.modules.perception.sensory_input import SensoryInputProcessor
-from lmm_project.modules.perception.pattern_recognition import PatternRecognizer
-from lmm_project.modules.perception.models import PerceptionResult, Pattern, SensoryInput, PerceptionParameters
+from lmm_project.utils.logging_utils import get_module_logger
 
-logger = logging.getLogger(__name__)
+from .models import (
+    SensoryModality,
+    SalienceLevel,
+    SensoryInput,
+    ProcessedInput,
+    SensoryFeature,
+    PatternType,
+    RecognizedPattern,
+    PerceptionEvent,
+    PerceptionConfig,
+    PerceptionState
+)
 
-def get_module(
-    module_id: str = "perception",
-    event_bus: Optional[EventBus] = None,
-    development_level: float = 0.0
-) -> "PerceptionSystem":
+from .sensory_input import SensoryInputProcessor
+from .pattern_recognition import PatternRecognizer
+from .neural_net import PerceptionNetwork
+
+# Initialize logger
+logger = get_module_logger("modules.perception")
+
+# Module instances
+_sensory_processor = None
+_pattern_recognizer = None
+_perception_network = None
+_current_config = None
+_current_age = 0.0
+_initialized = False
+
+def initialize(
+    event_bus: EventBus,
+    config: Optional[PerceptionConfig] = None,
+    developmental_age: float = 0.0
+) -> None:
     """
-    Factory function to create and return a perception module
-    
-    This function initializes and returns a complete perception system,
-    with sensory input processing and pattern recognition capabilities.
+    Initialize the perception module.
     
     Args:
-        module_id: Unique identifier for the module
-        event_bus: Event bus for communication
-        development_level: Initial developmental level for the system
+        event_bus: The event bus for communication
+        config: Configuration for the perception module
+        developmental_age: Current developmental age of the mind
+    """
+    global _sensory_processor, _pattern_recognizer, _perception_network
+    global _current_config, _current_age, _initialized
+    
+    # Store configuration and age
+    _current_config = config or PerceptionConfig()
+    _current_age = developmental_age
+    
+    # Create components
+    _sensory_processor = SensoryInputProcessor(
+        event_bus=event_bus,
+        config=_current_config,
+        developmental_age=_current_age
+    )
+    
+    _pattern_recognizer = PatternRecognizer(
+        event_bus=event_bus,
+        config=_current_config,
+        developmental_age=_current_age
+    )
+    
+    _perception_network = PerceptionNetwork(
+        event_bus=event_bus,
+        config=_current_config,
+        developmental_age=_current_age
+    )
+    
+    _initialized = True
+    
+    logger.info(f"Perception module initialized with age {developmental_age}")
+
+def process_input(sensory_input: SensoryInput) -> Optional[ProcessedInput]:
+    """
+    Process a sensory input.
+    
+    Args:
+        sensory_input: The sensory input to process
         
     Returns:
-        Initialized PerceptionSystem
+        Processed input with extracted features, or None if below threshold
     """
-    return PerceptionSystem(
-        module_id=module_id,
-        event_bus=event_bus,
-        development_level=development_level
+    _ensure_initialized()
+    return _sensory_processor.process_input(sensory_input)
+
+def recognize_patterns(processed_input: ProcessedInput) -> List[RecognizedPattern]:
+    """
+    Recognize patterns in a processed input.
+    
+    Args:
+        processed_input: The processed input to recognize patterns in
+        
+    Returns:
+        List of recognized patterns
+    """
+    _ensure_initialized()
+    return _pattern_recognizer.recognize_patterns(processed_input)
+
+def create_sensory_input(
+    content: Any,
+    modality: SensoryModality = SensoryModality.TEXT,
+    source: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    salience: float = SalienceLevel.MEDIUM
+) -> SensoryInput:
+    """
+    Create a sensory input object.
+    
+    Args:
+        content: The input content
+        modality: The sensory modality
+        source: Source of the input
+        metadata: Additional metadata
+        salience: Salience level of the input
+        
+    Returns:
+        A SensoryInput object
+    """
+    return SensoryInput(
+        modality=modality,
+        content=content,
+        source=source,
+        metadata=metadata or {},
+        salience=salience
     )
 
-class PerceptionSystem(BaseModule):
+def get_recent_inputs(modality: SensoryModality, count: int = 5) -> List[SensoryInput]:
     """
-    Integrated perception system that processes sensory input and recognizes patterns
+    Get recent inputs for a specific modality.
     
-    The perception system develops progressively from basic sensory processing
-    to sophisticated pattern detection and interpretation capabilities.
+    Args:
+        modality: The sensory modality to get inputs for
+        count: Maximum number of inputs to return
+        
+    Returns:
+        List of recent inputs for the specified modality
     """
-    # Development milestones
-    development_milestones = {
-        0.0: "Basic sensory awareness",
-        0.2: "Simple pattern recognition",
-        0.4: "Feature integration",
-        0.6: "Context-sensitive perception",
-        0.8: "Advanced pattern recognition",
-        1.0: "Sophisticated perception"
-    }
+    _ensure_initialized()
+    return _sensory_processor.get_recent_inputs(modality, count)
+
+def get_recent_patterns(count: int = 10) -> List[RecognizedPattern]:
+    """
+    Get recently recognized patterns.
     
-    def __init__(
-        self,
-        module_id: str,
-        event_bus: Optional[EventBus] = None,
-        development_level: float = 0.0
-    ):
-        """
-        Initialize the perception system
+    Args:
+        count: Maximum number of patterns to return
         
-        Args:
-            module_id: Unique identifier for this module
-            event_bus: Event bus for communication
-            development_level: Initial developmental level
-        """
-        super().__init__(
-            module_id=module_id,
-            module_type="perception_system",
-            event_bus=event_bus,
-            development_level=development_level
+    Returns:
+        List of recently recognized patterns
+    """
+    _ensure_initialized()
+    return _pattern_recognizer.get_recent_patterns(count)
+
+def get_known_patterns(pattern_type: Optional[PatternType] = None) -> Set[str]:
+    """
+    Get known pattern keys of a specific type or all types.
+    
+    Args:
+        pattern_type: The pattern type to get, or None for all types
+        
+    Returns:
+        Set of known pattern keys
+    """
+    _ensure_initialized()
+    return _pattern_recognizer.get_known_patterns(pattern_type)
+
+def get_state() -> PerceptionState:
+    """
+    Get the current state of the perception module.
+    
+    Returns:
+        Current perception state
+    """
+    _ensure_initialized()
+    
+    return PerceptionState(
+        active_modalities=list(_sensory_processor.get_active_inputs().keys()),
+        current_salience_threshold=_current_config.base_salience_threshold,
+        active_inputs=_sensory_processor.get_active_inputs(),
+        recent_patterns=_pattern_recognizer.get_recent_patterns(),
+        buffer_capacity=_current_config.buffer_capacity,
+        developmental_age=_current_age
+    )
+
+def update_age(new_age: float) -> None:
+    """
+    Update the developmental age of the perception module.
+    
+    Args:
+        new_age: The new developmental age
+    """
+    global _current_age
+    _current_age = new_age
+    logger.info(f"Perception module age updated to {new_age}")
+
+def _ensure_initialized() -> None:
+    """
+    Ensure the perception module is initialized.
+    
+    Raises:
+        RuntimeError: If the module is not initialized
+    """
+    if not _initialized:
+        raise RuntimeError(
+            "Perception module not initialized. Call initialize() first."
         )
-        
-        # Create sensory input processor
-        self.sensory_input = SensoryInputProcessor(
-            module_id=f"{module_id}.sensory_input",
-            event_bus=event_bus,
-            development_level=development_level
-        )
-        
-        # Create pattern recognizer
-        self.pattern_recognition = PatternRecognizer(
-            module_id=f"{module_id}.pattern_recognition",
-            event_bus=event_bus,
-            development_level=development_level
-        )
-        
-        # Configuration parameters - adjusted for better pattern detection at all levels
-        self.parameters = PerceptionParameters(
-            token_sensitivity=0.6,        # Reduced to comply with total sensitivity limit
-            ngram_sensitivity=0.5,        # Reduced to comply with total sensitivity limit
-            semantic_sensitivity=0.4,     # Reduced to comply with total sensitivity limit
-            novelty_threshold=0.4,        # Decreased to accept more patterns as novel
-            pattern_activation_threshold=0.1,  # Significantly lowered to detect more patterns
-            developmental_scaling=True
-        )
-        
-        # Apply parameters to submodules
-        self._apply_parameters()
-        
-        # Set developmental levels for submodules
-        self._update_submodule_development()
-        
-        # Subscribe to relevant events
-        if self.event_bus:
-            self.subscribe_to_message("raw_text_input")
-            self.subscribe_to_message("perception_query")
-            
-        # Try to use GPU if available
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Perception system initialized with device: {self.device}")
+
+# Export public API
+__all__ = [
+    # Classes
+    'SensoryInputProcessor',
+    'PatternRecognizer',
+    'PerceptionNetwork',
     
-    def _apply_parameters(self):
-        """Apply configuration parameters to submodules"""
-        # Apply to pattern recognizer
-        if hasattr(self.pattern_recognition, 'token_sensitivity'):
-            self.pattern_recognition.token_sensitivity = self.parameters.token_sensitivity
-        
-        if hasattr(self.pattern_recognition, 'ngram_sensitivity'):
-            self.pattern_recognition.ngram_sensitivity = self.parameters.ngram_sensitivity
-            
-        if hasattr(self.pattern_recognition, 'semantic_sensitivity'):
-            self.pattern_recognition.semantic_sensitivity = self.parameters.semantic_sensitivity
-            
-        if hasattr(self.pattern_recognition, 'novelty_threshold'):
-            self.pattern_recognition.novelty_threshold = self.parameters.novelty_threshold
-            
-        if hasattr(self.pattern_recognition, 'pattern_activation_threshold'):
-            self.pattern_recognition.pattern_activation_threshold = self.parameters.pattern_activation_threshold
+    # Models
+    'SensoryModality',
+    'SalienceLevel',
+    'SensoryInput',
+    'ProcessedInput',
+    'SensoryFeature',
+    'PatternType',
+    'RecognizedPattern',
+    'PerceptionEvent',
+    'PerceptionConfig',
+    'PerceptionState',
     
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process sensory input through the full perception pipeline
-        
-        Args:
-            input_data: Raw sensory input data
-            
-        Returns:
-            Dictionary with processed perception results
-        """
-        # Generate ID for this processing operation
-        process_id = input_data.get("process_id", str(uuid.uuid4()))
-        
-        # Log the incoming input processing
-        text = input_data.get("text", "")
-        if text:
-            logger.info(f"Perception processing: '{text[:50]}...' (process {process_id})")
-            logger.info(f"Input data before sensory processing: {list(input_data.keys())}")
-        
-        # Process through sensory input processor
-        sensory_result = self.sensory_input.process_input(input_data)
-        
-        # Debug logging to see what's happening with the data
-        logger.info(f"Sensory result keys: {list(sensory_result.keys())}")
-        
-        # Ensure the text field is included in the data passed to the pattern recognizer
-        # This fixes the issue where text wasn't being passed correctly
-        if "text" not in sensory_result and text:
-            logger.info(f"Adding missing text field to sensory_result")
-            sensory_result["text"] = text
-        
-        # Double-check text field is set
-        logger.info(f"Text field present before pattern recognition: {'text' in sensory_result}")
-        if "text" in sensory_result:
-            logger.info(f"Text value length: {len(sensory_result['text'])}")
-        
-        # Process through pattern recognizer
-        pattern_result = self.pattern_recognition.process_input(sensory_result)
-        
-        # Integrate results based on developmental level
-        result = self._integrate_results(process_id, sensory_result, pattern_result)
-        
-        # Publish integrated results
-        if self.event_bus:
-            self.publish_message(
-                "perception_result",
-                {"result": result, "process_id": process_id}
-            )
-            
-        return result
-    
-    def _integrate_results(
-        self, 
-        process_id: str,
-        sensory_result: Dict[str, Any],
-        pattern_result: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Integrate results from sensory processing and pattern recognition
-        
-        The integration becomes more sophisticated with development
-        
-        Args:
-            process_id: ID of the processing operation
-            sensory_result: Results from sensory processing
-            pattern_result: Results from pattern recognition
-            
-        Returns:
-            Integrated perception result
-        """
-        # Basic integrated result
-        result = {
-            "process_id": process_id,
-            "timestamp": datetime.now().isoformat(),
-            "development_level": self.development_level,
-            "module_id": self.module_id,
-            "text": sensory_result.get("text", ""),
-            "patterns": pattern_result.get("patterns", [])
-        }
-        
-        # Add more detailed integration based on development level
-        if self.development_level < 0.3:
-            # Basic integration - just sensory features and patterns
-            result["basic_features"] = sensory_result.get("basic_features", {})
-            
-        elif self.development_level < 0.6:
-            # More integrated result with features
-            result["basic_features"] = sensory_result.get("basic_features", {})
-            result["features"] = sensory_result.get("features", {})
-            result["recognized_pattern_types"] = list(set(
-                p.get("pattern_type", "") for p in pattern_result.get("patterns", [])
-            ))
-            
-        else:
-            # Sophisticated integration with context and interpretation
-            result["basic_features"] = sensory_result.get("basic_features", {})
-            result["features"] = sensory_result.get("features", {})
-            result["linguistic_features"] = sensory_result.get("linguistic_features", {})
-            result["recognized_pattern_types"] = list(set(
-                p.get("pattern_type", "") for p in pattern_result.get("patterns", [])
-            ))
-            
-            # Add pattern interpretation
-            result["interpretation"] = self._interpret_patterns(
-                pattern_result.get("patterns", []),
-                sensory_result
-            )
-            
-        return result
-    
-    def _interpret_patterns(
-        self, 
-        patterns: List[Dict[str, Any]],
-        sensory_result: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Interpret the meaning of recognized patterns
-        
-        This is a higher-level function that becomes more sophisticated
-        with development, providing meaningful interpretation of patterns.
-        
-        Args:
-            patterns: List of recognized patterns
-            sensory_result: Results from sensory processing
-            
-        Returns:
-            Dictionary with interpretation of patterns
-        """
-        # Start with basic interpretation
-        interpretation = {
-            "primary_pattern": None,
-            "content_type": "unknown",
-            "complexity": "simple"
-        }
-        
-        if not patterns:
-            return interpretation
-            
-        # Count pattern types
-        pattern_types = {}
-        for pattern in patterns:
-            pattern_type = pattern.get("pattern_type", "unknown")
-            if pattern_type not in pattern_types:
-                pattern_types[pattern_type] = 0
-            pattern_types[pattern_type] += 1
-            
-        # Find the most common pattern type
-        primary_pattern_type = max(pattern_types.items(), key=lambda x: x[1])[0] if pattern_types else "unknown"
-        interpretation["primary_pattern_type"] = primary_pattern_type
-        
-        # Find the highest confidence pattern
-        highest_confidence_pattern = max(patterns, key=lambda p: p.get("confidence", 0))
-        interpretation["primary_pattern"] = highest_confidence_pattern.get("pattern_id")
-        
-        # Determine complexity based on pattern count and types
-        if len(patterns) > 10 and len(pattern_types) > 3:
-            interpretation["complexity"] = "complex"
-        elif len(patterns) > 5:
-            interpretation["complexity"] = "moderate"
-        else:
-            interpretation["complexity"] = "simple"
-            
-        # Determine content type based on patterns
-        if any(p.get("pattern_type") == "syntactic" and p.get("attributes", {}).get("pattern_type") == "question" for p in patterns):
-            interpretation["content_type"] = "question"
-        elif any(p.get("pattern_type") == "syntactic" and p.get("attributes", {}).get("pattern_type") == "exclamation" for p in patterns):
-            interpretation["content_type"] = "exclamation"
-        elif any(p.get("pattern_type") == "contextual" and p.get("attributes", {}).get("pattern_type") == "answer_to_question" for p in patterns):
-            interpretation["content_type"] = "answer"
-        elif any(p.get("pattern_type") == "neural" and p.get("confidence", 0) > 0.8 for p in patterns):
-            interpretation["content_type"] = "familiar"
-        elif any(p.get("novelty", 0) > 0.7 for p in patterns):
-            interpretation["content_type"] = "novel"
-        elif "?" in sensory_result.get("text", ""):
-            interpretation["content_type"] = "question"
-        elif "!" in sensory_result.get("text", ""):
-            interpretation["content_type"] = "exclamation"
-        elif len(sensory_result.get("text", "").split()) < 5:
-            interpretation["content_type"] = "brief_statement"
-        else:
-            interpretation["content_type"] = "statement"
-            
-        # Calculate average novelty
-        novelties = [p.get("novelty", 0.5) for p in patterns]
-        interpretation["novelty_level"] = sum(novelties) / len(novelties) if novelties else 0.5
-        
-        # Add text properties from sensory processing
-        features = sensory_result.get("features", {})
-        if self.development_level >= 0.7 and features:
-            # Extract interesting features
-            interesting_features = {}
-            
-            # Token diversity
-            if "token_diversity" in features:
-                interesting_features["token_diversity"] = features["token_diversity"]
-                
-            # Unusual tokens
-            if "linguistic_features" in sensory_result:
-                ling_features = sensory_result["linguistic_features"]
-                if "unusual_tokens" in ling_features:
-                    interesting_features["unusual_words"] = ling_features["unusual_tokens"]
-                    
-            # Add to interpretation if we found interesting features
-            if interesting_features:
-                interpretation["text_features"] = interesting_features
-                
-        return interpretation
-    
-    def update_development(self, amount: float) -> float:
-        """
-        Update the developmental level of the perception system
-        
-        This updates both the system's overall development level and the
-        development levels of the subsystems (sensory processor and pattern recognizer)
-        
-        Args:
-            amount: Amount to increase development by
-            
-        Returns:
-            New developmental level
-        """
-        # Update base development level
-        new_level = super().update_development(amount)
-        
-        # Update submodule development levels
-        self._update_submodule_development()
-        
-        # Adjust parameters based on development level
-        if self.parameters.developmental_scaling:
-            # Make the system increasingly sensitive as it develops
-            self.parameters.token_sensitivity = min(0.9, 0.6 + new_level * 0.3)
-            self.parameters.ngram_sensitivity = min(0.85, 0.5 + new_level * 0.35)
-            self.parameters.semantic_sensitivity = min(0.8, 0.4 + new_level * 0.4)
-            
-            # Make threshold lower as system develops
-            self.parameters.pattern_activation_threshold = max(0.05, 0.15 - new_level * 0.1)
-            
-            # Apply updated parameters
-            self._apply_parameters()
-        
-        return new_level
-    
-    def _update_submodule_development(self):
-        """Update the developmental level of submodules"""
-        self.sensory_input.update_development(self.development_level - self.sensory_input.development_level)
-        self.pattern_recognition.update_development(self.development_level - self.pattern_recognition.development_level)
-    
-    def _handle_message(self, message: Message):
-        """
-        Handle incoming messages
-        
-        Args:
-            message: The message to handle
-        """
-        if message.message_type == "raw_text_input":
-            # Process the raw text input
-            if message.content:
-                self.process_input(message.content)
-        elif message.message_type == "perception_query":
-            # Handle queries about perception
-            self._handle_perception_query(message)
-    
-    def _handle_perception_query(self, message: Message):
-        """
-        Handle perception queries
-        
-        Args:
-            message: Query message
-        """
-        if not message.content:
-            logger.warning("Received empty perception query")
-            return
-            
-        query_type = message.content.get("query_type", "")
-        response = {"query_id": message.content.get("query_id", ""), "result": None}
-        
-        if query_type == "recent_patterns":
-            # Return recent patterns
-            count = message.content.get("count", 5)
-            response["result"] = self.pattern_recognition.get_recent_patterns(count)
-            
-        elif query_type == "recent_inputs":
-            # Return recent inputs
-            count = message.content.get("count", 5)
-            response["result"] = self.sensory_input.get_recent_inputs(count)
-            
-        elif query_type == "perception_state":
-            # Return the current state of perception
-            response["result"] = {
-                "system_state": self.get_state(),
-                "sensory_state": self.sensory_input.get_state(),
-                "pattern_state": self.pattern_recognition.get_state()
-            }
-            
-        elif query_type == "process_text":
-            # Process a specific text
-            text = message.content.get("text", "")
-            if text:
-                response["result"] = self.process_input({"text": text, "process_id": str(uuid.uuid4())})
-                
-        else:
-            response["error"] = f"Unknown query type: {query_type}"
-            
-        # Publish the response
-        if self.event_bus:
-            self.publish_message(
-                "perception_query_response",
-                response
-            )
-    
-    def get_state(self) -> Dict[str, Any]:
-        """
-        Get the current state of the perception system
-        
-        Returns:
-            Dictionary containing module state
-        """
-        # Get base state
-        base_state = super().get_state()
-        
-        # Add perception-specific state
-        state = {
-            **base_state,
-            "parameters": self.parameters.model_dump() if hasattr(self.parameters, "model_dump") else vars(self.parameters),
-            "submodules": {
-                "sensory_input": {
-                    "id": self.sensory_input.module_id,
-                    "development_level": self.sensory_input.development_level
-                },
-                "pattern_recognition": {
-                    "id": self.pattern_recognition.module_id,
-                    "development_level": self.pattern_recognition.development_level
-                }
-            },
-            "device": str(self.device)
-        }
-        
-        return state 
+    # Functions
+    'initialize',
+    'process_input',
+    'recognize_patterns',
+    'create_sensory_input',
+    'get_recent_inputs',
+    'get_recent_patterns',
+    'get_known_patterns',
+    'get_state',
+    'update_age'
+]

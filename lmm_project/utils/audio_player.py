@@ -1,90 +1,272 @@
-"""
-Audio playback utilities for the LMM project.
-"""
-
 import os
-from typing import Optional
+import wave
+import threading
+import time
 from pathlib import Path
+from typing import Optional, Tuple, Union
 
-# Import the audio playback functionality
-try:
-    import soundfile as sf
-    import sounddevice as sd
-    AUDIO_PLAYBACK_AVAILABLE = True
-except ImportError:
-    AUDIO_PLAYBACK_AVAILABLE = False
-    print("Warning: soundfile or sounddevice not installed. Audio playback will be disabled.")
+import sounddevice as sd
+import soundfile as sf
+
+from lmm_project.core.exceptions import ResourceUnavailableError
+from lmm_project.utils.logging_utils import get_module_logger
+
+# Initialize logger
+logger = get_module_logger("audio_player")
 
 
-def play_audio_file(file_path: str, block: bool = True) -> bool:
+class AudioPlayer:
     """
-    Play an audio file using sounddevice and soundfile.
-    
-    Args:
-        file_path: Path to the audio file to play
-        block: Whether to block until playback is complete
-        
-    Returns:
-        bool: True if playback was successful, False otherwise
+    Audio player for handling playback of audio files.
+    Designed to work with Windows systems.
     """
-    if not AUDIO_PLAYBACK_AVAILABLE:
-        print(f"Cannot play audio: soundfile or sounddevice not installed.")
-        return False
-        
-    file_path_obj = Path(file_path)
-    if not file_path_obj.exists():
-        print(f"Audio file not found: {file_path}")
-        return False
-        
-    try:
-        # Load audio file
-        data, samplerate = sf.read(str(file_path_obj))
-        
-        # Play audio
-        sd.play(data, samplerate)
-        
-        # Wait until file is done playing if blocking is enabled
-        if block:
-            sd.wait()
-            
-        return True
-    except Exception as e:
-        print(f"Error playing audio: {e}")
-        return False
 
+    def __init__(self):
+        """Initialize the audio player."""
+        self.current_stream = None
+        self.is_playing = False
+        self.stop_requested = False
+        self.playback_thread = None
+        self.playback_lock = threading.Lock()
 
-def stop_audio_playback() -> None:
-    """
-    Stop any currently playing audio
-    """
-    if AUDIO_PLAYBACK_AVAILABLE:
+    def play(self, file_path: Union[str, Path], blocking: bool = False) -> bool:
+        """
+        Play an audio file.
+        
+        Parameters:
+        file_path: Path to the audio file
+        blocking: If True, block until playback is complete
+        
+        Returns:
+        True if playback started successfully, False otherwise
+        """
         try:
-            sd.stop()
+            file_path = Path(file_path)
+            
+            if not file_path.exists():
+                logger.error(f"Audio file not found: {file_path}")
+                return False
+                
+            if blocking:
+                # Play synchronously
+                return self._play_sync(file_path)
+            else:
+                # Play asynchronously
+                return self._play_async(file_path)
+                
         except Exception as e:
-            print(f"Error stopping audio playback: {e}")
+            logger.error(f"Error playing audio file: {str(e)}")
+            return False
 
-
-def list_audio_files(directory: str = "generated") -> list:
-    """
-    List all audio files in the specified directory
-    
-    Args:
-        directory: Directory to search for audio files
+    def _play_sync(self, file_path: Path) -> bool:
+        """
+        Play audio file synchronously (blocking).
         
+        Parameters:
+        file_path: Path to the audio file
+        
+        Returns:
+        True if playback successful, False otherwise
+        """
+        try:
+            # Stop any current playback
+            self.stop()
+            
+            # Check file extension
+            if file_path.suffix.lower() == '.wav':
+                self._play_wav_sync(file_path)
+            else:
+                self._play_generic_sync(file_path)
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in synchronous playback: {str(e)}")
+            return False
+
+    def _play_async(self, file_path: Path) -> bool:
+        """
+        Play audio file asynchronously (non-blocking).
+        
+        Parameters:
+        file_path: Path to the audio file
+        
+        Returns:
+        True if playback started successfully, False otherwise
+        """
+        try:
+            # Stop any current playback
+            self.stop()
+            
+            # Reset flags
+            with self.playback_lock:
+                self.is_playing = True
+                self.stop_requested = False
+            
+            # Start playback in a new thread
+            self.playback_thread = threading.Thread(
+                target=self._playback_worker,
+                args=(file_path,),
+                daemon=True
+            )
+            self.playback_thread.start()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error starting asynchronous playback: {str(e)}")
+            with self.playback_lock:
+                self.is_playing = False
+            return False
+
+    def _playback_worker(self, file_path: Path) -> None:
+        """Background worker for asynchronous playback."""
+        try:
+            # Check file extension
+            if file_path.suffix.lower() == '.wav':
+                self._play_wav_sync(file_path)
+            else:
+                self._play_generic_sync(file_path)
+                
+        except Exception as e:
+            logger.error(f"Error in playback worker: {str(e)}")
+        finally:
+            # Clean up
+            with self.playback_lock:
+                self.is_playing = False
+                self.current_stream = None
+
+    def _play_wav_sync(self, file_path: Path) -> None:
+        """
+        Play WAV file using wave module (better for Windows compatibility).
+        
+        Parameters:
+        file_path: Path to the WAV file
+        """
+        try:
+            with wave.open(str(file_path), 'rb') as wf:
+                # Get WAV file properties
+                sample_rate = wf.getframerate()
+                n_channels = wf.getnchannels()
+                sample_width = wf.getsampwidth()
+                
+                # Define callback for audio chunks
+                def callback(outdata, frames, time, status):
+                    if status:
+                        logger.warning(f"Audio status: {status}")
+                    if self.stop_requested:
+                        raise sd.CallbackStop
+                    data = wf.readframes(frames)
+                    if len(data) == 0:
+                        raise sd.CallbackStop
+                    # Convert bytes to samples
+                    import numpy as np
+                    if sample_width == 2:
+                        data = np.frombuffer(data, dtype=np.int16)
+                    elif sample_width == 4:
+                        data = np.frombuffer(data, dtype=np.int32)
+                    else:
+                        data = np.frombuffer(data, dtype=np.int8)
+                    
+                    # Reshape for channels
+                    data = data.reshape(-1, n_channels)
+                    if len(data) < len(outdata):
+                        outdata[:len(data)] = data
+                        outdata[len(data):] = 0
+                        raise sd.CallbackStop
+                    else:
+                        outdata[:] = data
+                
+                # Start the stream
+                with sd.OutputStream(
+                    samplerate=sample_rate,
+                    channels=n_channels,
+                    callback=callback,
+                    blocksize=1024
+                ) as stream:
+                    with self.playback_lock:
+                        self.current_stream = stream
+                    
+                    # Wait until the stream is done or stopped
+                    while stream.active and not self.stop_requested:
+                        time.sleep(0.1)
+        
+        except Exception as e:
+            logger.error(f"Error playing WAV file: {str(e)}")
+
+    def _play_generic_sync(self, file_path: Path) -> None:
+        """
+        Play audio file using soundfile (supports various formats).
+        
+        Parameters:
+        file_path: Path to the audio file
+        """
+        try:
+            # Load the file
+            data, sample_rate = sf.read(file_path)
+            
+            # Start the stream
+            with sd.play(data, sample_rate) as stream:
+                with self.playback_lock:
+                    self.current_stream = stream
+                
+                # Wait until playback is finished
+                while stream.active and not self.stop_requested:
+                    time.sleep(0.1)
+        
+        except Exception as e:
+            logger.error(f"Error playing audio file: {str(e)}")
+
+    def stop(self) -> None:
+        """Stop the current playback."""
+        with self.playback_lock:
+            self.stop_requested = True
+            if self.current_stream is not None:
+                try:
+                    self.current_stream.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping stream: {str(e)}")
+                self.current_stream = None
+
+    def is_audio_device_available(self) -> bool:
+        """Check if an audio device is available for playback."""
+        try:
+            devices = sd.query_devices()
+            return len(devices) > 0
+        except Exception as e:
+            logger.error(f"Error checking audio devices: {str(e)}")
+            return False
+
+
+# Singleton instance
+_audio_player_instance = None
+
+
+def get_audio_player() -> AudioPlayer:
+    """
+    Get the singleton audio player instance.
+    
     Returns:
-        list: List of audio file paths
+    AudioPlayer instance
     """
-    audio_extensions = ['.wav', '.mp3', '.ogg']
-    audio_files = []
+    global _audio_player_instance
     
-    try:
-        dir_path = Path(directory)
-        if dir_path.exists() and dir_path.is_dir():
-            for file in dir_path.iterdir():
-                if file.is_file() and file.suffix.lower() in audio_extensions:
-                    audio_files.append(str(file))
+    if _audio_player_instance is None:
+        _audio_player_instance = AudioPlayer()
         
-        return sorted(audio_files)
-    except Exception as e:
-        print(f"Error listing audio files: {e}")
-        return [] 
+    return _audio_player_instance
+
+
+def play_audio(file_path: Union[str, Path], blocking: bool = False) -> bool:
+    """
+    Play an audio file using the singleton audio player.
+    
+    Parameters:
+    file_path: Path to the audio file
+    blocking: If True, block until playback is complete
+    
+    Returns:
+    True if playback started successfully, False otherwise
+    """
+    player = get_audio_player()
+    return player.play(file_path, blocking)

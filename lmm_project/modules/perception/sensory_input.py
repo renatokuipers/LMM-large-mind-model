@@ -1,566 +1,435 @@
-"""
-Sensory Input Processing Module
-
-This module is responsible for processing raw text input into a form
-suitable for further processing by the perception system. It serves
-as the primary sensory interface for the LMM, converting text into
-meaningful sensory representations.
-"""
-
+import logging
+from collections import deque
+from typing import Dict, List, Optional, Any, Union
+from uuid import UUID, uuid4
+from datetime import datetime
 import re
 import numpy as np
-from typing import Dict, List, Any, Optional, Union, Set, Tuple
-import uuid
-import logging
-from datetime import datetime
-from collections import deque, Counter
-import string
-import torch
+from pydantic import ValidationError
 
-# Add tokenization libraries
-import nltk
-from nltk.tokenize import word_tokenize, sent_tokenize
-from nltk.util import ngrams
-from nltk.corpus import stopwords
-from nltk.probability import FreqDist
+from lmm_project.utils.logging_utils import get_module_logger
+from lmm_project.utils.config_manager import get_config
+from lmm_project.utils.vector_store import get_embeddings
+from lmm_project.core.message import Message, MessageType, Recipient
+from lmm_project.core.event_bus import EventBus, Event
 
-# Ensure NLTK data is downloaded
-try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
+from .models import (
+    SensoryModality, 
+    SalienceLevel,
+    SensoryInput, 
+    ProcessedInput, 
+    SensoryFeature,
+    PerceptionEvent,
+    PerceptionConfig
+)
 
-from lmm_project.modules.base_module import BaseModule
-from lmm_project.core.event_bus import EventBus
-from lmm_project.core.message import Message
+# Initialize logger
+logger = get_module_logger("modules.perception.sensory_input")
 
-logger = logging.getLogger(__name__)
-
-class SensoryInputProcessor(BaseModule):
+class SensoryInputProcessor:
     """
-    Processes raw text input into a form suitable for perception
-    
-    This module is the first stage of perception, converting raw text
-    into feature vectors and preliminary sensory representations.
+    Processes incoming sensory input data, manages the sensory buffer,
+    and extracts features from raw sensory inputs.
     """
-    # Development stages for sensory processing
-    development_milestones = {
-        0.0: "Basic text detection",
-        0.2: "Simple tokenization",
-        0.4: "Feature extraction",
-        0.6: "Multi-level analysis",
-        0.8: "Context sensitivity",
-        1.0: "Advanced sensory processing"
-    }
     
     def __init__(
         self, 
-        module_id: str,
-        event_bus: Optional[EventBus] = None,
-        **kwargs
+        event_bus: EventBus,
+        config: Optional[PerceptionConfig] = None,
+        developmental_age: float = 0.0
     ):
         """
-        Initialize the sensory input processor
+        Initialize the sensory input processor.
         
         Args:
-            module_id: Unique identifier for this module
-            event_bus: Event bus for communication
+            event_bus: The event bus for communication
+            config: Configuration for the processor
+            developmental_age: Current developmental age of the mind
         """
-        super().__init__(
-            module_id=module_id,
-            module_type="sensory_processor",
-            event_bus=event_bus,
-            **kwargs
+        self._config = config or PerceptionConfig()
+        self._event_bus = event_bus
+        self._developmental_age = developmental_age
+        
+        # Input buffer for each modality
+        self._input_buffers: Dict[SensoryModality, deque] = {
+            modality: deque(maxlen=self._config.buffer_capacity)
+            for modality in self._config.default_modalities
+        }
+        
+        # Active inputs currently being processed
+        self._active_inputs: Dict[UUID, SensoryInput] = {}
+        
+        # Feature extraction strategies for each modality
+        self._feature_extractors = {
+            SensoryModality.TEXT: self._extract_text_features,
+            SensoryModality.AUDIO: self._extract_audio_features,
+            SensoryModality.VISUAL: self._extract_visual_features,
+            SensoryModality.EMOTIONAL: self._extract_emotional_features,
+            SensoryModality.ABSTRACT: self._extract_abstract_features,
+            SensoryModality.INTERNAL: self._extract_internal_features
+        }
+        
+        # Register for relevant event types
+        self._register_event_handlers()
+        
+        logger.info(f"Sensory input processor initialized with age {developmental_age}")
+    
+    def _register_event_handlers(self) -> None:
+        """Register handlers for relevant events"""
+        self._event_bus.subscribe("input_received", self._handle_input_event)
+        self._event_bus.subscribe("development_age_updated", self._handle_age_update)
+        self._event_bus.subscribe("sensory_config_updated", self._handle_config_update)
+    
+    def _handle_input_event(self, event: Event) -> None:
+        """
+        Handle an incoming input event.
+        
+        Args:
+            event: The event containing input data
+        """
+        try:
+            # Extract input data from event
+            input_data = event.data.get("input")
+            if not input_data:
+                logger.warning("Received input event with no input data")
+                return
+            
+            # Create sensory input model
+            sensory_input = self._create_sensory_input(input_data)
+            
+            # Process the input
+            self.process_input(sensory_input)
+            
+        except ValidationError as e:
+            logger.error(f"Invalid input data: {e}")
+        except Exception as e:
+            logger.error(f"Error processing input event: {e}")
+    
+    def _handle_age_update(self, event: Event) -> None:
+        """
+        Handle a developmental age update event.
+        
+        Args:
+            event: The event containing the new age
+        """
+        new_age = event.data.get("age")
+        if new_age is not None and isinstance(new_age, (int, float)):
+            self._developmental_age = float(new_age)
+            logger.debug(f"Updated developmental age to {self._developmental_age}")
+    
+    def _handle_config_update(self, event: Event) -> None:
+        """
+        Handle a configuration update event.
+        
+        Args:
+            event: The event containing the new configuration
+        """
+        try:
+            config_data = event.data.get("config")
+            if config_data:
+                self._config = PerceptionConfig(**config_data)
+                logger.info("Updated sensory input configuration")
+                
+                # Update buffer sizes if needed
+                for modality in self._input_buffers:
+                    if self._input_buffers[modality].maxlen != self._config.buffer_capacity:
+                        # Create new buffer with updated capacity
+                        new_buffer = deque(self._input_buffers[modality], 
+                                          maxlen=self._config.buffer_capacity)
+                        self._input_buffers[modality] = new_buffer
+        except ValidationError as e:
+            logger.error(f"Invalid configuration data: {e}")
+    
+    def _create_sensory_input(self, data: Dict[str, Any]) -> SensoryInput:
+        """
+        Create a SensoryInput model from raw data.
+        
+        Args:
+            data: Raw input data
+            
+        Returns:
+            A validated SensoryInput object
+        """
+        # Determine modality from data or default to TEXT
+        modality = data.get("modality", SensoryModality.TEXT)
+        if isinstance(modality, str):
+            try:
+                modality = SensoryModality(modality)
+            except ValueError:
+                logger.warning(f"Unknown modality '{modality}', defaulting to TEXT")
+                modality = SensoryModality.TEXT
+        
+        # Create the sensory input
+        return SensoryInput(
+            modality=modality,
+            content=data.get("content", ""),
+            source=data.get("source"),
+            metadata=data.get("metadata", {}),
+            salience=data.get("salience", SalienceLevel.MEDIUM)
+        )
+    
+    def process_input(self, sensory_input: SensoryInput) -> Optional[ProcessedInput]:
+        """
+        Process a sensory input, extract features, and add to buffer.
+        
+        Args:
+            sensory_input: The raw sensory input to process
+            
+        Returns:
+            Processed input with extracted features, or None if below threshold
+        """
+        # Check if input meets salience threshold
+        if sensory_input.salience < self._config.base_salience_threshold:
+            logger.debug(f"Input {sensory_input.id} below salience threshold, ignoring")
+            return None
+        
+        # Extract features based on modality
+        features = self._extract_features(sensory_input)
+        
+        # Get context vector for the input
+        context_vector = self._generate_context_vector(sensory_input)
+        
+        # Create processed input
+        processed_input = ProcessedInput(
+            id=uuid4(),
+            raw_input_id=sensory_input.id,
+            modality=sensory_input.modality,
+            features=features,
+            context_vector=context_vector,
+            salience=sensory_input.salience
         )
         
-        # Initialize sensory memory
-        self.recent_inputs = deque(maxlen=20)
-        self.input_history = []
+        # Add to buffer for this modality
+        self._add_to_buffer(sensory_input)
         
-        # Initialize frequency tracking
-        self.token_frequencies = Counter()
-        self.bigram_frequencies = Counter()
-        self.character_frequencies = Counter()
+        # Add to active inputs
+        self._active_inputs[sensory_input.id] = sensory_input
         
-        # Processing parameters that develop over time
-        self.max_tokens = 100  # Maximum tokens to process
-        self.token_threshold = 0.1  # Threshold for token significance
-        self.similarity_threshold = 0.7  # Threshold for similar inputs
+        # Publish processed input event
+        self._publish_processed_input_event(processed_input)
         
-        # Get stopwords for filtering
-        try:
-            self.stopwords = set(stopwords.words('english'))
-        except:
-            self.stopwords = set(['the', 'and', 'a', 'to', 'of', 'in', 'is', 'it'])
-            
-        # Try to use GPU if available
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Subscribe to raw text input events
-        if self.event_bus:
-            self.subscribe_to_message("raw_text_input")
-        
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process raw input text into sensory representations
-        
-        Args:
-            input_data: Dictionary containing input data with text
-            
-        Returns:
-            Dictionary with processed sensory data
-        """
-        # Validate input
-        process_id = input_data.get("process_id", str(uuid.uuid4()))
-        text = input_data.get("text", "")
-        
-        if not text:
-            logger.warning(f"Sensory processor received empty text input for process {process_id}")
-            return {
-                "process_id": process_id,
-                "status": "error",
-                "error": "Empty input text"
-            }
-            
-        # Log the incoming input
-        logger.debug(f"Processing sensory input: '{text[:50]}...' (process {process_id})")
-        
-        # Create response structure
-        timestamp = datetime.now()
-        result = {
-            "process_id": process_id,
-            "timestamp": timestamp.isoformat(),
-            "text": text,
-            "development_level": self.development_level,
-            "module_id": self.module_id
-        }
-        
-        # Extract features based on development level
-        features = self._extract_features(text)
-        
-        # Add features to result
-        result.update(features)
-        
-        # Store in recent inputs
-        self.recent_inputs.append({
-            "text": text,
-            "process_id": process_id,
-            "timestamp": timestamp,
-            "features": features
-        })
-        
-        # Track occurrence frequencies
-        self._update_frequencies(text)
-        
-        # Publish processed result if we have an event bus
-        if self.event_bus:
-            self.publish_message(
-                "sensory_processed",
-                {"result": result, "process_id": process_id}
-            )
-            
-        return result
+        return processed_input
     
-    def _extract_features(self, text: str) -> Dict[str, Any]:
+    def _extract_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
         """
-        Extract features from text based on developmental level
-        
-        At lower developmental levels, only basic features are extracted.
-        As development progresses, more sophisticated features are extracted.
+        Extract features from a sensory input based on its modality.
         
         Args:
-            text: Input text to process
+            sensory_input: The input to extract features from
             
         Returns:
-            Dictionary with extracted features
+            List of extracted features
         """
-        features = {}
-        
-        # Start with empty containers
-        basic_features = {}
-        intermediate_features = {}
-        advanced_features = {}
-        
-        # Level 0: Basic text properties (always extracted)
-        basic_features["length"] = len(text)
-        basic_features["has_letters"] = bool(re.search(r'[a-zA-Z]', text))
-        basic_features["has_numbers"] = bool(re.search(r'\d', text))
-        basic_features["has_special_chars"] = bool(re.search(r'[^\w\s]', text))
-        
-        # Count frequencies
-        letter_count = sum(c.isalpha() for c in text)
-        number_count = sum(c.isdigit() for c in text)
-        special_char_count = sum(not c.isalnum() and not c.isspace() for c in text)
-        
-        basic_features["letter_count"] = letter_count
-        basic_features["number_count"] = number_count
-        basic_features["special_char_count"] = special_char_count
-        basic_features["whitespace_count"] = text.count(' ') + text.count('\n') + text.count('\t')
-        
-        # Calculate character distribution
-        if text:
-            basic_features["letter_ratio"] = letter_count / len(text)
-            basic_features["number_ratio"] = number_count / len(text)
-            basic_features["special_ratio"] = special_char_count / len(text)
-        else:
-            basic_features["letter_ratio"] = 0
-            basic_features["number_ratio"] = 0
-            basic_features["special_ratio"] = 0
-            
-        # Add some additional basic features even at level 0
-        # This provides better information for pattern recognition
-        if text:
-            # Simple token count (just splitting by whitespace)
-            simple_tokens = text.split()
-            basic_features["simple_token_count"] = len(simple_tokens)
-            
-            # Check for question or exclamation
-            basic_features["has_question_mark"] = '?' in text
-            basic_features["has_exclamation_mark"] = '!' in text
-            
-            # Add some character n-gram counts
-            char_bigrams = [text[i:i+2] for i in range(len(text)-1)]
-            char_bigram_counts = Counter(char_bigrams)
-            basic_features["common_char_bigrams"] = dict(char_bigram_counts.most_common(5))
-            
-            # Create a unique signature for the text
-            basic_features["text_signature"] = hash(text) % 10000
-        
-        # Level 1: Token-based features (dev level >= 0.2)
-        # But we'll extract some token features even at level 0 
-        # to support better pattern recognition
-        
-        # Tokenize text using our helper method
-        tokens = self._tokenize_text(text)
-        
-        # Extract token features
-        intermediate_features["token_count"] = len(tokens)
-        intermediate_features["unique_token_count"] = len(set(tokens))
-        
-        # Calculate token statistics
-        if tokens:
-            intermediate_features["avg_token_length"] = np.mean([len(t) for t in tokens])
-            intermediate_features["max_token_length"] = max(len(t) for t in tokens)
-            intermediate_features["min_token_length"] = min(len(t) for t in tokens)
-            intermediate_features["has_long_tokens"] = any(len(t) > 8 for t in tokens)
-            
-            # Get token frequency distribution
-            freq_dist = FreqDist(tokens)
-            most_common = freq_dist.most_common(5)
-            intermediate_features["most_common_tokens"] = most_common
-            intermediate_features["token_diversity"] = len(set(tokens)) / len(tokens) if tokens else 0
-            
-            # Add basic n-gram features even at low levels
-            if len(tokens) >= 2:
-                # Generate bigrams
-                token_bigrams = list(ngrams(tokens, 2))
-                intermediate_features["bigram_count"] = len(token_bigrams)
-                
-                # Get most common bigrams
-                if token_bigrams:
-                    bigram_freq = FreqDist(token_bigrams)
-                    intermediate_features["common_bigrams"] = bigram_freq.most_common(3)
-        else:
-            intermediate_features["avg_token_length"] = 0
-            intermediate_features["max_token_length"] = 0
-            intermediate_features["min_token_length"] = 0
-            intermediate_features["has_long_tokens"] = False
-            intermediate_features["most_common_tokens"] = []
-            intermediate_features["token_diversity"] = 0
-            intermediate_features["bigram_count"] = 0
-            intermediate_features["common_bigrams"] = []
-                
-        # Level 2: Linguistic features (dev level >= 0.4)
-        if self.development_level >= 0.4:
-            # Extract sentences
-            sentences = sent_tokenize(text)
-            
-            # Sentence features
-            advanced_features["sentence_count"] = len(sentences)
-            
-            if sentences:
-                advanced_features["avg_sentence_length"] = np.mean([len(s) for s in sentences])
-                advanced_features["max_sentence_length"] = max(len(s) for s in sentences)
-                
-                # Words per sentence
-                words_per_sentence = [len(self._tokenize_text(s)) for s in sentences]
-                advanced_features["avg_words_per_sentence"] = np.mean(words_per_sentence) if words_per_sentence else 0
-            else:
-                advanced_features["avg_sentence_length"] = 0
-                advanced_features["max_sentence_length"] = 0
-                advanced_features["avg_words_per_sentence"] = 0
-                
-            # Check for question marks and exclamation points
-            advanced_features["question_mark_count"] = text.count('?')
-            advanced_features["exclamation_mark_count"] = text.count('!')
-            advanced_features["is_question"] = text.strip().endswith('?')
-            advanced_features["is_exclamation"] = text.strip().endswith('!')
-                
-        # Level 3: Context-sensitive features (dev level >= 0.6)
-        if self.development_level >= 0.6:
-            # Check similarity to recent inputs
-            if self.recent_inputs:
-                similarities = []
-                for recent in self.recent_inputs:
-                    if recent.get("text") != text:  # Don't compare to self
-                        similarity = self._simple_similarity(text, recent.get("text", ""))
-                        similarities.append(similarity)
-                
-                if similarities:
-                    advanced_features["max_similarity_to_recent"] = max(similarities)
-                    advanced_features["avg_similarity_to_recent"] = np.mean(similarities)
-                    advanced_features["is_similar_to_recent"] = max(similarities) > self.similarity_threshold
-                else:
-                    advanced_features["max_similarity_to_recent"] = 0
-                    advanced_features["avg_similarity_to_recent"] = 0
-                    advanced_features["is_similar_to_recent"] = False
-            
-            # Word frequencies compared to historical frequencies
-            tokens = self._tokenize_text(text)
-            if tokens:
-                # Check for unusual words (not in frequent tokens)
-                unusual_tokens = [t for t in tokens if self.token_frequencies[t] < 3 and len(t) > 3]
-                advanced_features["unusual_token_count"] = len(unusual_tokens)
-                advanced_features["unusual_tokens"] = unusual_tokens[:5]  # Limit to 5
-                
-                # Calculate frequency novelty (how different from typical frequency)
-                if self.token_frequencies:
-                    token_freqs = {t: self.token_frequencies[t] for t in tokens}
-                    if token_freqs:
-                        avg_freq = np.mean(list(token_freqs.values()))
-                        advanced_features["frequency_novelty"] = 1.0 - min(avg_freq / 10, 1.0)
-                    else:
-                        advanced_features["frequency_novelty"] = 1.0
-                else:
-                    advanced_features["frequency_novelty"] = 0.5  # Default mid value
-            
-        # Level 4: Advanced analysis (dev level >= 0.8)
-        if self.development_level >= 0.8:
-            # More sophisticated linguistic analysis would go here
-            # This could include sentiment analysis, topic detection, etc.
-            
-            # For now, we'll add some simple additional features
-            tokens = self._tokenize_text(text)
-            
-            # Check for specific linguistic features
-            linguistic_features = {}
-            
-            # Question words
-            question_words = {"what", "who", "when", "where", "why", "how"}
-            linguistic_features["has_question_words"] = any(t.lower() in question_words for t in tokens)
-            
-            # Check for imperative sentences (commands)
-            # Simple approach: starts with verb
-            if tokens and tokens[0].lower() in {"do", "go", "be", "try", "make", "take", "get", "come", "give", "find", "look", "run", "turn", "put", "bring"}:
-                linguistic_features["likely_imperative"] = True
-            else:
-                linguistic_features["likely_imperative"] = False
-                
-            # Check for named entities (very simple approach)
-            # Look for capitalized words not at the start of sentences
-            sentence_starts = {s.split()[0] if s.split() else "" for s in sent_tokenize(text)}
-            capitalized_non_starters = [t for t in tokens if t[0].isupper() and t not in sentence_starts]
-            linguistic_features["potential_named_entities"] = capitalized_non_starters[:5]
-            
-            # Add to advanced features
-            advanced_features["linguistic_features"] = linguistic_features
-        
-        # Assemble features based on development level
-        features["basic_features"] = basic_features
-        
-        if self.development_level >= 0.2:
-            features["features"] = intermediate_features
-            
-        if self.development_level >= 0.4:
-            features["linguistic_features"] = advanced_features
-        
-        return features
-    
-    def _tokenize_text(self, text: str) -> List[str]:
-        """
-        Tokenize text into words, handling various cases based on development level
-        
-        Args:
-            text: Input text to tokenize
-            
-        Returns:
-            List of tokens
-        """
-        if not text:
+        # Get the appropriate extractor for this modality
+        extractor = self._feature_extractors.get(sensory_input.modality)
+        if not extractor:
+            logger.warning(f"No feature extractor for modality {sensory_input.modality}")
             return []
-            
-        # Basic tokenization - always use NLTK for better tokenization
-        tokens = word_tokenize(text.lower())
         
-        # Filter based on development level
-        if self.development_level < 0.3:
-            # Basic level - keep most tokens but remove punctuation-only tokens
-            filtered_tokens = []
-            for token in tokens:
-                # Keep tokens that have at least one alphanumeric character
-                if any(c.isalnum() for c in token):
-                    filtered_tokens.append(token)
-            return filtered_tokens[:self.max_tokens]
-            
-        elif self.development_level < 0.6:
-            # Intermediate: filter out stopwords and very short tokens
-            filtered_tokens = [t for t in tokens if (t not in self.stopwords or t in {'?', '!'}) and len(t) > 1]
-            return filtered_tokens[:self.max_tokens]
-            
-        else:
-            # Advanced: keep more structure and context
-            # Just remove punctuation-only tokens except for meaningful punctuation
-            important_punct = {'?', '!', '.'}
-            filtered_tokens = [t for t in tokens if any(c.isalnum() for c in t) or t in important_punct]
-            return filtered_tokens[:self.max_tokens]
+        # Extract features
+        return extractor(sensory_input)
     
-    def _simple_similarity(self, text1: str, text2: str) -> float:
+    def _generate_context_vector(self, sensory_input: SensoryInput) -> List[float]:
         """
-        Calculate similarity between two texts
+        Generate a context vector for the input.
         
         Args:
-            text1: First text
-            text2: Second text
+            sensory_input: The input to generate a context vector for
             
         Returns:
-            Similarity score (0-1)
+            Context vector as a list of floats
         """
-        if not text1 or not text2:
-            return 0.0
-            
-        # Convert to sets of tokens
-        tokens1 = set(self._tokenize_text(text1))
-        tokens2 = set(self._tokenize_text(text2))
+        # For text modality, use embeddings
+        if sensory_input.modality == SensoryModality.TEXT and isinstance(sensory_input.content, str):
+            try:
+                # Generate embedding for the text
+                embedding = get_embeddings(sensory_input.content)
+                if isinstance(embedding, list) and embedding:
+                    return embedding
+            except Exception as e:
+                logger.error(f"Error generating embedding: {e}")
         
-        if not tokens1 or not tokens2:
-            return 0.0
-            
-        # Calculate Jaccard similarity
-        intersection = tokens1.intersection(tokens2)
-        union = tokens1.union(tokens2)
-        
-        return len(intersection) / len(union)
+        # Fallback to empty vector
+        return []
     
-    def _update_frequencies(self, text: str):
+    def _add_to_buffer(self, sensory_input: SensoryInput) -> None:
         """
-        Update the frequency counters with new text
+        Add input to the appropriate modality buffer.
         
         Args:
-            text: Text to process for frequency updates
+            sensory_input: The input to add to the buffer
         """
-        if not text:
-            return
-            
-        # Update character frequencies
-        self.character_frequencies.update(text)
+        # Ensure buffer exists for this modality
+        if sensory_input.modality not in self._input_buffers:
+            self._input_buffers[sensory_input.modality] = deque(
+                maxlen=self._config.buffer_capacity
+            )
         
-        # Update token frequencies
-        tokens = self._tokenize_text(text)
-        self.token_frequencies.update(tokens)
-        
-        # Update bigram frequencies if enough tokens
-        if len(tokens) >= 2:
-            bigrams = ngrams(tokens, 2)
-            self.bigram_frequencies.update(bigrams)
+        # Add to buffer
+        self._input_buffers[sensory_input.modality].append(sensory_input)
     
-    def _handle_message(self, message: Message):
+    def _publish_processed_input_event(self, processed_input: ProcessedInput) -> None:
         """
-        Handle incoming messages from the event bus
+        Publish an event with the processed input.
         
         Args:
-            message: The message to handle
+            processed_input: The processed input to publish
         """
-        if message.message_type == "raw_text_input" and message.content:
-            # Process the raw text input
-            text = message.content.get("text", "")
-            if text:
-                process_id = message.content.get("process_id", str(uuid.uuid4()))
-                self.process_input({
-                    "text": text,
-                    "process_id": process_id,
-                    "source": message.content.get("source", "unknown"),
-                    "metadata": message.content.get("metadata", {})
-                })
-    
-    def update_development(self, amount: float) -> float:
-        """
-        Update the module's developmental level
-        
-        As development progresses, the sensory processing becomes more sophisticated
-        
-        Args:
-            amount: Amount to increase development by
-            
-        Returns:
-            New developmental level
-        """
-        # Update base development level
-        new_level = super().update_development(amount)
-        
-        # Update processing parameters based on development
-        self.max_tokens = int(100 + new_level * 400)  # 100 to 500 tokens - higher minimum for better feature extraction
-        self.token_threshold = max(0.03, 0.15 - new_level * 0.12)  # Lower threshold with development
-        self.similarity_threshold = max(0.4, 0.7 - new_level * 0.3)  # More nuanced similarity detection
-        
-        # Log development progress
-        logger.info(f"Sensory processor {self.module_id} developmental level updated to {new_level:.2f}")
-        logger.debug(f"Updated parameters: max_tokens={self.max_tokens}, token_threshold={self.token_threshold:.2f}")
-        
-        return new_level
-    
-    def get_state(self) -> Dict[str, Any]:
-        """
-        Get the current state of the module
-        
-        Returns:
-            Dictionary containing module state
-        """
-        base_state = super().get_state()
-        
-        # Add sensory processor specific state
-        state = {
-            **base_state,
-            "recent_input_count": len(self.recent_inputs),
-            "token_frequency_count": len(self.token_frequencies),
-            "processing_parameters": {
-                "max_tokens": self.max_tokens,
-                "token_threshold": self.token_threshold,
-                "similarity_threshold": self.similarity_threshold
-            }
+        # Create event payload
+        payload = {
+            "processed_input": processed_input.model_dump(),
+            "developmental_age": self._developmental_age
         }
         
-        return state
+        # Create and publish event
+        event = Event(
+            type="sensory_input_processed",
+            source="perception.sensory_input",
+            data=payload
+        )
+        self._event_bus.publish(event)
     
-    def get_recent_inputs(self, count: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_inputs(self, modality: SensoryModality, count: int = 5) -> List[SensoryInput]:
         """
-        Get the most recent inputs
+        Get recent inputs for a specific modality.
         
         Args:
+            modality: The sensory modality to get inputs for
             count: Maximum number of inputs to return
             
         Returns:
-            List of recent inputs
+            List of recent inputs for the specified modality
         """
-        # Return the most recent inputs, limited by count
-        return list(self.recent_inputs)[-count:]
+        if modality not in self._input_buffers:
+            return []
+        
+        # Convert deque to list and reverse to get most recent first
+        buffer = list(self._input_buffers[modality])
+        buffer.reverse()
+        
+        # Return up to count inputs
+        return buffer[:min(count, len(buffer))]
     
-    def get_token_frequencies(self, top_n: int = 20) -> List[Tuple[str, int]]:
+    def get_active_inputs(self) -> Dict[UUID, SensoryInput]:
         """
-        Get the most frequent tokens
+        Get all active inputs.
+        
+        Returns:
+            Dictionary of active inputs by ID
+        """
+        return self._active_inputs.copy()
+    
+    def clear_buffer(self, modality: Optional[SensoryModality] = None) -> None:
+        """
+        Clear the input buffer for a specific modality or all modalities.
         
         Args:
-            top_n: Number of top tokens to return
-            
-        Returns:
-            List of (token, frequency) tuples
+            modality: The modality to clear, or None to clear all
         """
-        return self.token_frequencies.most_common(top_n)
+        if modality:
+            if modality in self._input_buffers:
+                self._input_buffers[modality].clear()
+        else:
+            for buffer in self._input_buffers.values():
+                buffer.clear()
+    
+    # Feature extraction methods for different modalities
+    
+    def _extract_text_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
+        """Extract features from text input"""
+        features = []
         
-    def clear_history(self):
-        """Clear the input history and frequency counters"""
-        self.recent_inputs.clear()
-        self.token_frequencies.clear()
-        self.bigram_frequencies.clear()
-        self.character_frequencies.clear() 
+        if not isinstance(sensory_input.content, str):
+            return features
+            
+        text = sensory_input.content
+        
+        # Extract basic text features
+        features.append(SensoryFeature(
+            name="length",
+            value=len(text),
+            modality=SensoryModality.TEXT
+        ))
+        
+        # Word count
+        words = re.findall(r'\w+', text.lower())
+        features.append(SensoryFeature(
+            name="word_count",
+            value=len(words),
+            modality=SensoryModality.TEXT
+        ))
+        
+        # Extract more sophisticated features based on developmental age
+        if self._developmental_age >= 0.5:
+            # Simple sentiment analysis
+            positive_words = set(['good', 'happy', 'nice', 'love', 'like', 'joy'])
+            negative_words = set(['bad', 'sad', 'angry', 'hate', 'dislike', 'fear'])
+            
+            pos_count = sum(1 for word in words if word in positive_words)
+            neg_count = sum(1 for word in words if word in negative_words)
+            
+            sentiment = (pos_count - neg_count) / max(1, len(words))
+            features.append(SensoryFeature(
+                name="sentiment",
+                value=sentiment,
+                modality=SensoryModality.TEXT
+            ))
+        
+        if self._developmental_age >= 1.0:
+            # Question detection
+            is_question = 1.0 if '?' in text else 0.0
+            features.append(SensoryFeature(
+                name="is_question",
+                value=is_question,
+                modality=SensoryModality.TEXT
+            ))
+            
+            # Complexity estimation (simple proxy via avg word length)
+            avg_word_length = sum(len(word) for word in words) / max(1, len(words))
+            features.append(SensoryFeature(
+                name="complexity",
+                value=min(1.0, avg_word_length / 10.0),
+                modality=SensoryModality.TEXT
+            ))
+        
+        return features
+    
+    def _extract_audio_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
+        """Extract features from audio input"""
+        # Basic implementation - would be expanded with actual audio processing
+        return []
+    
+    def _extract_visual_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
+        """Extract features from visual input"""
+        # Placeholder for future visual processing
+        return []
+    
+    def _extract_emotional_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
+        """Extract features from emotional input"""
+        features = []
+        
+        if not isinstance(sensory_input.content, dict):
+            return features
+            
+        # Process emotional content data
+        emotional_data = sensory_input.content
+        
+        for emotion, intensity in emotional_data.items():
+            if isinstance(intensity, (int, float)):
+                features.append(SensoryFeature(
+                    name=f"emotion_{emotion}",
+                    value=float(intensity),
+                    modality=SensoryModality.EMOTIONAL
+                ))
+        
+        return features
+    
+    def _extract_abstract_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
+        """Extract features from abstract concept input"""
+        # Placeholder for abstract concept processing
+        return []
+    
+    def _extract_internal_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
+        """Extract features from internal state input"""
+        # Internal state processing
+        return []

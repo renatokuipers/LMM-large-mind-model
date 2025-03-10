@@ -1,308 +1,381 @@
-from typing import Dict, List, Any, Optional, Tuple, Set
-from pydantic import BaseModel, Field
-from datetime import datetime
-import json
+"""
+State Manager for tracking, updating and persisting the system state.
+"""
 import os
-import gzip
-import hashlib
+import json
 import logging
 import threading
-from pathlib import Path
+import time
+from typing import Dict, Any, Optional, List, Tuple, Callable
+from datetime import datetime
+import shutil
 
-from .exceptions import StateManagerError
+from .types import StateDict, Age, DevelopmentalStage, ModuleID, Timestamp, current_timestamp
+from .exceptions import StateError
 
-logger = logging.getLogger(__name__)
 
-class StateManager(BaseModel):
+class StateManager:
     """
-    Manages the state of the cognitive system
-    
-    The StateManager tracks the current state of the mind and its modules,
-    provides methods to update the state, and handles state persistence.
-    
-    Features:
-    - Thread-safe state updates
-    - State history with configurable size
-    - Compressed state storage for large states
-    - State diffing to track changes
-    - Automatic state backup
+    Manages the state of the entire mind system.
+    Provides functionality for tracking, updating, and persisting state.
     """
-    current_state: Dict[str, Any] = Field(default_factory=dict)
-    state_history: List[Dict[str, Any]] = Field(default_factory=list)
-    max_history_size: int = Field(default=100)
-    last_updated: datetime = Field(default_factory=datetime.now)
-    save_directory: Path = Field(default=Path("storage/states"))
-    backup_directory: Path = Field(default=Path("storage/backups"))
-    compression_threshold: int = Field(default=1024 * 1024)  # 1MB
-    _lock: threading.RLock = Field(default_factory=threading.RLock, exclude=True)
-    _state_hashes: Dict[str, str] = Field(default_factory=dict, exclude=True)
+    def __init__(self, storage_dir: str = "storage/states"):
+        self.state: StateDict = self._create_initial_state()
+        self.storage_dir = storage_dir
+        self.state_lock = threading.RLock()
+        self.state_observers: List[Callable[[StateDict], None]] = []
+        self.logger = logging.getLogger(__name__)
+        
+        # Ensure storage directory exists
+        os.makedirs(storage_dir, exist_ok=True)
+        
+        self.logger.info("StateManager initialized")
     
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
+    def _create_initial_state(self) -> StateDict:
+        """Create the initial system state."""
+        return {
+            "system": {
+                "created_at": current_timestamp(),
+                "last_updated": current_timestamp(),
+                "version": "0.1.0",
+                "runtime": 0.0,  # Runtime in seconds
+            },
+            "development": {
+                "age": 0.0,  # Age in developmental units
+                "stage": DevelopmentalStage.PRENATAL.name,
+                "milestones_achieved": [],
+            },
+            "modules": {},  # Module-specific states
+            "homeostasis": {
+                "energy": 1.0,
+                "arousal": 0.5,
+                "cognitive_load": 0.0,
+                "coherence": 1.0,
+                "social_need": 0.5,
+            },
+            "interfaces": {},  # Interface-specific states
+            "metrics": {
+                "message_count": 0,
+                "learning_events": 0,
+                "errors": 0,
+            }
+        }
     
-    def __init__(self, **data):
-        super().__init__(**data)
-        # Ensure directories exist
-        self.save_directory.mkdir(parents=True, exist_ok=True)
-        self.backup_directory.mkdir(parents=True, exist_ok=True)
-    
-    def update_state(self, state_update: Dict[str, Any], track_changes: bool = True) -> Dict[str, Any]:
+    def get_state(self, deep_copy: bool = True) -> StateDict:
         """
-        Update the current state with new information
+        Get the current system state.
         
         Args:
-            state_update: Dictionary containing state updates
-            track_changes: Whether to track changes for diffing
-        
-        Returns:
-            Updated complete state
-        
-        Raises:
-            StateManagerError: If there's an error updating the state
-        """
-        try:
-            with self._lock:
-                # Track changes if requested
-                changed_keys = set()
-                if track_changes:
-                    for key, value in state_update.items():
-                        if key in self.current_state:
-                            if self._has_changed(key, value):
-                                changed_keys.add(key)
-                        else:
-                            changed_keys.add(key)
-                
-                # Update current state
-                self.current_state.update(state_update)
-                
-                # Update hashes for changed keys
-                for key in changed_keys:
-                    self._update_hash(key, self.current_state[key])
-                
-                # Record timestamp
-                self.last_updated = datetime.now()
-                self.current_state["last_updated"] = self.last_updated.isoformat()
-                
-                # Add to history
-                history_entry = self.current_state.copy()
-                if changed_keys:
-                    history_entry["_changed_keys"] = list(changed_keys)
-                self.state_history.append(history_entry)
-                
-                # Trim history if needed
-                if len(self.state_history) > self.max_history_size:
-                    self.state_history = self.state_history[-self.max_history_size:]
-                    
-                return self.current_state
-        except Exception as e:
-            logger.error(f"Error updating state: {str(e)}")
-            raise StateManagerError(f"Error updating state: {str(e)}")
-    
-    def get_state(self, key: Optional[str] = None) -> Any:
-        """
-        Get current state or a specific state value
-        
-        Args:
-            key: Optional key to retrieve specific state value
-        
-        Returns:
-            Current state or specific state value
-        """
-        with self._lock:
-            if key:
-                return self.current_state.get(key)
+            deep_copy: Whether to return a deep copy of the state
             
-            return self.current_state.copy()
-    
-    def get_state_history(self, limit: int = 10, keys: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """
-        Get state history, optionally filtered by keys
-        
-        Args:
-            limit: Maximum number of historical states to return
-            keys: Optional list of keys to include in the result
-        
         Returns:
-            List of historical states, most recent first
+            The current system state
         """
-        with self._lock:
-            if keys:
-                filtered_history = []
-                for state in self.state_history[-limit:]:
-                    filtered_state = {k: state.get(k) for k in keys if k in state}
-                    if "_changed_keys" in state:
-                        filtered_state["_changed_keys"] = [k for k in state["_changed_keys"] if k in keys]
-                    filtered_history.append(filtered_state)
-                return filtered_history
-            
-            return [state.copy() for state in self.state_history[-limit:]]
-    
-    def get_changes_since(self, timestamp: datetime) -> Dict[str, Any]:
-        """
-        Get all state changes since a specific timestamp
-        
-        Args:
-            timestamp: The timestamp to get changes since
-        
-        Returns:
-            Dictionary of changed state values
-        """
-        with self._lock:
-            changes = {}
-            for state in reversed(self.state_history):
-                state_time = datetime.fromisoformat(state["last_updated"]) if "last_updated" in state else self.last_updated
-                if state_time <= timestamp:
-                    break
-                
-                if "_changed_keys" in state:
-                    for key in state["_changed_keys"]:
-                        if key not in changes and key in state:
-                            changes[key] = state[key]
-            
-            return changes
-    
-    def save_state(self, filename: Optional[str] = None, compress: Optional[bool] = None) -> Path:
-        """
-        Save current state to file
-        
-        Args:
-            filename: Optional filename to save state to
-            compress: Whether to compress the state (auto-determined by size if None)
-        
-        Returns:
-            Path to saved state file
-        
-        Raises:
-            StateManagerError: If there's an error saving the state
-        """
-        try:
-            with self._lock:
-                # Create directory if it doesn't exist
-                self.save_directory.mkdir(parents=True, exist_ok=True)
-                
-                # Generate filename if not provided
-                if not filename:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    stage = self.current_state.get("developmental_stage", "unknown")
-                    filename = f"mind_state_{stage}_{timestamp}.json"
-                
-                # Determine if compression should be used
-                state_json = json.dumps(self.current_state, indent=2, default=str)
-                if compress is None:
-                    compress = len(state_json) > self.compression_threshold
-                
-                # Save to file
-                file_path = self.save_directory / filename
-                if compress:
-                    if not filename.endswith('.gz'):
-                        file_path = file_path.with_suffix('.json.gz')
-                    with gzip.open(file_path, 'wt', encoding='utf-8') as f:
-                        f.write(state_json)
-                else:
-                    with open(file_path, "w", encoding='utf-8') as f:
-                        f.write(state_json)
-                
-                # Create backup
-                self._create_backup(file_path)
-                
-                logger.info(f"Saved state to {file_path}")
-                return file_path
-        except Exception as e:
-            logger.error(f"Error saving state: {str(e)}")
-            raise StateManagerError(f"Error saving state: {str(e)}")
-    
-    def load_state(self, filepath: str) -> Dict[str, Any]:
-        """
-        Load state from file
-        
-        Args:
-            filepath: Path to state file
-        
-        Returns:
-            Loaded state
-        
-        Raises:
-            StateManagerError: If there's an error loading the state
-            FileNotFoundError: If the state file doesn't exist
-        """
-        try:
-            file_path = Path(filepath)
-            if not file_path.exists():
-                raise FileNotFoundError(f"State file not found: {filepath}")
-            
-            # Determine if file is compressed
-            is_compressed = filepath.endswith('.gz')
-            
-            # Load state
-            if is_compressed:
-                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                    loaded_state = json.load(f)
+        with self.state_lock:
+            if deep_copy:
+                # Use json to create a deep copy
+                return json.loads(json.dumps(self.state))
             else:
-                with open(file_path, "r", encoding='utf-8') as f:
-                    loaded_state = json.load(f)
-            
-            with self._lock:
-                # Update current state
-                self.current_state = loaded_state
-                
-                # Reset hashes
-                self._state_hashes = {}
-                for key, value in self.current_state.items():
-                    self._update_hash(key, value)
-                
-                # Add to history
-                history_entry = self.current_state.copy()
-                history_entry["_loaded_from"] = str(file_path)
-                self.state_history.append(history_entry)
-                
-                # Trim history if needed
-                if len(self.state_history) > self.max_history_size:
-                    self.state_history = self.state_history[-self.max_history_size:]
-                
-                logger.info(f"Loaded state from {file_path}")
-                return self.current_state
-        except FileNotFoundError:
-            raise
-        except Exception as e:
-            logger.error(f"Error loading state: {str(e)}")
-            raise StateManagerError(f"Error loading state: {str(e)}")
+                return self.state
     
-    def clear_state(self) -> None:
+    def update_system_runtime(self) -> None:
+        """Update the system runtime based on creation timestamp."""
+        with self.state_lock:
+            created_at = self.state["system"]["created_at"]
+            runtime = current_timestamp() - created_at
+            self.state["system"]["runtime"] = runtime
+            self.state["system"]["last_updated"] = current_timestamp()
+    
+    def update_state(self, path: str, value: Any) -> None:
         """
-        Clear the current state
+        Update a specific part of the state.
         
-        This resets the state to an empty dictionary but preserves history.
+        Args:
+            path: Dot-separated path to the state element (e.g., "development.age")
+            value: New value to set
+            
+        Raises:
+            StateError: If the path is invalid
         """
-        with self._lock:
-            self.current_state = {}
-            self.last_updated = datetime.now()
-            self._state_hashes = {}
+        parts = path.split('.')
+        
+        with self.state_lock:
+            # Navigate to the target dictionary
+            current = self.state
+            for i, part in enumerate(parts[:-1]):
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            
+            # Set the value
+            current[parts[-1]] = value
+            
+            # Update last_updated timestamp
+            self.state["system"]["last_updated"] = current_timestamp()
+            
+            # Notify observers
+            self._notify_observers()
     
-    def _has_changed(self, key: str, value: Any) -> bool:
-        """Check if a state value has changed using hash comparison"""
-        current_hash = self._calculate_hash(value)
-        previous_hash = self._state_hashes.get(key)
-        return previous_hash != current_hash
+    def get_state_value(self, path: str) -> Any:
+        """
+        Get a specific value from the state.
+        
+        Args:
+            path: Dot-separated path to the state element
+            
+        Returns:
+            The requested state value
+            
+        Raises:
+            StateError: If the path is invalid
+        """
+        parts = path.split('.')
+        
+        with self.state_lock:
+            # Navigate to the target value
+            current = self.state
+            for part in parts:
+                if part not in current:
+                    raise StateError(f"Invalid state path: {path}")
+                current = current[part]
+            
+            return current
     
-    def _update_hash(self, key: str, value: Any) -> None:
-        """Update the hash for a state value"""
-        self._state_hashes[key] = self._calculate_hash(value)
+    def register_module(self, module_id: ModuleID, module_state: Dict[str, Any]) -> None:
+        """
+        Register a module's state.
+        
+        Args:
+            module_id: ID of the module
+            module_state: Initial state for the module
+        """
+        with self.state_lock:
+            self.state["modules"][module_id] = module_state
+            self.state["system"]["last_updated"] = current_timestamp()
+            self._notify_observers()
     
-    def _calculate_hash(self, value: Any) -> str:
-        """Calculate a hash for a value"""
+    def update_module_state(self, module_id: ModuleID, state_updates: Dict[str, Any]) -> None:
+        """
+        Update a module's state.
+        
+        Args:
+            module_id: ID of the module
+            state_updates: State values to update
+            
+        Raises:
+            StateError: If the module is not registered
+        """
+        with self.state_lock:
+            if module_id not in self.state["modules"]:
+                raise StateError(f"Module not registered: {module_id}")
+            
+            # Update the module state
+            for key, value in state_updates.items():
+                self.state["modules"][module_id][key] = value
+            
+            self.state["system"]["last_updated"] = current_timestamp()
+            self._notify_observers()
+    
+    def update_developmental_age(self, new_age: Age) -> None:
+        """
+        Update the developmental age and stage.
+        
+        Args:
+            new_age: New developmental age
+        """
+        with self.state_lock:
+            self.state["development"]["age"] = new_age
+            
+            # Update developmental stage based on age
+            if 0.0 <= new_age < 0.1:
+                stage = DevelopmentalStage.PRENATAL
+            elif 0.1 <= new_age < 1.0:
+                stage = DevelopmentalStage.INFANT
+            elif 1.0 <= new_age < 3.0:
+                stage = DevelopmentalStage.CHILD
+            elif 3.0 <= new_age < 6.0:
+                stage = DevelopmentalStage.ADOLESCENT
+            else:  # new_age >= 6.0
+                stage = DevelopmentalStage.ADULT
+            
+            self.state["development"]["stage"] = stage.name
+            self.state["system"]["last_updated"] = current_timestamp()
+            self._notify_observers()
+    
+    def add_milestone(self, milestone: str) -> None:
+        """
+        Add an achieved developmental milestone.
+        
+        Args:
+            milestone: Name of the milestone achieved
+        """
+        with self.state_lock:
+            milestones = self.state["development"]["milestones_achieved"]
+            if milestone not in milestones:
+                milestones.append(milestone)
+                self.state["system"]["last_updated"] = current_timestamp()
+                self._notify_observers()
+    
+    def add_observer(self, observer: Callable[[StateDict], None]) -> None:
+        """
+        Add a state observer function.
+        
+        Args:
+            observer: Function to call when state changes
+        """
+        with self.state_lock:
+            if observer not in self.state_observers:
+                self.state_observers.append(observer)
+    
+    def remove_observer(self, observer: Callable[[StateDict], None]) -> None:
+        """
+        Remove a state observer.
+        
+        Args:
+            observer: Observer function to remove
+        """
+        with self.state_lock:
+            if observer in self.state_observers:
+                self.state_observers.remove(observer)
+    
+    def _notify_observers(self) -> None:
+        """Notify all state observers of a state change."""
+        state_copy = self.get_state(deep_copy=True)
+        for observer in self.state_observers:
+            try:
+                observer(state_copy)
+            except Exception as e:
+                self.logger.error(f"Error in state observer: {str(e)}")
+    
+    def save_state(self, description: Optional[str] = None) -> str:
+        """
+        Save the current state to disk.
+        
+        Args:
+            description: Optional description of the state
+            
+        Returns:
+            Path to the saved state file
+        """
+        with self.state_lock:
+            # Create state to save with metadata
+            save_state = self.get_state(deep_copy=True)
+            save_state["_meta"] = {
+                "saved_at": current_timestamp(),
+                "description": description or "Automatic state save",
+            }
+            
+            # Generate filename based on timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"state_{timestamp}.json"
+            filepath = os.path.join(self.storage_dir, filename)
+            
+            # Save state to file
+            with open(filepath, 'w') as f:
+                json.dump(save_state, f, indent=2)
+            
+            self.logger.info(f"State saved to {filepath}")
+            return filepath
+    
+    def load_state(self, filepath: str) -> None:
+        """
+        Load state from disk.
+        
+        Args:
+            filepath: Path to the state file
+            
+        Raises:
+            StateError: If the file is not found or invalid
+        """
+        if not os.path.exists(filepath):
+            raise StateError(f"State file not found: {filepath}")
+        
         try:
-            value_str = json.dumps(value, sort_keys=True, default=str)
-            return hashlib.md5(value_str.encode()).hexdigest()
-        except:
-            return hashlib.md5(str(value).encode()).hexdigest()
-    
-    def _create_backup(self, file_path: Path) -> None:
-        """Create a backup of the state file"""
-        try:
-            backup_path = self.backup_directory / file_path.name
-            if file_path.exists():
-                with open(file_path, 'rb') as src, open(backup_path, 'wb') as dst:
-                    dst.write(src.read())
+            with open(filepath, 'r') as f:
+                loaded_state = json.load(f)
+            
+            # Remove metadata
+            if "_meta" in loaded_state:
+                del loaded_state["_meta"]
+            
+            with self.state_lock:
+                self.state = loaded_state
+                self.state["system"]["last_updated"] = current_timestamp()
+                self._notify_observers()
+            
+            self.logger.info(f"State loaded from {filepath}")
+        
         except Exception as e:
-            logger.warning(f"Failed to create backup: {str(e)}")
+            raise StateError(f"Failed to load state: {str(e)}")
+    
+    def list_saved_states(self) -> List[Dict[str, Any]]:
+        """
+        List all saved states.
+        
+        Returns:
+            List of saved state metadata
+        """
+        result = []
+        
+        if not os.path.exists(self.storage_dir):
+            return result
+        
+        for filename in os.listdir(self.storage_dir):
+            if filename.endswith('.json') and filename.startswith('state_'):
+                filepath = os.path.join(self.storage_dir, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        state_data = json.load(f)
+                    
+                    # Extract metadata
+                    meta = state_data.get("_meta", {})
+                    saved_at = meta.get("saved_at", 0)
+                    description = meta.get("description", "Unknown")
+                    
+                    # Add to result
+                    result.append({
+                        "filename": filename,
+                        "filepath": filepath,
+                        "saved_at": saved_at,
+                        "saved_at_human": datetime.fromtimestamp(saved_at).strftime("%Y-%m-%d %H:%M:%S"),
+                        "description": description,
+                        "age": state_data.get("development", {}).get("age", 0),
+                        "stage": state_data.get("development", {}).get("stage", "UNKNOWN"),
+                    })
+                
+                except Exception as e:
+                    self.logger.error(f"Error reading state file {filename}: {str(e)}")
+        
+        # Sort by saved_at, newest first
+        result.sort(key=lambda x: x["saved_at"], reverse=True)
+        return result
+    
+    def reset_state(self) -> None:
+        """Reset the state to initial values."""
+        with self.state_lock:
+            self.state = self._create_initial_state()
+            self._notify_observers()
+            self.logger.info("State reset to initial values")
+
+
+# Singleton instance
+_state_manager_instance = None
+_state_manager_lock = threading.RLock()
+
+def get_state_manager(storage_dir: str = "storage/states") -> StateManager:
+    """
+    Get the global StateManager instance (singleton).
+    
+    Args:
+        storage_dir: Directory for storing state files
+        
+    Returns:
+        Global StateManager instance
+    """
+    global _state_manager_instance
+    
+    with _state_manager_lock:
+        if _state_manager_instance is None:
+            _state_manager_instance = StateManager(storage_dir=storage_dir)
+            
+    return _state_manager_instance

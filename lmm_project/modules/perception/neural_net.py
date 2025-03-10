@@ -1,619 +1,500 @@
-import torch 
-import torch.nn as nn 
-import torch.nn.functional as F
-import numpy as np
-from typing import Dict, List, Any, Optional, Union, Tuple
-import uuid
 import logging
-from datetime import datetime
-from collections import deque
+from typing import Dict, List, Optional, Tuple, Any, Union
+import numpy as np
+from uuid import UUID, uuid4
 
-logger = logging.getLogger(__name__)
+from lmm_project.utils.logging_utils import get_module_logger
+from lmm_project.neural_substrate.neural_network import NeuralNetwork
+from lmm_project.neural_substrate.neural_cluster import NeuralCluster
+from lmm_project.neural_substrate.activation_functions import ActivationFunction
+from lmm_project.core.event_bus import EventBus, Event
 
-class PerceptionNetwork(nn.Module): 
-    """
-    Neural network for processing textual perceptual inputs.
-    
-    This network processes text-based perceptual input through multiple stages:
-    1. Feature extraction - Converts text tokens to feature vectors
-    2. Pattern encoding - Encodes features into pattern representations
-    3. Novelty detection - Identifies novel or unexpected inputs
-    4. Salience estimation - Determines the importance of the input
-    
-    The network adapts its behavior based on developmental level.
-    """
-    def __init__(
-        self, 
-        input_dim: int = 64, 
-        hidden_dim: int = 128, 
-        pattern_dim: int = 32,
-        developmental_level: float = 0.0
-    ):
-        super().__init__() 
-        
-        # Store configuration
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.pattern_dim = pattern_dim
-        self.developmental_level = developmental_level
-        
-        # Feature extraction network
-        self.feature_extractor = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-        )
-        
-        # Pattern encoding network
-        self.pattern_encoder = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_dim // 2, pattern_dim)
-        )
-        
-        # Novelty detection network
-        self.novelty_detector = nn.Sequential(
-            nn.Linear(pattern_dim, hidden_dim // 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim // 4, 1),
-            nn.Sigmoid()
-        )
-        
-        # Salience estimation network
-        self.salience_estimator = nn.Sequential(
-            nn.Linear(pattern_dim, hidden_dim // 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim // 4, 1),
-            nn.Sigmoid()
-        )
-        
-        # Pattern memory for tracking known patterns
-        self.pattern_memory = {}
-        
-        # Recent patterns for novelty assessment
-        self.recent_patterns = deque(maxlen=50)
-        
-        # Apply developmental scaling to adjust network behavior
-        self._apply_developmental_scaling()
-    
-    def _apply_developmental_scaling(self):
-        """
-        Apply developmental level-based scaling to network parameters
-        
-        At lower developmental levels:
-        - Higher dropout rates (simulating less reliable processing)
-        - Lower sensitivity to subtle patterns
-        - Stronger activation thresholds
-        
-        At higher developmental levels:
-        - Lower dropout rates (more reliable processing)
-        - Higher sensitivity to subtle patterns
-        - More nuanced activation thresholds
-        """
-        # Scale dropout based on development (higher dropout at lower development)
-        dropout_scale = max(0.1, 0.5 - (self.developmental_level * 0.4))
-        
-        # Update dropout layers
-        for module in self.feature_extractor:
-            if isinstance(module, nn.Dropout):
-                module.p = dropout_scale
-        
-    def update_developmental_level(self, new_level: float):
-        """
-        Update the network's developmental level and adjust parameters
-        
-        Args:
-            new_level: New developmental level (0.0 to 1.0)
-        """
-        if 0.0 <= new_level <= 1.0 and new_level != self.developmental_level:
-            prev_level = self.developmental_level
-            self.developmental_level = new_level
-            
-            # Adjust network parameters based on new level
-            self._apply_developmental_scaling()
-            
-            # Log significant developmental changes
-            if int(new_level * 10) > int(prev_level * 10):
-                logger.info(f"Perception network advanced to developmental level {new_level:.2f}")
-                
-            return True
-        return False
-        
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        Forward pass through the perception network
-        
-        Args:
-            x: Input tensor of shape (batch_size, input_dim)
-            
-        Returns:
-            Dictionary with:
-                features: Extracted features
-                patterns: Encoded patterns
-                novelty: Novelty scores
-                salience: Salience scores
-        """
-        # Extract features
-        features = self.feature_extractor(x)
-        
-        # Encode patterns
-        patterns = self.pattern_encoder(features)
-        
-        # Detect novelty
-        novelty = self.novelty_detector(patterns)
-        
-        # Estimate salience
-        salience = self.salience_estimator(patterns)
-        
-        # Apply developmental scaling to outputs
-        if self.developmental_level < 0.3:
-            # At early developmental stages, reduce sensitivity to subtle distinctions
-            patterns = torch.tanh(patterns * (0.5 + self.developmental_level))
-            
-            # Make novelty detection more binary (less nuanced)
-            novelty = torch.round(novelty * 2) / 2
-        
-        return {
-            "features": features,
-            "patterns": patterns,
-            "novelty": novelty,
-            "salience": salience
-        }
-    
-    def detect_patterns(
-        self, 
-        input_vector: torch.Tensor, 
-        known_patterns: Optional[Dict[str, torch.Tensor]] = None,
-        activation_threshold: float = 0.3
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, torch.Tensor]]:
-        """
-        Detect patterns in the input vector
-        
-        Args:
-            input_vector: Input vector to detect patterns in
-            known_patterns: Dictionary of known patterns
-            activation_threshold: Threshold for pattern activation
-            
-        Returns:
-            Tuple of (activated_patterns, updated_known_patterns)
-        """
-        # Process input through network
-        with torch.no_grad():
-            output = self.forward(input_vector)
-            
-        # Get encoded pattern
-        pattern_vector = output["patterns"]
-        
-        # Create pattern memory if none provided
-        if known_patterns is None:
-            known_patterns = self.pattern_memory
-            
-        # List for storing activated patterns
-        activated_patterns = []
-        
-        # Calculate similarities with known patterns
-        max_similarity = 0.0
-        most_similar_pattern = None
-        
-        for pattern_id, stored_pattern in known_patterns.items():
-            # Calculate cosine similarity - fix the dimension issue
-            # Ensure both tensors are properly shaped for cosine similarity
-            pattern_vector_flat = pattern_vector.view(1, -1)  # Shape: [1, dim]
-            stored_pattern_flat = stored_pattern.view(1, -1)  # Shape: [1, dim]
-            
-            # Calculate cosine similarity between the flattened vectors
-            similarity = F.cosine_similarity(
-                pattern_vector_flat, 
-                stored_pattern_flat
-            ).item()
-            
-            if similarity > max_similarity:
-                max_similarity = similarity
-                most_similar_pattern = pattern_id
-                
-            # If similarity exceeds threshold, pattern is activated
-            if similarity > activation_threshold:
-                activated_patterns.append({
-                    "pattern_id": pattern_id,
-                    "activation": similarity,
-                    "novelty": 1.0 - similarity
-                })
-                
-        # Adjust threshold based on developmental level
-        creation_threshold = max(0.1, 0.6 - (self.developmental_level * 0.3))
-        
-        # If no patterns were significantly activated, create a new one
-        if max_similarity < creation_threshold:
-            new_pattern_id = str(uuid.uuid4())
-            known_patterns[new_pattern_id] = pattern_vector.detach().clone()
-            
-            activated_patterns.append({
-                "pattern_id": new_pattern_id,
-                "activation": 1.0,  # New pattern is fully activated
-                "novelty": 1.0,     # New pattern is maximally novel
-                "is_new": True
-            })
-            
-            # Add to recent patterns
-            self.recent_patterns.append({
-                "pattern_id": new_pattern_id,
-                "timestamp": datetime.now(),
-                "vector": pattern_vector.detach().clone()
-            })
-            
-        # Update the pattern memory
-        self.pattern_memory = known_patterns
-            
-        return activated_patterns, known_patterns
-    
-    def to_device(self, device: torch.device):
-        """Move the model and all tensors to the specified device"""
-        self.to(device)
-        # Move all stored patterns to the device
-        for pattern_id, pattern in self.pattern_memory.items():
-            self.pattern_memory[pattern_id] = pattern.to(device)
-            
-    def get_state(self) -> Dict[str, Any]:
-        """Return the current state of the perception network"""
-        return {
-            "developmental_level": self.developmental_level,
-            "input_dim": self.input_dim,
-            "hidden_dim": self.hidden_dim,
-            "pattern_dim": self.pattern_dim,
-            "pattern_count": len(self.pattern_memory),
-            "recent_pattern_count": len(self.recent_patterns)
-        }
-            
+from .models import (
+    SensoryModality,
+    ProcessedInput,
+    RecognizedPattern,
+    PatternType,
+    PerceptionConfig
+)
 
-class TemporalPatternNetwork(nn.Module):
+# Initialize logger
+logger = get_module_logger("modules.perception.neural_net")
+
+class PerceptionNetwork:
     """
-    Neural network for processing temporal sequences of patterns
-    
-    This network processes sequences of pattern vectors to detect
-    temporal patterns and predict future patterns.
+    Neural network for perception processing that builds on the neural substrate.
+    Provides specialized networks for different perception tasks like
+    feature detection, pattern recognition, and sensory processing.
     """
     
     def __init__(
         self, 
-        input_dim: int = 32, 
-        hidden_dim: int = 64,
-        sequence_length: int = 5,
-        developmental_level: float = 0.0
+        event_bus: EventBus,
+        config: Optional[PerceptionConfig] = None,
+        developmental_age: float = 0.0
     ):
         """
-        Initialize the temporal pattern network
+        Initialize the perception neural network.
         
         Args:
-            input_dim: Dimension of input pattern vectors
-            hidden_dim: Dimension of hidden layer
-            sequence_length: Maximum sequence length to process
-            developmental_level: Initial developmental level
+            event_bus: The event bus for communication
+            config: Configuration for the network
+            developmental_age: Current developmental age of the mind
         """
-        super().__init__()
+        self._config = config or PerceptionConfig()
+        self._event_bus = event_bus
+        self._developmental_age = developmental_age
         
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.sequence_length = sequence_length
-        self.developmental_level = developmental_level
+        # Networks for different modalities
+        self._modality_networks: Dict[SensoryModality, NeuralNetwork] = {}
         
-        # LSTM for sequence processing
-        self.lstm = nn.LSTM(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=1,
-            batch_first=True
-        )
+        # Pattern recognition networks for different pattern types
+        self._pattern_networks: Dict[PatternType, NeuralNetwork] = {}
         
-        # Temporal pattern extraction
-        self.pattern_extractor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, input_dim)
-        )
+        # Feature detector clusters
+        self._feature_detectors: Dict[str, NeuralCluster] = {}
         
-        # Next pattern prediction
-        self.predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, input_dim)
-        )
+        # Create initial networks based on developmental age
+        self._initialize_networks()
         
-        # Device for computation
-        self.device = torch.device('cpu')
+        # Register event handlers
+        self._register_event_handlers()
         
-    def to_device(self, device: torch.device):
-        """Move the network to the specified device"""
-        self.device = device
-        self.to(device)
-        return self
-        
-    def forward(self, sequence: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        Process a sequence of pattern vectors
-        
-        Args:
-            sequence: Tensor of shape [batch_size, sequence_length, input_dim]
-            
-        Returns:
-            Dictionary with temporal pattern and next prediction
-        """
-        # Ensure sequence is on the correct device
-        sequence = sequence.to(self.device)
-        
-        # Ensure LSTM and other components are on the same device
-        self.lstm = self.lstm.to(self.device)
-        self.pattern_extractor = self.pattern_extractor.to(self.device)
-        self.predictor = self.predictor.to(self.device)
-        
-        # Process through LSTM
-        lstm_out, (hidden, cell) = self.lstm(sequence)
-        
-        # Extract temporal pattern from final hidden state
-        temporal_pattern = self.pattern_extractor(hidden[-1])
-        
-        # Predict next pattern
-        next_prediction = self.predictor(hidden[-1])
-        
-        return {
-            "temporal_pattern": temporal_pattern,
-            "next_prediction": next_prediction,
-            "hidden_state": hidden[-1]
-        }
-        
-    def update_developmental_level(self, level: float):
-        """Update the developmental level of the network"""
-        self.developmental_level = level
-        
-    def get_state(self) -> Dict[str, Any]:
-        """Return the current state of the temporal network"""
-        return {
-            "developmental_level": self.developmental_level,
-            "input_dim": self.input_dim,
-            "hidden_dim": self.hidden_dim,
-            "sequence_length": self.sequence_length
-        }
-
-class NeuralPatternDetector:
-    """
-    Neural network-based pattern detector
+        logger.info(f"Perception neural network initialized with age {developmental_age}")
     
-    Uses neural networks to detect patterns in input data and
-    maintain a memory of known patterns.
-    """
+    def _register_event_handlers(self) -> None:
+        """Register handlers for relevant events"""
+        self._event_bus.subscribe("sensory_input_processed", self._handle_processed_input)
+        self._event_bus.subscribe("pattern_recognized", self._handle_recognized_pattern)
+        self._event_bus.subscribe("development_age_updated", self._handle_age_update)
     
-    def __init__(
-        self, 
-        vector_dim: int = 32,
-        developmental_level: float = 0.0,
-        device: Optional[torch.device] = None
-    ):
+    def _initialize_networks(self) -> None:
+        """Initialize neural networks based on developmental age"""
+        # Create networks for active modalities
+        for modality in self._config.default_modalities:
+            self._create_modality_network(modality)
+            
+        # Create pattern networks appropriate for age
+        if self._developmental_age >= 0.1:
+            self._create_pattern_network(PatternType.SEMANTIC)
+            
+        if self._developmental_age >= 0.2:
+            self._create_pattern_network(PatternType.ASSOCIATIVE)
+            
+        if self._developmental_age >= 0.3:
+            self._create_pattern_network(PatternType.TEMPORAL)
+    
+    def _create_modality_network(self, modality: SensoryModality) -> None:
         """
-        Initialize the neural pattern detector
+        Create a neural network for a specific sensory modality.
         
         Args:
-            vector_dim: Dimension of pattern vectors
-            developmental_level: Initial developmental level
-            device: Device to use for computation (CPU or CUDA)
+            modality: The sensory modality to create a network for
         """
-        self.vector_dim = vector_dim
-        self.developmental_level = developmental_level
-        
-        # Set device (CPU or CUDA if available)
-        self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Initialize networks
-        self.pattern_encoder = PatternEncoder(input_dim=vector_dim).to(self.device)
-        self.temporal_network = TemporalPatternNetwork(
-            input_dim=vector_dim,
-            developmental_level=developmental_level
-        ).to_device(self.device)
-        
-        # Storage for known patterns
-        self.known_patterns = []
-        self.pattern_vectors = []
-        
-        # Pattern activation threshold
-        self.activation_threshold = 0.2
-        
-        # Initialize pattern sequence for temporal processing
-        self.pattern_sequence = []
-        self.max_sequence_length = 5
-        
-        # Logger
-        self.logger = logging.getLogger(__name__)
-        
-    def update_developmental_level(self, level: float):
-        """Update the developmental level of all components"""
-        if 0.0 <= level <= 1.0:
-            self.developmental_level = level
-            self.temporal_network.update_developmental_level(level)
+        # Skip if network already exists
+        if modality in self._modality_networks:
+            return
             
-            # Adjust activation threshold based on developmental level
-            # Lower threshold as development increases (more sensitive)
-            self.activation_threshold = max(0.1, 0.3 - (level * 0.2))
-            
-            return True
-        return False
+        # Configure network size based on developmental age
+        # (more mature networks have more neurons and connections)
+        age_factor = min(1.0, max(0.1, self._developmental_age + 0.1))
         
-    def encode_pattern(self, input_vector: torch.Tensor) -> torch.Tensor:
+        # Create a neural network for this modality
+        network = NeuralNetwork(
+            name=f"perception_{modality.value}",
+            input_size=int(10 * age_factor),
+            hidden_size=int(20 * age_factor),
+            output_size=int(10 * age_factor),
+            activation=ActivationFunction.RELU,
+            learning_rate=0.01,
+            batch_size=1
+        )
+        
+        # Store the network
+        self._modality_networks[modality] = network
+        
+        logger.info(f"Created neural network for {modality.value} modality")
+    
+    def _create_pattern_network(self, pattern_type: PatternType) -> None:
         """
-        Encode an input vector into a pattern vector
+        Create a neural network for a specific pattern type.
         
         Args:
-            input_vector: Input vector to encode
-            
-        Returns:
-            Encoded pattern vector
+            pattern_type: The pattern type to create a network for
         """
-        # Ensure input is on the correct device
-        input_vector = input_vector.to(self.device)
-        
-        # Encode the pattern
-        with torch.no_grad():
-            pattern_vector = self.pattern_encoder(input_vector)
+        # Skip if network already exists
+        if pattern_type in self._pattern_networks:
+            return
             
-        return pattern_vector
+        # Configure network size based on developmental age
+        age_factor = min(1.0, max(0.1, self._developmental_age + 0.1))
         
-    def detect_patterns(self, input_vector: torch.Tensor, activation_threshold: float = None) -> List[Dict[str, Any]]:
+        # Create a neural network for this pattern type
+        network = NeuralNetwork(
+            name=f"perception_pattern_{pattern_type.value}",
+            input_size=int(15 * age_factor),
+            hidden_size=int(25 * age_factor),
+            output_size=int(10 * age_factor),
+            activation=ActivationFunction.SIGMOID,
+            learning_rate=0.01,
+            batch_size=1
+        )
+        
+        # Store the network
+        self._pattern_networks[pattern_type] = network
+        
+        logger.info(f"Created neural network for {pattern_type.value} pattern type")
+    
+    def _create_feature_detector(self, feature_name: str, modality: SensoryModality) -> None:
         """
-        Detect patterns in the input vector
+        Create a neural cluster for detecting a specific feature.
         
         Args:
-            input_vector: Input vector to detect patterns in
-            activation_threshold: Optional override for activation threshold
-            
-        Returns:
-            List of detected patterns with confidence scores
+            feature_name: The name of the feature to detect
+            modality: The sensory modality of the feature
         """
-        if activation_threshold is None:
-            activation_threshold = self.activation_threshold
-            
-        # Ensure input is on the correct device
-        input_vector = input_vector.to(self.device)
+        feature_key = f"{modality.value}:{feature_name}"
         
-        # Encode the pattern
-        pattern_vector = self.encode_pattern(input_vector)
+        # Skip if detector already exists
+        if feature_key in self._feature_detectors:
+            return
+            
+        # Configure cluster size based on developmental age
+        age_factor = min(1.0, max(0.1, self._developmental_age + 0.1))
+        size = int(5 * age_factor)
         
-        detected_patterns = []
+        # Create a neural cluster for this feature detector
+        cluster = NeuralCluster(
+            name=f"feature_detector_{feature_key}",
+            size=size,
+            activation=ActivationFunction.SIGMOID,
+            inhibitory_ratio=0.2
+        )
         
-        # Compare with known patterns
-        for i, stored_pattern in enumerate(self.pattern_vectors):
-            # Ensure stored pattern is on the correct device
-            stored_pattern = stored_pattern.to(self.device)
-            
-            # Reshape tensors for cosine similarity calculation
-            pattern_vector_flat = pattern_vector.view(1, -1)
-            stored_pattern_flat = stored_pattern.view(1, -1)
-            
-            # Calculate similarity
-            similarity = F.cosine_similarity(pattern_vector_flat, stored_pattern_flat)
-            confidence = similarity.item()
-            
-            if confidence >= activation_threshold:
-                detected_patterns.append({
-                    "pattern_id": i,
-                    "pattern_name": self.known_patterns[i]["name"],
-                    "confidence": confidence,
-                    "pattern_type": "neural"
-                })
+        # Store the cluster
+        self._feature_detectors[feature_key] = cluster
+        
+        logger.debug(f"Created feature detector for {feature_key}")
+    
+    def _handle_processed_input(self, event: Event) -> None:
+        """
+        Handle a processed input event by activating relevant neural networks.
+        
+        Args:
+            event: The event containing the processed input
+        """
+        try:
+            # Extract processed input from event
+            processed_input_data = event.data.get("processed_input")
+            if not processed_input_data:
+                return
                 
-        return detected_patterns
-        
-    def process_temporal_sequence(self, pattern_vector: torch.Tensor) -> Dict[str, Any]:
-        """
-        Process a pattern vector through the temporal network
-        
-        Args:
-            pattern_vector: Pattern vector to process
+            # Create processed input model (already validated in pattern recognizer)
+            processed_input = ProcessedInput(**processed_input_data)
             
-        Returns:
-            Temporal processing results
-        """
-        # Ensure pattern vector is on the correct device
-        pattern_vector = pattern_vector.to(self.device)
-        
-        # Add to sequence
-        self.pattern_sequence.append(pattern_vector)
-        
-        # Keep sequence at max length
-        if len(self.pattern_sequence) > self.max_sequence_length:
-            self.pattern_sequence = self.pattern_sequence[-self.max_sequence_length:]
+            # Process in the appropriate modality network
+            self._process_in_modality_network(processed_input)
             
-        # Process sequence if we have enough patterns
-        if len(self.pattern_sequence) >= 2:
-            # Stack sequence into a batch
-            sequence_tensor = torch.stack(self.pattern_sequence).unsqueeze(0)
-            
-            # Process through temporal network
-            with torch.no_grad():
-                temporal_results = self.temporal_network(sequence_tensor)
+            # Create feature detectors for new features
+            for feature in processed_input.features:
+                self._create_feature_detector(feature.name, feature.modality)
                 
-            return temporal_results
-            
-        return {"temporal_pattern": None, "next_prediction": None}
-        
-    def create_pattern(self, pattern_vector: torch.Tensor, pattern_name: str) -> Dict[str, Any]:
+            # Activate feature detectors
+            self._activate_feature_detectors(processed_input)
+                
+        except Exception as e:
+            logger.error(f"Error processing input in neural network: {e}")
+    
+    def _handle_recognized_pattern(self, event: Event) -> None:
         """
-        Create a new pattern from the input vector
+        Handle a recognized pattern event by reinforcing neural pathways.
         
         Args:
-            pattern_vector: Vector representation of the pattern
-            pattern_name: Name/identifier for the pattern
+            event: The event containing the recognized pattern
+        """
+        try:
+            # Extract pattern from event
+            pattern_data = event.data.get("pattern")
+            if not pattern_data:
+                return
+                
+            # Create pattern model
+            pattern = RecognizedPattern(**pattern_data)
+            
+            # Process in the appropriate pattern network
+            self._process_in_pattern_network(pattern)
+                
+        except Exception as e:
+            logger.error(f"Error processing pattern in neural network: {e}")
+    
+    def _handle_age_update(self, event: Event) -> None:
+        """
+        Handle a developmental age update event by updating networks.
+        
+        Args:
+            event: The event containing the new age
+        """
+        new_age = event.data.get("age")
+        if new_age is not None and isinstance(new_age, (int, float)):
+            old_age = self._developmental_age
+            self._developmental_age = float(new_age)
+            
+            # Check if we need to create new networks based on age
+            if old_age < 0.1 <= self._developmental_age:
+                self._create_pattern_network(PatternType.SEMANTIC)
+                
+            if old_age < 0.2 <= self._developmental_age:
+                self._create_pattern_network(PatternType.ASSOCIATIVE)
+                
+            if old_age < 0.3 <= self._developmental_age:
+                self._create_pattern_network(PatternType.TEMPORAL)
+                
+            if old_age < 0.5 <= self._developmental_age:
+                self._create_pattern_network(PatternType.CATEGORICAL)
+                
+            if old_age < 0.7 <= self._developmental_age:
+                if self._config.enable_emotional_processing:
+                    self._create_pattern_network(PatternType.EMOTIONAL)
+            
+            logger.debug(f"Updated developmental age to {self._developmental_age}")
+    
+    def _process_in_modality_network(self, processed_input: ProcessedInput) -> None:
+        """
+        Process an input in the appropriate modality network.
+        
+        Args:
+            processed_input: The processed input to process
+        """
+        # Skip if we don't have a network for this modality
+        if processed_input.modality not in self._modality_networks:
+            self._create_modality_network(processed_input.modality)
+            
+        # Get the network for this modality
+        network = self._modality_networks[processed_input.modality]
+        
+        # Prepare input vector
+        input_vector = self._create_input_vector(processed_input)
+        
+        # Process in the network
+        try:
+            # Forward pass
+            output = network.forward(input_vector)
+            
+            # Backward pass (learning) - simple target is just the input for now
+            # (autoencoder-like behavior for early developmental stages)
+            target = input_vector
+            network.backward(target)
+            
+            # Publish neural activation event
+            self._publish_neural_activation_event(
+                network_name=network.name,
+                activation_level=float(np.mean(output))
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in neural network processing: {e}")
+    
+    def _process_in_pattern_network(self, pattern: RecognizedPattern) -> None:
+        """
+        Process a recognized pattern in the appropriate pattern network.
+        
+        Args:
+            pattern: The recognized pattern to process
+        """
+        # Skip if we don't have a network for this pattern type
+        if pattern.pattern_type not in self._pattern_networks:
+            return
+            
+        # Get the network for this pattern type
+        network = self._pattern_networks[pattern.pattern_type]
+        
+        # Prepare input vector from pattern
+        input_vector = self._create_pattern_vector(pattern)
+        
+        # Process in the network
+        try:
+            # Forward pass
+            output = network.forward(input_vector)
+            
+            # Backward pass (learning)
+            # Use confidence as a learning signal
+            target = np.ones_like(output) * pattern.confidence
+            network.backward(target)
+            
+            # Publish neural activation event
+            self._publish_neural_activation_event(
+                network_name=network.name,
+                activation_level=float(np.mean(output))
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in pattern network processing: {e}")
+    
+    def _activate_feature_detectors(self, processed_input: ProcessedInput) -> None:
+        """
+        Activate feature detectors for the features in a processed input.
+        
+        Args:
+            processed_input: The processed input containing features
+        """
+        # Activate detectors for each feature
+        for feature in processed_input.features:
+            feature_key = f"{feature.modality.value}:{feature.name}"
+            
+            # Skip if we don't have a detector for this feature
+            if feature_key not in self._feature_detectors:
+                continue
+                
+            # Get the detector for this feature
+            detector = self._feature_detectors[feature_key]
+            
+            # Activate the detector with activation level proportional to feature value
+            activation_level = abs(feature.value)
+            detector.activate(activation_level)
+            
+            # Publish neural activation event
+            self._publish_neural_activation_event(
+                network_name=detector.name,
+                activation_level=activation_level
+            )
+    
+    def _create_input_vector(self, processed_input: ProcessedInput) -> np.ndarray:
+        """
+        Create an input vector from a processed input.
+        
+        Args:
+            processed_input: The processed input to create a vector from
             
         Returns:
-            Created pattern information
+            Input vector as a numpy array
         """
-        # Ensure pattern vector is on the correct device
-        pattern_vector = pattern_vector.to(self.device)
+        # Get the network for this modality
+        network = self._modality_networks[processed_input.modality]
         
-        # Create pattern entry
-        pattern = {
-            "name": pattern_name,
-            "created_at": datetime.now().isoformat(),
-            "developmental_level": self.developmental_level,
-            "vector_dim": self.vector_dim
+        # Create a vector of the correct size for this network
+        vector = np.zeros(network.input_size)
+        
+        # Fill the vector with feature values if available
+        for i, feature in enumerate(processed_input.features):
+            if i < network.input_size:
+                vector[i] = feature.value
+        
+        # If we have a context vector, use it to populate remaining elements
+        if processed_input.context_vector and network.input_size > len(processed_input.features):
+            cv = np.array(processed_input.context_vector)
+            # Normalize to range 0-1
+            cv_norm = (cv - cv.min()) / (cv.max() - cv.min() + 1e-10)
+            # Resize to fit available space
+            remaining_size = network.input_size - len(processed_input.features)
+            if len(cv) > remaining_size:
+                # Take a sampling of the context vector to fit
+                stride = len(cv) // remaining_size
+                samples = cv_norm[::stride][:remaining_size]
+            else:
+                # Pad with zeros if context vector is smaller
+                samples = np.pad(cv_norm, (0, remaining_size - len(cv)))
+                
+            # Add to the input vector
+            vector[len(processed_input.features):] = samples
+        
+        return vector
+    
+    def _create_pattern_vector(self, pattern: RecognizedPattern) -> np.ndarray:
+        """
+        Create an input vector from a recognized pattern.
+        
+        Args:
+            pattern: The recognized pattern to create a vector from
+            
+        Returns:
+            Input vector as a numpy array
+        """
+        # Get the network for this pattern type
+        network = self._pattern_networks[pattern.pattern_type]
+        
+        # Create a vector of the correct size for this network
+        vector = np.zeros(network.input_size)
+        
+        # Fill the vector with feature values if available
+        for i, feature in enumerate(pattern.features):
+            if i < network.input_size:
+                vector[i] = feature.value
+        
+        # Add pattern confidence
+        if len(pattern.features) < network.input_size:
+            vector[len(pattern.features)] = pattern.confidence
+            
+        # Add pattern salience
+        if len(pattern.features) + 1 < network.input_size:
+            vector[len(pattern.features) + 1] = pattern.salience
+            
+        # If we have a vector representation, use it to populate remaining elements
+        if pattern.vector_representation and network.input_size > len(pattern.features) + 2:
+            vr = np.array(pattern.vector_representation)
+            # Normalize to range 0-1
+            vr_norm = (vr - vr.min()) / (vr.max() - vr.min() + 1e-10)
+            # Resize to fit available space
+            remaining_size = network.input_size - (len(pattern.features) + 2)
+            if len(vr) > remaining_size:
+                # Take a sampling of the vector to fit
+                stride = len(vr) // remaining_size
+                samples = vr_norm[::stride][:remaining_size]
+            else:
+                # Pad with zeros if vector is smaller
+                samples = np.pad(vr_norm, (0, remaining_size - len(vr)))
+                
+            # Add to the input vector
+            vector[len(pattern.features) + 2:] = samples
+        
+        return vector
+    
+    def _publish_neural_activation_event(self, network_name: str, activation_level: float) -> None:
+        """
+        Publish an event for neural network activation.
+        
+        Args:
+            network_name: The name of the activated network
+            activation_level: The level of activation
+        """
+        # Create event payload
+        payload = {
+            "network": network_name,
+            "activation": activation_level,
+            "developmental_age": self._developmental_age,
+            "timestamp": str(np.datetime64('now'))
         }
         
-        # Store pattern
-        self.known_patterns.append(pattern)
-        self.pattern_vectors.append(pattern_vector.detach().clone())
-        
-        return pattern
-        
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        # Create and publish event
+        event = Event(
+            type="neural_activation",
+            source="perception.neural_net",
+            data=payload
+        )
+        self._event_bus.publish(event)
+    
+    def get_modality_networks(self) -> Dict[SensoryModality, NeuralNetwork]:
         """
-        Process input data through the neural pattern detector
+        Get all modality networks.
         
-        Args:
-            input_data: Input data dictionary with vector representation
-            
         Returns:
-            Processing results with detected patterns
+            Dictionary of modality networks by modality
         """
-        # Extract input vector
-        if "vector" not in input_data:
-            self.logger.warning("No vector in input data for neural pattern detector")
-            return {"error": "No vector in input data"}
-            
-        input_vector = input_data["vector"]
+        return self._modality_networks.copy()
+    
+    def get_pattern_networks(self) -> Dict[PatternType, NeuralNetwork]:
+        """
+        Get all pattern networks.
         
-        # Ensure input vector is a tensor
-        if not isinstance(input_vector, torch.Tensor):
-            input_vector = torch.tensor(input_vector, dtype=torch.float32)
-            
-        # Ensure input vector is on the correct device
-        input_vector = input_vector.to(self.device)
+        Returns:
+            Dictionary of pattern networks by pattern type
+        """
+        return self._pattern_networks.copy()
+    
+    def get_feature_detectors(self) -> Dict[str, NeuralCluster]:
+        """
+        Get all feature detectors.
         
-        # Encode the pattern
-        pattern_vector = self.encode_pattern(input_vector)
-        
-        # Detect patterns
-        detected_patterns = self.detect_patterns(input_vector)
-        
-        # Process temporal sequence
-        temporal_results = self.process_temporal_sequence(pattern_vector)
-        
-        # Create a new pattern if none detected and developmental level is sufficient
-        if not detected_patterns and self.developmental_level >= 0.3:
-            # Generate a unique pattern name
-            pattern_name = f"neural_pattern_{len(self.known_patterns)}"
-            
-            # Create the pattern
-            new_pattern = self.create_pattern(pattern_vector, pattern_name)
-            
-            # Add to detected patterns with high confidence
-            detected_patterns.append({
-                "pattern_id": len(self.known_patterns) - 1,
-                "pattern_name": pattern_name,
-                "confidence": 1.0,  # New pattern has perfect match
-                "pattern_type": "neural",
-                "is_new": True
-            })
-            
-        return {
-            "detected_patterns": detected_patterns,
-            "temporal_results": temporal_results,
-            "developmental_level": self.developmental_level
-        }
+        Returns:
+            Dictionary of feature detectors by feature key
+        """
+        return self._feature_detectors.copy()

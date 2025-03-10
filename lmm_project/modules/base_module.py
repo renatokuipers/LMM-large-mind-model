@@ -1,360 +1,311 @@
 """
-Base module implementation for cognitive modules
+Base Module for the LMM Cognitive Architecture.
+
+This module defines the BaseModule class that all cognitive modules must inherit from.
+It provides standardized interfaces and functionality for module registration,
+event handling, developmental progression, and state management.
 """
-
+import abc
 import logging
-import uuid
-import json
-import os
-from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
 import time
-from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
-# Use TYPE_CHECKING to avoid runtime circular imports
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from lmm_project.core.event_bus import EventBus
-    from lmm_project.core.message import Message
+import numpy as np
+import torch
+from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+from lmm_project.core.event_bus import get_event_bus
+from lmm_project.core.message import Content, Message, TextContent
+from lmm_project.core.state_manager import get_state_manager
+from lmm_project.core.types import (
+    Age, DevelopmentalStage, MessageID, MessageType,
+    ModuleID, ModuleType, StateDict, Timestamp
+)
+from lmm_project.utils.logging_utils import get_module_logger
 
-class BaseModule:
+
+class ModuleConfig(BaseModel):
+    """Configuration settings for cognitive modules."""
+    enabled: bool = Field(default=True, description="Whether the module is enabled")
+    development_rate: float = Field(default=1.0, description="Rate of development relative to global rate")
+    initial_development_level: float = Field(default=0.0, description="Initial development level (0.0-1.0)")
+    learning_rate: float = Field(default=0.01, description="Base learning rate")
+    update_frequency: float = Field(default=1.0, description="Updates per second")
+    critical_period_sensitivity: float = Field(default=1.0, description="Sensitivity to critical periods")
+
+
+class BaseModule(abc.ABC):
     """
-    Base class for all cognitive modules
+    Base class for all cognitive modules in the LMM system.
     
-    This class defines the standard interface that all modules must implement
-    and provides common functionality for state management, development tracking,
-    and event communication.
+    Provides standardized interfaces for:
+    - Event subscription and publishing
+    - Developmental progression
+    - State management
+    - Neural processing
+    
+    All cognitive modules must inherit from this class and implement
+    the abstract methods.
     """
-    
-    # Developmental milestones for tracking progress
-    # Override this in subclasses with specific milestones
-    development_milestones = {
-        0.0: "Initialization",
-        0.2: "Basic functionality",
-        0.4: "Intermediate capabilities",
-        0.6: "Advanced processing",
-        0.8: "Complex integration",
-        1.0: "Fully developed"
-    }
     
     def __init__(
-        self, 
-        module_id: str,
-        module_type: str,
-        event_bus: Optional['EventBus'] = None,
-        development_level: float = 0.0,
-        **kwargs
+        self,
+        module_id: ModuleID,
+        module_type: ModuleType,
+        config: Optional[Dict[str, Any]] = None,
+        device: Optional[torch.device] = None
     ):
         """
-        Initialize the module
+        Initialize the base module.
         
-        Args:
-            module_id: Unique identifier for this module instance
-            module_type: Type of module (e.g., "perception", "attention")
-            event_bus: Event bus for publishing and subscribing to events
-            development_level: Initial developmental level (0.0 to 1.0)
+        Parameters:
+        module_id: Unique identifier for this module instance
+        module_type: Type of cognitive module
+        config: Module-specific configuration
+        device: Torch device to use for neural operations
         """
         self.module_id = module_id
         self.module_type = module_type
-        self.event_bus = event_bus
-        self.development_level = development_level
-        self.creation_time = datetime.now()
-        self.last_update_time = self.creation_time
+        self.logger = get_module_logger(f"{module_type.name.lower()}.{module_id}")
+        self.event_bus = get_event_bus()
+        self.state_manager = get_state_manager()
         
-        # Development tracking
-        self.development_history = [(self.creation_time, development_level)]
+        # Set up configuration
+        default_config = ModuleConfig().model_dump()
+        self.config = {**default_config, **(config or {})}
         
-        # Event subscription tracking
-        self._subscriptions = []
+        # Initialize development tracking
+        self._development_level = self.config["initial_development_level"]
+        self._last_update_time = time.time()
+        self._creation_timestamp = time.time()
+        self._developmental_stage = DevelopmentalStage.PRENATAL
         
-        # Module state
-        self._enabled = True
+        # Track subscribed message types for cleanup
+        self._subscribed_message_types: Set[MessageType] = set()
         
-        logger.debug(f"Initialized {module_type} module with ID {module_id}")
+        # Set up device for neural operations
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process input data and return results
+        # Initialize state
+        self._initialize_state()
         
-        This is the main entry point for module processing. Each module
-        must implement this method to handle its specific cognitive function.
-        
-        Args:
-            input_data: Dictionary containing input data
-            
-        Returns:
-            Dictionary containing processing results
-        """
-        # Base implementation does nothing
-        return {
-            "status": "not_implemented",
-            "module_id": self.module_id,
-            "module_type": self.module_type,
-            "development_level": self.development_level
-        }
-        
-    def update_development(self, amount: float) -> float:
-        """
-        Update the module's developmental level
-        
-        Args:
-            amount: Amount to increase development by
-            
-        Returns:
-            New developmental level
-        """
-        prev_level = self.development_level
-        self.development_level = min(1.0, max(0.0, self.development_level + amount))
-        now = datetime.now()
-        self.last_update_time = now
-        
-        # Track development history
-        self.development_history.append((now, self.development_level))
-        
-        # Log significant developmental changes and milestones
-        if int(self.development_level * 10) > int(prev_level * 10):
-            logger.info(f"Module {self.module_id} ({self.module_type}) development increased to {self.development_level:.2f}")
-            
-            # Check for milestones
-            for threshold, description in sorted(self.development_milestones.items()):
-                if prev_level < threshold <= self.development_level:
-                    logger.info(f"Development milestone: {self.module_id} reached {description}")
-                    
-                    # Broadcast milestone reached event if we have an event bus
-                    if self.event_bus:
-                        self.publish_message(
-                            "development_milestone", 
-                            {
-                                "module_id": self.module_id,
-                                "module_type": self.module_type,
-                                "milestone": description,
-                                "level": threshold,
-                                "timestamp": now.isoformat()
-                            }
-                        )
-                    break
-            
-        return self.development_level
+        # Log initialization
+        self.logger.info(
+            f"Initialized {self.module_type.name} module '{self.module_id}' at "
+            f"development level {self._development_level:.2f}"
+        )
     
-    def set_development_level(self, level: float) -> None:
-        """
-        Set the development level directly
-        
-        Useful for initialization or synchronizing components
-        
-        Args:
-            level: Development level to set (0.0 to 1.0)
-        """
-        level = min(1.0, max(0.0, level))
-        if level != self.development_level:
-            now = datetime.now()
-            self.development_level = level
-            self.last_update_time = now
-            self.development_history.append((now, level))
-        
-    def get_state(self) -> Dict[str, Any]:
-        """
-        Get the current state of the module
-        
-        Returns:
-            Dictionary containing module state
-        """
-        return {
-            "module_id": self.module_id,
-            "module_type": self.module_type,
-            "development_level": self.development_level,
-            "enabled": self._enabled,
-            "creation_time": self.creation_time.isoformat(),
-            "last_update_time": self.last_update_time.isoformat(),
-            "subscription_count": len(self._subscriptions)
+    def _initialize_state(self) -> None:
+        """Initialize the module's state in the state manager."""
+        initial_state = {
+            "development_level": self._development_level,
+            "creation_timestamp": self._creation_timestamp,
+            "last_update_time": self._last_update_time,
+            "config": self.config,
+            "is_active": True,
+            "message_count": {msg_type.name: 0 for msg_type in MessageType},
+            "model_state": self._get_model_state(),
+            "metrics": {}
         }
-        
-    def save_state(self, state_dir: str) -> str:
+        self.state_manager.register_module(self.module_id, initial_state)
+    
+    def _get_model_state(self) -> Dict[str, Any]:
         """
-        Save the module state to disk
-        
-        Args:
-            state_dir: Directory to save state in
-            
-        Returns:
-            Path to saved state file
+        Get the state of any neural models in this module.
+        Override in subclasses that have neural models.
         """
-        try:
-            # Create directory if it doesn't exist
-            os.makedirs(state_dir, exist_ok=True)
-            
-            # Get state and prepare for serialization
-            state = self.get_state()
-            
-            # Convert datetime objects to strings for serialization
-            state['development_history'] = [
-                (dt.isoformat(), level) for dt, level in self.development_history
-            ]
-            
-            # Create filename based on module ID and type
-            filename = f"{self.module_type}_{self.module_id.replace('/', '_')}.json"
-            filepath = os.path.join(state_dir, filename)
-            
-            # Write state to file
-            with open(filepath, 'w') as f:
-                json.dump(state, f, indent=2)
-                
-            logger.info(f"Saved state for module {self.module_id} to {filepath}")
-            return filepath
-            
-        except Exception as e:
-            logger.error(f"Failed to save state for module {self.module_id}: {str(e)}")
-            return ""
-        
-    def load_state(self, state_path: str) -> bool:
+        return {}
+    
+    def subscribe(self, message_types: List[MessageType]) -> None:
         """
-        Load the module state from disk
+        Subscribe to specified message types.
         
-        Args:
-            state_path: Path to state file
-            
-        Returns:
-            True if successful, False otherwise
+        Parameters:
+        message_types: List of message types to subscribe to
         """
-        try:
-            # Check if file exists
-            if not os.path.exists(state_path):
-                logger.error(f"State file {state_path} does not exist")
-                return False
-                
-            # Read state from file
-            with open(state_path, 'r') as f:
-                state = json.load(f)
-                
-            # Update basic properties
-            self.development_level = state.get('development_level', self.development_level)
-            self._enabled = state.get('enabled', self._enabled)
-            
-            # Parse development history if present
-            if 'development_history' in state:
-                try:
-                    self.development_history = [
-                        (datetime.fromisoformat(dt), level) 
-                        for dt, level in state['development_history']
-                    ]
-                except Exception as e:
-                    logger.warning(f"Failed to parse development history: {str(e)}")
-            
-            # Update timestamps
-            if 'last_update_time' in state:
-                try:
-                    self.last_update_time = datetime.fromisoformat(state['last_update_time'])
-                except Exception:
-                    self.last_update_time = datetime.now()
-                    
-            logger.info(f"Loaded state for module {self.module_id} from {state_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load state for module {self.module_id}: {str(e)}")
-            return False
-        
-    def subscribe_to_message(self, message_type: str, callback=None):
+        self.event_bus.subscribe(self.module_id, self._handle_message, message_types)
+        self._subscribed_message_types.update(message_types)
+        self.logger.debug(f"Subscribed to message types: {[mt.name for mt in message_types]}")
+    
+    def unsubscribe(self, message_types: Optional[List[MessageType]] = None) -> None:
         """
-        Subscribe to a specific message type
+        Unsubscribe from specified message types or all if None.
         
-        Args:
-            message_type: Type of message to subscribe to
-            callback: Function to call when message is received
-                     If None, will use self._handle_message
+        Parameters:
+        message_types: List of message types to unsubscribe from, or None for all
         """
-        if not self.event_bus:
-            logger.warning(f"Module {self.module_id} tried to subscribe without event bus")
-            return
+        if message_types is None:
+            message_types = list(self._subscribed_message_types)
             
-        if callback is None:
-            callback = self._handle_message
-            
-        subscription_id = self.event_bus.subscribe(message_type, callback)
-        self._subscriptions.append(subscription_id)
-        
-    def publish_message(self, message_type: str, content: Dict[str, Any] = None):
+        self.event_bus.unsubscribe(self.module_id, message_types)
+        self._subscribed_message_types.difference_update(message_types)
+        self.logger.debug(f"Unsubscribed from message types: {[mt.name for mt in message_types]}")
+    
+    def publish(self, message_type: MessageType, content: Content, priority: int = 1,
+               in_response_to: Optional[MessageID] = None) -> None:
         """
-        Publish a message to the event bus
+        Publish a message to the event bus.
         
-        Args:
-            message_type: Type of message to publish
-            content: Message content
+        Parameters:
+        message_type: Type of the message
+        content: Message content
+        priority: Message priority (0-10)
+        in_response_to: Optional ID of message this is responding to
         """
-        if not self.event_bus:
-            logger.warning(f"Module {self.module_id} tried to publish without event bus")
-            return
-            
-        # Import here to avoid circular imports
-        from lmm_project.core.message import Message
-        
         message = Message(
             sender=self.module_id,
+            sender_type=self.module_type,
             message_type=message_type,
-            content=content or {},
-            timestamp=time.time()
+            content=content,
+            priority=priority,
+            in_response_to=in_response_to
+        )
+        self.event_bus.publish(message)
+        
+        # Update message count in state
+        self._update_message_count(message_type)
+    
+    def _update_message_count(self, message_type: MessageType) -> None:
+        """Update the count of messages sent by type."""
+        state_path = f"modules.{self.module_id}.message_count.{message_type.name}"
+        current_count = self.state_manager.get_state_value(state_path) or 0
+        self.state_manager.update_state(state_path, current_count + 1)
+    
+    def _handle_message(self, message: Message) -> None:
+        """
+        Handle incoming messages from the event bus.
+        
+        Parameters:
+        message: The message to process
+        """
+        self.logger.debug(f"Received message of type {message.message_type.name} from {message.sender}")
+        self.process_message(message)
+    
+    def update_development(self, global_age: Age, developmental_stage: DevelopmentalStage,
+                          time_delta: float) -> None:
+        """
+        Update the module's developmental level based on global age and stage.
+        
+        Parameters:
+        global_age: Current age of the overall mind
+        developmental_stage: Current developmental stage of the mind
+        time_delta: Time elapsed since last update in seconds
+        """
+        # Store previous developmental stage for transition detection
+        previous_stage = self._developmental_stage
+        self._developmental_stage = developmental_stage
+        
+        # Calculate development increase based on time and config
+        development_rate = self.config["development_rate"]
+        
+        # Apply any critical period effects
+        if self._is_in_critical_period(global_age, developmental_stage):
+            development_rate *= self.config["critical_period_sensitivity"]
+        
+        # Calculate development increment
+        increment = development_rate * time_delta * 0.001  # Scale to reasonable values
+        
+        # Cap development level at 1.0
+        self._development_level = min(1.0, self._development_level + increment)
+        
+        # Update state
+        self._last_update_time = time.time()
+        self.state_manager.update_state(
+            f"modules.{self.module_id}.development_level", 
+            self._development_level
+        )
+        self.state_manager.update_state(
+            f"modules.{self.module_id}.last_update_time", 
+            self._last_update_time
         )
         
-        self.event_bus.publish(message)
+        # Handle developmental stage transitions
+        if previous_stage != developmental_stage:
+            self._on_developmental_stage_change(previous_stage, developmental_stage)
+            self.logger.info(
+                f"Module '{self.module_id}' transitioned from {previous_stage.name} to {developmental_stage.name} "
+                f"stage at development level {self._development_level:.2f}"
+            )
     
-    def _handle_message(self, message: 'Message'):
+    def _is_in_critical_period(self, global_age: Age, developmental_stage: DevelopmentalStage) -> bool:
         """
-        Default message handler - can be overridden by subclasses
+        Determine if the module is currently in a critical period.
+        Override in subclasses to implement module-specific critical periods.
         
-        Args:
-            message: The message to handle
-        """
-        # Base implementation does nothing
-        pass
-        
-    def enable(self):
-        """Enable this module for processing"""
-        self._enabled = True
-        
-    def disable(self):
-        """Disable this module from processing"""
-        self._enabled = False
-        
-    def is_enabled(self) -> bool:
-        """Check if this module is enabled"""
-        return self._enabled
-        
-    def get_development_progress(self) -> Dict[str, Any]:
-        """
-        Get detailed development progress information
+        Parameters:
+        global_age: Current age of the overall mind
+        developmental_stage: Current developmental stage of the mind
         
         Returns:
-            Dictionary with development progress details
+        True if the module is in a critical period, False otherwise
         """
-        # Find current milestone
-        current_milestone = None
-        next_milestone = None
-        milestone_progress = 0.0
+        return False
+    
+    def _on_developmental_stage_change(self, previous_stage: DevelopmentalStage, 
+                                      new_stage: DevelopmentalStage) -> None:
+        """
+        Handle transitions between developmental stages.
+        Override in subclasses to implement stage-specific behaviors.
         
-        sorted_milestones = sorted(self.development_milestones.items())
+        Parameters:
+        previous_stage: Stage the module was in before
+        new_stage: New developmental stage
+        """
+        pass
+    
+    def get_development_level(self) -> float:
+        """
+        Get the current development level of this module.
         
-        for i, (threshold, description) in enumerate(sorted_milestones):
-            if threshold <= self.development_level:
-                current_milestone = (threshold, description)
-                # Check if there's a next milestone
-                if i + 1 < len(sorted_milestones):
-                    next_milestone = sorted_milestones[i + 1]
-                    next_threshold = next_milestone[0]
-                    # Calculate progress to next milestone
-                    milestone_range = next_threshold - threshold
-                    if milestone_range > 0:
-                        milestone_progress = (self.development_level - threshold) / milestone_range
-                
-        return {
-            "development_level": self.development_level,
-            "current_milestone": current_milestone[1] if current_milestone else None,
-            "current_milestone_threshold": current_milestone[0] if current_milestone else None,
-            "next_milestone": next_milestone[1] if next_milestone else None,
-            "next_milestone_threshold": next_milestone[0] if next_milestone else None,
-            "progress_to_next_milestone": milestone_progress,
-            "fully_developed": self.development_level >= 1.0,
-            "development_time": (datetime.now() - self.creation_time).total_seconds(),
-            "development_history_length": len(self.development_history)
-        }
+        Returns:
+        Development level between 0.0 and 1.0
+        """
+        return self._development_level
+    
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of this module.
+        
+        Returns:
+        Dictionary containing the module's state
+        """
+        return self.state_manager.get_state_value(f"modules.{self.module_id}")
+    
+    def update_state_metrics(self, metrics: Dict[str, Any]) -> None:
+        """
+        Update metrics in the module's state.
+        
+        Parameters:
+        metrics: Dictionary of metrics to update
+        """
+        self.state_manager.update_state(f"modules.{self.module_id}.metrics", metrics)
+    
+    def cleanup(self) -> None:
+        """Clean up resources when the module is being unregistered."""
+        self.unsubscribe()
+        self.logger.info(f"Module '{self.module_id}' cleaned up")
+    
+    @abc.abstractmethod
+    def process_message(self, message: Message) -> None:
+        """
+        Process an incoming message from the event bus.
+        Must be implemented by subclasses.
+        
+        Parameters:
+        message: The message to process
+        """
+        pass
+    
+    @abc.abstractmethod
+    def process_input(self, input_data: Any) -> Any:
+        """
+        Process input data specific to this module.
+        Must be implemented by subclasses.
+        
+        Parameters:
+        input_data: Module-specific input data
+        
+        Returns:
+        Processing results
+        """
+        pass

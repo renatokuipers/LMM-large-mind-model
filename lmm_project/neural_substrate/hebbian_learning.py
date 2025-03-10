@@ -1,108 +1,324 @@
-from typing import Dict, List, Any, Tuple
+"""
+Hebbian learning implementation for the neural substrate.
+
+This module provides mechanisms for Hebbian learning, implementing the principle
+that "neurons that fire together, wire together." It offers various formulations
+of Hebbian learning for synaptic weight adjustment.
+"""
+from enum import Enum, auto
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import numpy as np
-from pydantic import BaseModel, Field
+import torch
 
-from ..core.exceptions import NeuralSubstrateError
+from lmm_project.neural_substrate.synapse import PlasticityType, Synapse
+from lmm_project.utils.logging_utils import get_module_logger
 
-class HebbianLearning(BaseModel):
+logger = get_module_logger("neural_substrate.hebbian_learning")
+
+
+class HebbianRule(Enum):
+    """Different formulations of Hebbian learning rules."""
+    BASIC = auto()           # Basic Hebbian: weight += lr * pre * post
+    COVARIANCE = auto()      # Covariance rule: weight += lr * (pre - mean_pre) * (post - mean_post)
+    BCM = auto()             # Bienenstock-Cooper-Munro: weight += lr * pre * post * (post - theta)
+    OJA = auto()             # Oja's rule: weight += lr * post * (pre - post * weight)
+    GENERALIZED = auto()     # Generalized Hebbian Algorithm (GHA): PCA-based learning
+
+
+class HebbianLearner:
     """
-    Implementation of Hebbian learning rule
+    Implementation of Hebbian learning for neural networks.
     
-    Hebbian learning is based on the principle that "neurons that fire together, wire together."
-    This class provides methods to apply Hebbian learning to neural networks.
+    Applies Hebbian plasticity rules to modify synaptic weights based on
+    the activities of connected neurons.
     """
-    learning_rate: float = Field(default=0.01, ge=0.0, le=1.0)
-    decay_rate: float = Field(default=0.001, ge=0.0, le=1.0)
-    min_weight: float = Field(default=-1.0)
-    max_weight: float = Field(default=1.0)
     
-    def update_weight(self, pre_activation: float, post_activation: float, current_weight: float) -> float:
+    def __init__(
+        self,
+        learning_rate: float = 0.01,
+        rule: HebbianRule = HebbianRule.BASIC,
+        requires_history: bool = False,
+        history_window: int = 100,
+        device: Optional[torch.device] = None
+    ):
         """
-        Update a connection weight using the Hebbian rule
+        Initialize a Hebbian learning mechanism.
         
         Parameters:
-        pre_activation: Activation of the presynaptic neuron
-        post_activation: Activation of the postsynaptic neuron
-        current_weight: Current weight of the connection
-        
-        Returns:
-        Updated weight
+        learning_rate: Base learning rate
+        rule: Hebbian learning rule to apply
+        requires_history: Whether to track activity history for certain rules
+        history_window: Size of activity history window if required
+        device: Torch device for tensor operations
         """
-        # Basic Hebbian rule: weight change proportional to pre * post activation
-        delta_weight = self.learning_rate * pre_activation * post_activation
+        self.learning_rate = learning_rate
+        self.rule = rule
+        self.requires_history = requires_history or rule in (HebbianRule.COVARIANCE, HebbianRule.BCM)
+        self.history_window = history_window
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Apply weight decay (prevents unbounded growth)
-        decay = self.decay_rate * current_weight
+        # Activity history for rules that need it
+        self.pre_activity_history: List[float] = []
+        self.post_activity_history: List[float] = []
         
-        # Update weight
-        new_weight = current_weight + delta_weight - decay
+        # BCM threshold variables
+        self.theta = 0.5  # Sliding threshold for BCM rule
+        self.theta_update_rate = 0.01  # Rate for threshold adaptation
         
-        # Clip weight to bounds
-        return max(self.min_weight, min(self.max_weight, new_weight))
+        # Select learning rule implementation
+        self.learning_functions = {
+            HebbianRule.BASIC: self._basic_hebbian,
+            HebbianRule.COVARIANCE: self._covariance_rule,
+            HebbianRule.BCM: self._bcm_rule,
+            HebbianRule.OJA: self._oja_rule,
+            HebbianRule.GENERALIZED: self._generalized_hebbian
+        }
+        
+        logger.info(f"Initialized HebbianLearner with rule: {rule.name}")
     
-    def update_weights_batch(self, activations: Dict[str, float], connections: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
+    def update_synapse(
+        self, 
+        synapse: Synapse, 
+        pre_activation: float, 
+        post_activation: float
+    ) -> None:
         """
-        Update multiple connection weights in batch
+        Update a synapse using the selected Hebbian rule.
         
         Parameters:
-        activations: Dictionary mapping neuron IDs to activation values
-        connections: Dictionary mapping (source_id, target_id) tuples to weights
-        
-        Returns:
-        Updated connections dictionary
+        synapse: Synapse to update
+        pre_activation: Activation of presynaptic neuron
+        post_activation: Activation of postsynaptic neuron
         """
-        updated_connections = connections.copy()
+        # Skip update if plasticity is disabled for this synapse
+        if not synapse.config.plasticity_enabled:
+            return
+            
+        # Only update if we have real activations
+        if pre_activation == 0.0 and post_activation == 0.0:
+            return
         
-        for (source_id, target_id), weight in connections.items():
-            if source_id in activations and target_id in activations:
-                pre_activation = activations[source_id]
-                post_activation = activations[target_id]
-                
-                updated_connections[(source_id, target_id)] = self.update_weight(
-                    pre_activation, post_activation, weight
-                )
-                
-        return updated_connections
+        # Track activity history if needed
+        if self.requires_history:
+            self.pre_activity_history.append(pre_activation)
+            self.post_activity_history.append(post_activation)
+            
+            # Trim history to window size
+            if len(self.pre_activity_history) > self.history_window:
+                self.pre_activity_history = self.pre_activity_history[-self.history_window:]
+                self.post_activity_history = self.post_activity_history[-self.history_window:]
+        
+        # Get the appropriate learning rule function
+        learning_rule_fn = self.learning_functions.get(self.rule)
+        
+        # Calculate weight change using the selected rule
+        weight_change = learning_rule_fn(
+            synapse.weight.item(), 
+            pre_activation, 
+            post_activation
+        )
+        
+        # Apply weight change to synapse
+        with torch.no_grad():
+            synapse.weight += weight_change
+            
+        # Apply weight constraints
+        synapse._constrain_weight()
     
-    def apply_oja_rule(self, pre_activation: float, post_activation: float, current_weight: float) -> float:
+    def update_synapses(
+        self, 
+        synapses: List[Synapse], 
+        pre_activations: List[float], 
+        post_activations: List[float]
+    ) -> None:
         """
-        Apply Oja's rule, a normalized Hebbian rule
+        Update multiple synapses using the selected Hebbian rule.
         
         Parameters:
-        pre_activation: Activation of the presynaptic neuron
-        post_activation: Activation of the postsynaptic neuron
-        current_weight: Current weight of the connection
-        
-        Returns:
-        Updated weight
+        synapses: List of synapses to update
+        pre_activations: List of presynaptic neuron activations
+        post_activations: List of postsynaptic neuron activations
         """
-        # Oja's rule: prevents unbounded growth by normalizing
-        delta_weight = self.learning_rate * (pre_activation * post_activation - post_activation**2 * current_weight)
-        
-        # Update weight
-        new_weight = current_weight + delta_weight
-        
-        # Clip weight to bounds
-        return max(self.min_weight, min(self.max_weight, new_weight))
+        for synapse, pre_act, post_act in zip(synapses, pre_activations, post_activations):
+            self.update_synapse(synapse, pre_act, post_act)
     
-    def apply_bcm_rule(self, pre_activation: float, post_activation: float, current_weight: float, threshold: float) -> float:
+    def _basic_hebbian(
+        self, 
+        weight: float, 
+        pre_activation: float, 
+        post_activation: float
+    ) -> float:
         """
-        Apply BCM (Bienenstock-Cooper-Munro) rule
+        Basic Hebbian rule: weight += lr * pre * post
         
         Parameters:
-        pre_activation: Activation of the presynaptic neuron
-        post_activation: Activation of the postsynaptic neuron
-        current_weight: Current weight of the connection
-        threshold: Modification threshold
+        weight: Current weight
+        pre_activation: Presynaptic neuron activation
+        post_activation: Postsynaptic neuron activation
         
         Returns:
-        Updated weight
+        Weight change amount
         """
-        # BCM rule: LTP when post > threshold, LTD when post < threshold
-        delta_weight = self.learning_rate * pre_activation * post_activation * (post_activation - threshold)
+        return self.learning_rate * pre_activation * post_activation
+    
+    def _covariance_rule(
+        self, 
+        weight: float, 
+        pre_activation: float, 
+        post_activation: float
+    ) -> float:
+        """
+        Covariance Hebbian rule: weight += lr * (pre - mean_pre) * (post - mean_post)
         
-        # Update weight
-        new_weight = current_weight + delta_weight
+        Parameters:
+        weight: Current weight
+        pre_activation: Presynaptic neuron activation
+        post_activation: Postsynaptic neuron activation
         
-        # Clip weight to bounds
-        return max(self.min_weight, min(self.max_weight, new_weight))
+        Returns:
+        Weight change amount
+        """
+        # Calculate means from history
+        if not self.pre_activity_history:
+            return 0.0
+            
+        mean_pre = sum(self.pre_activity_history) / len(self.pre_activity_history)
+        mean_post = sum(self.post_activity_history) / len(self.post_activity_history)
+        
+        # Apply covariance rule
+        return self.learning_rate * (pre_activation - mean_pre) * (post_activation - mean_post)
+    
+    def _bcm_rule(
+        self, 
+        weight: float, 
+        pre_activation: float, 
+        post_activation: float
+    ) -> float:
+        """
+        Bienenstock-Cooper-Munro rule: weight += lr * pre * post * (post - theta)
+        
+        Parameters:
+        weight: Current weight
+        pre_activation: Presynaptic neuron activation
+        post_activation: Postsynaptic neuron activation
+        
+        Returns:
+        Weight change amount
+        """
+        # Update sliding threshold based on recent postsynaptic activity
+        if self.post_activity_history:
+            mean_post_squared = np.mean([p**2 for p in self.post_activity_history])
+            self.theta += self.theta_update_rate * (mean_post_squared - self.theta)
+            
+        # Apply BCM rule
+        return self.learning_rate * pre_activation * post_activation * (post_activation - self.theta)
+    
+    def _oja_rule(
+        self, 
+        weight: float, 
+        pre_activation: float, 
+        post_activation: float
+    ) -> float:
+        """
+        Oja's rule: weight += lr * post * (pre - post * weight)
+        
+        Parameters:
+        weight: Current weight
+        pre_activation: Presynaptic neuron activation
+        post_activation: Postsynaptic neuron activation
+        
+        Returns:
+        Weight change amount
+        """
+        return self.learning_rate * post_activation * (pre_activation - post_activation * weight)
+    
+    def _generalized_hebbian(
+        self, 
+        weight: float, 
+        pre_activation: float, 
+        post_activation: float
+    ) -> float:
+        """
+        Generalized Hebbian Algorithm (GHA): PCA-based learning
+        
+        Parameters:
+        weight: Current weight
+        pre_activation: Presynaptic neuron activation
+        post_activation: Postsynaptic neuron activation
+        
+        Returns:
+        Weight change amount
+        """
+        # This is a simplified version for individual synapse updates
+        # Full GHA requires knowledge of all weights to same postsynaptic neuron
+        return self.learning_rate * (post_activation * pre_activation - 
+                                   post_activation**2 * weight)
+    
+    def set_learning_rate(self, learning_rate: float) -> None:
+        """
+        Set the learning rate.
+        
+        Parameters:
+        learning_rate: New learning rate
+        """
+        self.learning_rate = learning_rate
+    
+    def set_rule(self, rule: HebbianRule) -> None:
+        """
+        Set the Hebbian learning rule to use.
+        
+        Parameters:
+        rule: New Hebbian rule
+        """
+        self.rule = rule
+        self.requires_history = rule in (HebbianRule.COVARIANCE, HebbianRule.BCM)
+        
+        # Clear history if no longer needed
+        if not self.requires_history:
+            self.pre_activity_history = []
+            self.post_activity_history = []
+            
+        logger.info(f"Changed Hebbian learning rule to: {rule.name}")
+    
+    def reset(self) -> None:
+        """Reset learner state."""
+        self.pre_activity_history = []
+        self.post_activity_history = []
+        self.theta = 0.5
+    
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the Hebbian learner.
+        
+        Returns:
+        Dictionary containing learner state
+        """
+        return {
+            "learning_rate": self.learning_rate,
+            "rule": self.rule.name,
+            "requires_history": self.requires_history,
+            "history_window": self.history_window,
+            "theta": self.theta,
+            "theta_update_rate": self.theta_update_rate
+        }
+    
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """
+        Load learner state from a dictionary.
+        
+        Parameters:
+        state: Dictionary containing learner state
+        """
+        if "learning_rate" in state:
+            self.learning_rate = state["learning_rate"]
+        if "rule" in state:
+            try:
+                self.rule = HebbianRule[state["rule"]]
+                self.requires_history = self.rule in (HebbianRule.COVARIANCE, HebbianRule.BCM)
+            except KeyError:
+                logger.warning(f"Unknown Hebbian rule in state: {state['rule']}")
+        if "theta" in state:
+            self.theta = state["theta"]
+        if "theta_update_rate" in state:
+            self.theta_update_rate = state["theta_update_rate"]

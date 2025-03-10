@@ -1,184 +1,275 @@
-from typing import Dict, List, Callable, Any, Optional, Set
-from collections import defaultdict
-from pydantic import BaseModel, Field
+"""
+Event bus implementation for message passing between cognitive modules.
+"""
 import threading
+import queue
 import logging
-from datetime import datetime
+import time
+from typing import Dict, List, Callable, Optional, Set, Any, Tuple
+import uuid
+from collections import deque
 
+from .types import MessageType, ModuleID, MessageID
 from .message import Message
 from .exceptions import EventBusError
 
-logger = logging.getLogger(__name__)
 
-class EventBus(BaseModel):
+# Type alias for message handler functions
+MessageHandler = Callable[[Message], None]
+
+
+class EventBus:
     """
-    Event bus for inter-module communication.
-    
-    The event bus allows modules to publish messages and subscribe to message types.
-    This facilitates decoupled communication between cognitive modules.
-    
-    Features:
-    - Thread-safe message publishing and subscription management
-    - Message history with configurable size
-    - Filtered message retrieval
-    - Priority-based message handling
-    - Performance optimizations for high-frequency messages
+    Central event bus for cognitive module communication.
+    Implements a publisher-subscriber pattern for message passing.
     """
-    subscribers: Dict[str, List[Callable]] = Field(default_factory=lambda: defaultdict(list))
-    message_history: List[Message] = Field(default_factory=list)
-    max_history_size: int = Field(default=1000)
-    _lock: threading.RLock = Field(default_factory=threading.RLock, exclude=True)
-    _high_frequency_types: Set[str] = Field(default_factory=set, exclude=True)
-    
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
-    
+    def __init__(self, max_history_size: int = 1000, message_queue_size: int = 10000):
+        self.subscribers: Dict[MessageType, Dict[ModuleID, MessageHandler]] = {}
+        self.global_subscribers: Dict[ModuleID, MessageHandler] = {}
+        self.message_history: deque = deque(maxlen=max_history_size)
+        self.message_queue: queue.PriorityQueue = queue.PriorityQueue(maxsize=message_queue_size)
+        self.running: bool = False
+        self.processing_thread: Optional[threading.Thread] = None
+        self.lock = threading.RLock()
+        self.logger = logging.getLogger(__name__)
+
+    def start(self) -> None:
+        """Start message processing thread."""
+        if self.running:
+            return
+        
+        self.running = True
+        self.processing_thread = threading.Thread(
+            target=self._process_messages,
+            daemon=True,
+            name="EventBusProcessor"
+        )
+        self.processing_thread.start()
+        self.logger.info("Event bus started")
+
+    def stop(self) -> None:
+        """Stop message processing thread."""
+        self.running = False
+        if self.processing_thread:
+            self.processing_thread.join(timeout=2.0)
+            self.processing_thread = None
+        self.logger.info("Event bus stopped")
+
+    def subscribe(self, 
+                 module_id: ModuleID, 
+                 handler: MessageHandler,
+                 message_types: Optional[List[MessageType]] = None) -> None:
+        """
+        Subscribe a module to specific message types.
+        
+        Args:
+            module_id: Unique ID of the subscribing module
+            handler: Callback function to handle messages
+            message_types: List of message types to subscribe to, or None for all types
+        """
+        with self.lock:
+            if message_types is None or len(message_types) == 0:
+                # Subscribe to all message types (global subscriber)
+                self.global_subscribers[module_id] = handler
+                self.logger.debug(f"Module {module_id} subscribed to all message types")
+                return
+            
+            # Subscribe to specific message types
+            for msg_type in message_types:
+                if msg_type not in self.subscribers:
+                    self.subscribers[msg_type] = {}
+                self.subscribers[msg_type][module_id] = handler
+            
+            self.logger.debug(f"Module {module_id} subscribed to {len(message_types)} message types")
+
+    def unsubscribe(self, 
+                   module_id: ModuleID, 
+                   message_types: Optional[List[MessageType]] = None) -> None:
+        """
+        Unsubscribe a module from message types.
+        
+        Args:
+            module_id: Unique ID of the module to unsubscribe
+            message_types: List of message types to unsubscribe from, or None for all
+        """
+        with self.lock:
+            # Remove from global subscribers if applicable
+            if message_types is None or len(message_types) == 0:
+                if module_id in self.global_subscribers:
+                    del self.global_subscribers[module_id]
+                
+                # Also remove from all specific message types
+                for msg_type in list(self.subscribers.keys()):
+                    if module_id in self.subscribers[msg_type]:
+                        del self.subscribers[msg_type][module_id]
+                
+                self.logger.debug(f"Module {module_id} unsubscribed from all message types")
+                return
+            
+            # Unsubscribe from specific message types
+            for msg_type in message_types:
+                if msg_type in self.subscribers and module_id in self.subscribers[msg_type]:
+                    del self.subscribers[msg_type][module_id]
+            
+            self.logger.debug(f"Module {module_id} unsubscribed from specific message types")
+
     def publish(self, message: Message) -> None:
         """
-        Publish a message to the event bus
+        Publish a message to the event bus.
         
         Args:
             message: The message to publish
-        
-        Raises:
-            EventBusError: If there's an error publishing the message
         """
+        if not self.running:
+            raise EventBusError("Cannot publish message: Event bus is not running")
+        
+        # Check if message has already expired
+        if message.is_expired():
+            self.logger.debug(f"Skipping expired message: {message.id}")
+            return
+        
         try:
-            with self._lock:
-                # Add to history (skip for high-frequency messages if needed)
-                if message.message_type not in self._high_frequency_types:
-                    self.message_history.append(message)
+            # Priority queue item: (priority, timestamp, message)
+            # Lower number = higher priority, timestamp is used as a tiebreaker
+            priority_item = (-message.priority, message.timestamp, message)
+            self.message_queue.put(priority_item, block=False)
+            self.logger.debug(f"Message queued: {message.id} (Type: {message.message_type.name})")
+        except queue.Full:
+            raise EventBusError("Message queue is full")
+
+    def _process_messages(self) -> None:
+        """
+        Process messages from the queue and dispatch to subscribers.
+        This runs in a separate thread.
+        """
+        while self.running:
+            try:
+                # Get message from queue, block for a short time to allow for clean shutdown
+                try:
+                    priority, _, message = self.message_queue.get(block=True, timeout=0.1)
+                except queue.Empty:
+                    continue
+                
+                # Skip expired messages
+                if message.is_expired():
+                    self.logger.debug(f"Skipping expired message during processing: {message.id}")
+                    self.message_queue.task_done()
+                    continue
+                
+                # Add to history
+                self.message_history.append(message)
+                
+                # Dispatch message to subscribers
+                self._dispatch_message(message)
+                
+                # Mark task as done
+                self.message_queue.task_done()
+                
+            except Exception as e:
+                self.logger.error(f"Error processing message: {str(e)}")
+                # Continue processing other messages
+    
+    def _dispatch_message(self, message: Message) -> None:
+        """
+        Dispatch a message to all subscribed handlers.
+        
+        Args:
+            message: The message to dispatch
+        """
+        dispatched = False
+        
+        # Dispatch to specific subscribers for this message type
+        if message.message_type in self.subscribers:
+            with self.lock:
+                subscribers = list(self.subscribers[message.message_type].items())
+            
+            for module_id, handler in subscribers:
+                # Skip sending the message back to its sender
+                if module_id == message.sender:
+                    continue
                     
-                    # Trim history if needed
-                    if len(self.message_history) > self.max_history_size:
-                        self.message_history = self.message_history[-self.max_history_size:]
-                
-                # Get subscribers (make a copy to avoid modification during iteration)
-                message_type = message.message_type
-                type_subscribers = list(self.subscribers.get(message_type, []))
-                all_subscribers = list(self.subscribers.get("all", []))
-            
-            # Notify subscribers outside the lock to prevent deadlocks
-            # Notify specific message type subscribers
-            for callback in type_subscribers:
                 try:
-                    callback(message)
+                    handler(message)
+                    dispatched = True
                 except Exception as e:
-                    logger.error(f"Error in subscriber callback for {message_type}: {str(e)}")
-            
-            # Notify "all" subscribers
-            for callback in all_subscribers:
-                try:
-                    callback(message)
-                except Exception as e:
-                    logger.error(f"Error in 'all' subscriber callback: {str(e)}")
+                    self.logger.error(f"Error in message handler for module {module_id}: {str(e)}")
+        
+        # Dispatch to global subscribers
+        with self.lock:
+            global_subscribers = list(self.global_subscribers.items())
+        
+        for module_id, handler in global_subscribers:
+            # Skip sending the message back to its sender
+            if module_id == message.sender:
+                continue
                 
-        except Exception as e:
-            logger.error(f"Error publishing message: {str(e)}")
-            raise EventBusError(f"Error publishing message: {str(e)}")
-    
-    def subscribe(self, message_type: str, callback: Callable[[Message], None]) -> None:
+            try:
+                handler(message)
+                dispatched = True
+            except Exception as e:
+                self.logger.error(f"Error in global message handler for module {module_id}: {str(e)}")
+        
+        if not dispatched:
+            self.logger.debug(f"No subscribers for message {message.id} (Type: {message.message_type.name})")
+
+    def get_message_history(self, 
+                           limit: Optional[int] = None, 
+                           message_type: Optional[MessageType] = None) -> List[Message]:
         """
-        Subscribe to a specific message type
+        Get message history, optionally filtered by type.
         
         Args:
-            message_type: The type of message to subscribe to ("all" for all messages)
-            callback: Function to call when a message of the specified type is published
-        
-        Raises:
-            EventBusError: If there's an error subscribing to the message type
-        """
-        try:
-            with self._lock:
-                if callback not in self.subscribers[message_type]:
-                    self.subscribers[message_type].append(callback)
-        except Exception as e:
-            logger.error(f"Error subscribing to {message_type}: {str(e)}")
-            raise EventBusError(f"Error subscribing to {message_type}: {str(e)}")
-            
-    def unsubscribe(self, message_type: str, callback: Callable[[Message], None]) -> None:
-        """
-        Unsubscribe from a specific message type
-        
-        Args:
-            message_type: The type of message to unsubscribe from
-            callback: The callback function to remove
-        
-        Raises:
-            EventBusError: If there's an error unsubscribing from the message type
-        """
-        try:
-            with self._lock:
-                if message_type in self.subscribers and callback in self.subscribers[message_type]:
-                    self.subscribers[message_type].remove(callback)
-        except Exception as e:
-            logger.error(f"Error unsubscribing from {message_type}: {str(e)}")
-            raise EventBusError(f"Error unsubscribing from {message_type}: {str(e)}")
-    
-    def register_high_frequency_type(self, message_type: str) -> None:
-        """
-        Register a message type as high-frequency to optimize performance
-        
-        High-frequency messages bypass history storage to improve performance.
-        
-        Args:
-            message_type: The message type to register as high-frequency
-        """
-        with self._lock:
-            self._high_frequency_types.add(message_type)
-            
-    def unregister_high_frequency_type(self, message_type: str) -> None:
-        """
-        Unregister a message type as high-frequency
-        
-        Args:
-            message_type: The message type to unregister as high-frequency
-        """
-        with self._lock:
-            self._high_frequency_types.discard(message_type)
-            
-    def get_recent_messages(self, message_type: Optional[str] = None, limit: int = 10, 
-                           since_timestamp: Optional[datetime] = None) -> List[Message]:
-        """
-        Get recent messages, optionally filtered by type and timestamp
-        
-        Args:
-            message_type: Optional message type to filter by
             limit: Maximum number of messages to return
-            since_timestamp: Only return messages after this timestamp
+            message_type: Filter by message type
         
         Returns:
-            List of recent messages matching the criteria
+            List of messages from history
         """
-        with self._lock:
-            if message_type:
-                filtered = [m for m in self.message_history if m.message_type == message_type]
-            else:
-                filtered = self.message_history.copy()
-                
-            if since_timestamp:
-                filtered = [m for m in filtered if m.timestamp > since_timestamp]
-                
-            return filtered[-limit:]
-    
-    def clear_history(self) -> None:
-        """Clear the message history"""
-        with self._lock:
-            self.message_history.clear()
+        result = []
+        
+        for message in reversed(self.message_history):
+            if message_type is not None and message.message_type != message_type:
+                continue
             
-    def get_subscriber_count(self, message_type: Optional[str] = None) -> int:
-        """
-        Get the number of subscribers for a message type or all subscribers
+            result.append(message)
+            
+            if limit is not None and len(result) >= limit:
+                break
+                
+        return result
+
+    def get_queue_size(self) -> int:
+        """Get current size of the message queue."""
+        return self.message_queue.qsize()
+
+    def clear_history(self) -> None:
+        """Clear message history."""
+        self.message_history.clear()
+        self.logger.debug("Message history cleared")
+
+
+# Singleton instance
+_event_bus_instance = None
+_event_bus_lock = threading.RLock()
+
+def get_event_bus(max_history_size: int = 1000, message_queue_size: int = 10000) -> EventBus:
+    """
+    Get the global EventBus instance (singleton).
+    
+    Args:
+        max_history_size: Maximum number of messages to keep in history
+        message_queue_size: Maximum size of the message queue
         
-        Args:
-            message_type: Optional message type to get subscriber count for
-        
-        Returns:
-            Number of subscribers
-        """
-        with self._lock:
-            if message_type:
-                return len(self.subscribers.get(message_type, []))
-            else:
-                return sum(len(subscribers) for subscribers in self.subscribers.values())
+    Returns:
+        Global EventBus instance
+    """
+    global _event_bus_instance
+    
+    with _event_bus_lock:
+        if _event_bus_instance is None:
+            _event_bus_instance = EventBus(
+                max_history_size=max_history_size,
+                message_queue_size=message_queue_size
+            )
+            
+    return _event_bus_instance

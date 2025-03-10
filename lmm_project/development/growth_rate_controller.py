@@ -1,676 +1,520 @@
 """
-Growth Rate Controller Module
+Growth rate controller for the LMM project.
 
-This module manages the rate at which cognitive capabilities develop over time.
-It implements various factors that influence development speed, including:
-- Base growth rates for different capabilities
-- Natural variation in development rates
-- Developmental stage-appropriate rates
-- Critical period accelerations
-- Environmental influences
-- Individual differences
-
-The growth rate controller ensures realistic, variable development that follows
-patterns similar to human cognitive development.
+This module provides mechanisms to control the rate of growth and development
+across different capabilities and modules within the LMM system, implementing
+variable growth trajectories and non-linear developmental patterns.
 """
-
-from typing import Dict, List, Optional, Any, Tuple, Set, Union
-import logging
-import random
-import math
-import threading
-import json
-import os
+import time
 from datetime import datetime
-from pathlib import Path
-import traceback
+from typing import Dict, List, Optional, Set, Tuple, Any
 
-from lmm_project.development.models import GrowthRateParameters, DevelopmentalEvent
-from lmm_project.core.exceptions import DevelopmentError
+import numpy as np
 
-logger = logging.getLogger(__name__)
+from lmm_project.core.event_system import EventSystem, Event
+from lmm_project.core.types import StateDict
+from lmm_project.development.models import (
+    DevelopmentalStage, 
+    GrowthRateModel,
+    DevelopmentConfig
+)
+from lmm_project.development.developmental_stages import DevelopmentalStages
+from lmm_project.development.critical_periods import CriticalPeriods
+from lmm_project.utils.logging_utils import get_module_logger
+
+# Initialize logger
+logger = get_module_logger(__name__)
 
 class GrowthRateController:
     """
-    Controls the rate at which different capabilities develop
+    Controls growth rates across different capabilities and modules.
     
-    This class manages development speed with natural variation,
-    critical period effects, and other influences on growth rates.
-    
-    Features:
-    - Thread-safe growth rate calculations
-    - Caching of frequently accessed values
-    - Adaptive growth rate adjustments
-    - Plateau detection and intervention
-    - Persistence of growth rate parameters
+    This class manages differential growth rates across the cognitive system,
+    implementing principles like variable growth trajectories, development plateaus,
+    and practice effects to create authentic cognitive development.
     """
     
-    def __init__(self, 
-                 base_rate: float = 0.01, 
-                 variability: float = 0.2):
+    def __init__(
+        self,
+        dev_stages: DevelopmentalStages,
+        critical_periods: CriticalPeriods,
+        config: Optional[DevelopmentConfig] = None
+    ):
         """
-        Initialize the growth rate controller
+        Initialize the growth rate controller.
         
-        Args:
-            base_rate: The default growth rate for capabilities (0.0-1.0)
-            variability: How much natural variation to apply (0.0-1.0)
-            
-        Raises:
-            ValueError: If parameters are outside valid ranges
+        Parameters:
+        -----------
+        dev_stages : DevelopmentalStages
+            Reference to the developmental stages manager
+        critical_periods : CriticalPeriods
+            Reference to the critical periods manager
+        config : Optional[DevelopmentConfig]
+            Configuration containing growth rate model. If None, uses default settings.
         """
-        if not 0.0 <= base_rate <= 1.0:
-            raise ValueError("base_rate must be between 0.0 and 1.0")
-            
-        if not 0.0 <= variability <= 1.0:
-            raise ValueError("variability must be between 0.0 and 1.0")
-            
-        self._lock = threading.RLock()
+        self.event_system = EventSystem()
+        self.dev_stages = dev_stages
+        self.critical_periods = critical_periods
+        self._config = config or self._load_default_config()
         
-        self.parameters = GrowthRateParameters(
-            base_rate=base_rate,
-            variability=variability,
-            # Standard factors that can accelerate development
-            acceleration_factors={
-                "critical_period": 2.0,      # During critical periods
-                "focused_learning": 1.5,     # When specifically focused on learning
-                "emotional_engagement": 1.3, # When emotionally engaged
-                "repetition": 1.2,           # With repetitive practice
-                "mother_guidance": 1.4       # When guided by the Mother
+        # Store growth rate model parameters
+        self._growth_model = self._config.growth_rate_model
+        
+        # Track usage of capabilities to model practice effects
+        self._capability_usage: Dict[str, Dict[str, float]] = {}
+        
+        # Track growth progress for different capabilities
+        self._growth_progress: Dict[str, Dict[str, float]] = {}
+        
+        # Track growth rates history for analysis
+        self._growth_rate_history: List[Dict[str, Any]] = []
+        
+        # Record last update time
+        self._last_update_time = time.time()
+        
+        # Random number generator for variability
+        self._rng = np.random.RandomState(int(time.time()))
+        
+        logger.info("Growth rate controller initialized")
+    
+    def _load_default_config(self) -> DevelopmentConfig:
+        """
+        Load default configuration for growth rate controller.
+        
+        Returns:
+        --------
+        DevelopmentConfig
+            Default configuration with growth rate model
+        """
+        # Create default growth rate model
+        growth_model = GrowthRateModel(
+            base_rate=1.0,
+            stage_multipliers={
+                DevelopmentalStage.PRENATAL: 0.8,
+                DevelopmentalStage.INFANT: 1.6,
+                DevelopmentalStage.CHILD: 1.2,
+                DevelopmentalStage.ADOLESCENT: 0.9,
+                DevelopmentalStage.ADULT: 0.6
             },
-            # Standard factors that can slow development
-            inhibition_factors={
-                "cognitive_overload": 0.7,   # When cognitive load is too high
-                "emotional_distress": 0.6,   # During emotional distress
-                "attention_deficit": 0.8,    # When attention is divided
-                "conflicting_inputs": 0.7,   # When receiving conflicting information
-                "developmental_plateau": 0.5 # During developmental plateaus
-            },
-            # How age affects development rate (age, multiplier)
-            age_modifiers=[
-                (0.0, 1.5),    # Early development is faster
-                (1.0, 1.3),    # Still accelerated in infancy
-                (3.0, 1.0),    # Normal rate in early childhood
-                (7.0, 0.8),    # Slows in middle childhood
-                (14.0, 0.7),   # Slower in adolescence
-                (21.0, 0.5)    # Much slower in adulthood
-            ]
+            critical_period_boost=2.0,
+            practice_effect=1.3,
+            plateau_threshold=0.85,
+            plateau_factor=0.4
         )
         
-        # Default capability-specific base rates
-        self.capability_base_rates = {
-            # Core capabilities
-            "neural_formation": 0.012,
-            "pattern_recognition": 0.015,
-            "sensory_processing": 0.014,
-            "association_formation": 0.013,
-            
-            # Cognitive capabilities
-            "attention": 0.011,
-            "working_memory": 0.010,
-            "episodic_memory": 0.009,
-            "semantic_memory": 0.008,
-            "logical_reasoning": 0.007,
-            "abstract_thinking": 0.006,
-            "metacognition": 0.005,
-            
-            # Linguistic capabilities
-            "language_comprehension": 0.013,
-            "language_production": 0.011,
-            
-            # Emotional capabilities
-            "emotional_response": 0.014,
-            "emotional_understanding": 0.009,
-            "emotional_regulation": 0.007,
-            
-            # Social capabilities
-            "self_awareness": 0.008,
-            "identity_formation": 0.006,
-            "social_understanding": 0.009,
-            "moral_reasoning": 0.007,
-            
-            # Creative capabilities
-            "creativity": 0.008,
-            "imagination": 0.010,
-            
-            # Advanced capabilities
-            "wisdom": 0.004
-        }
-        
-        # Module-specific growth rates
-        self.module_growth_rates = {
-            "perception": 1.2,
-            "attention": 1.1,
-            "memory": 1.0,
-            "language": 1.1,
-            "emotion": 1.1,
-            "consciousness": 0.9,
-            "executive": 0.9,
-            "social": 1.0,
-            "temporal": 0.9,
-            "creativity": 1.0,
-            "self_regulation": 0.9,
-            "learning": 1.0,
-            "identity": 0.8,
-            "belief": 0.9
-        }
-        
-        # Natural growth variation over time
-        self.growth_cycle_state = {}
-        # Initialize random phases for cyclical development
-        for capability in self.capability_base_rates:
-            self.growth_cycle_state[capability] = {
-                "phase": random.random() * 2 * math.pi,
-                "frequency": 0.1 + random.random() * 0.2  # Cycles per time unit
-            }
-            
-        # Cache for frequently calculated values
-        self._cache = {
-            "age_multipliers": {},  # age -> multiplier
-            "cycle_multipliers": {},  # (capability, age) -> multiplier
-            "last_cache_update": datetime.now()
-        }
-        self._cache_ttl = 5.0  # Cache time-to-live in seconds
-        
-        # Growth history for plateau detection
-        self.growth_history = {}  # capability -> List[growth_rates]
-        self.max_history_length = 20  # Maximum number of historical growth rates to keep
-        
-        # Adaptive growth parameters
-        self.adaptive_adjustments = {}  # capability -> adjustment_factor
-        
-        logger.info("Growth rate controller initialized with base rate %.3f", base_rate)
+        # Return minimal config with just growth rate model
+        return DevelopmentConfig(
+            initial_age=0.0,
+            time_acceleration=1000.0,
+            stage_definitions=[],
+            milestone_definitions=[],
+            critical_period_definitions=[],
+            growth_rate_model=growth_model
+        )
     
-    def get_growth_rate(self, 
-                        capability: str, 
-                        module: str, 
-                        age: float,
-                        active_factors: Dict[str, bool] = None,
-                        critical_period_multiplier: float = 1.0) -> float:
+    def register_module(self, module_name: str, capabilities: List[str]) -> None:
         """
-        Calculate the growth rate for a specific capability
+        Register a module and its capabilities for growth rate tracking.
         
-        Args:
-            capability: The capability to calculate growth for
-            module: The module this capability belongs to
-            age: Current developmental age
-            active_factors: Dict of factors that are currently active
-            critical_period_multiplier: Multiplier from any active critical periods
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module to register
+        capabilities : List[str]
+            List of capabilities provided by the module
+        """
+        # Initialize usage tracking if not already present
+        if module_name not in self._capability_usage:
+            self._capability_usage[module_name] = {}
+            
+        if module_name not in self._growth_progress:
+            self._growth_progress[module_name] = {}
+            
+        # Register each capability
+        for capability in capabilities:
+            if capability not in self._capability_usage[module_name]:
+                self._capability_usage[module_name][capability] = 0.0
+                
+            if capability not in self._growth_progress[module_name]:
+                self._growth_progress[module_name][capability] = 0.0
+                
+        logger.info(f"Registered module {module_name} with {len(capabilities)} capabilities")
+    
+    def record_capability_usage(
+        self, 
+        module_name: str, 
+        capability: str, 
+        usage_intensity: float = 1.0
+    ) -> None:
+        """
+        Record usage of a capability to model practice effects.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability being used
+        usage_intensity : float
+            Intensity of usage, higher values mean stronger practice effect (0.0-2.0)
+        """
+        # Ensure module and capability are registered
+        if module_name not in self._capability_usage:
+            self._capability_usage[module_name] = {}
+            self._growth_progress[module_name] = {}
+            
+        if capability not in self._capability_usage[module_name]:
+            self._capability_usage[module_name][capability] = 0.0
+            self._growth_progress[module_name][capability] = 0.0
+            
+        # Update usage tracker with time decay (recent usage matters more)
+        current_time = time.time()
+        time_since_update = current_time - self._last_update_time
+        
+        # Apply time decay to existing usage value
+        decay_factor = np.exp(-0.1 * time_since_update)  # Exponential decay
+        current_usage = self._capability_usage[module_name][capability]
+        decayed_usage = current_usage * decay_factor
+        
+        # Add new usage with intensity factor
+        new_usage = decayed_usage + usage_intensity
+        
+        # Cap at reasonable maximum to prevent runaway effects
+        self._capability_usage[module_name][capability] = min(new_usage, 5.0)
+    
+    def calculate_growth_rate(
+        self, 
+        module_name: str, 
+        capability: str, 
+        current_progress: Optional[float] = None
+    ) -> float:
+        """
+        Calculate the current growth rate for a specific capability.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability to calculate growth rate for
+        current_progress : Optional[float]
+            Current progress level (0.0-1.0). If None, uses tracked progress.
             
         Returns:
-            The growth rate to apply (0.0-1.0)
-            
-        Raises:
-            ValueError: If parameters are invalid
-            DevelopmentError: If growth rate calculation fails
+        --------
+        float
+            Growth rate multiplier for the capability
         """
-        if age < 0:
-            raise ValueError("Age cannot be negative")
+        # Get current stage for base multiplier
+        current_stage = self.dev_stages.get_current_stage()
+        stage_multiplier = self._growth_model.stage_multipliers.get(
+            current_stage, 1.0
+        )
+        
+        # Get critical period multiplier if applicable
+        critical_multiplier = self.critical_periods.get_learning_multiplier(
+            module_name=module_name,
+            capability=capability
+        )
+        
+        # Get practice effect multiplier
+        usage_level = self._capability_usage.get(module_name, {}).get(capability, 0.0)
+        practice_multiplier = 1.0 + (
+            (self._growth_model.practice_effect - 1.0) * 
+            min(1.0, usage_level / 3.0)  # Scale by usage, cap at 1.0
+        )
+        
+        # Apply plateau effect for advanced progress
+        if current_progress is None:
+            current_progress = self._growth_progress.get(module_name, {}).get(capability, 0.0)
             
-        if critical_period_multiplier < 0:
-            raise ValueError("Critical period multiplier cannot be negative")
+        plateau_effect = 1.0
+        if current_progress >= self._growth_model.plateau_threshold:
+            # Calculate how far into the plateau region we are (0.0-1.0)
+            plateau_progress = (current_progress - self._growth_model.plateau_threshold) / (
+                1.0 - self._growth_model.plateau_threshold
+            )
+            # Apply diminishing returns
+            plateau_effect = 1.0 - (plateau_progress * (1.0 - self._growth_model.plateau_factor))
             
-        try:
-            with self._lock:
-                # Start with the base rate for this capability
-                base_rate = self.capability_base_rates.get(capability, self.parameters.base_rate)
+        # Calculate variability factor if enabled
+        variability = 1.0
+        if self._config.enable_variability:
+            # Generate random variability around 1.0
+            variability_range = self._config.variability_factor
+            variability = 1.0 + self._rng.uniform(-variability_range, variability_range)
+            
+        # Combine all factors with base rate
+        growth_rate = (
+            self._growth_model.base_rate *
+            stage_multiplier *
+            critical_multiplier *
+            practice_multiplier *
+            plateau_effect *
+            variability
+        )
+        
+        return growth_rate
+    
+    def update_growth_progress(
+        self, 
+        module_name: str, 
+        capability: str, 
+        delta_time: Optional[float] = None
+    ) -> float:
+        """
+        Update growth progress for a capability based on current growth rate.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability to update
+        delta_time : Optional[float]
+            Time elapsed for growth. If None, calculated automatically.
+            
+        Returns:
+        --------
+        float
+            New progress value
+        """
+        # Ensure module and capability are registered
+        if module_name not in self._growth_progress:
+            self._growth_progress[module_name] = {}
+            
+        if capability not in self._growth_progress[module_name]:
+            self._growth_progress[module_name][capability] = 0.0
+            
+        # Get current progress
+        current_progress = self._growth_progress[module_name][capability]
+        
+        # Calculate growth rate
+        growth_rate = self.calculate_growth_rate(
+            module_name, capability, current_progress
+        )
+        
+        # Determine time elapsed
+        current_time = time.time()
+        if delta_time is None:
+            delta_time = current_time - self._last_update_time
+            
+        # Convert real time to developmental time
+        dev_delta_time = delta_time * self._config.time_acceleration
+        
+        # Calculate progress increment
+        progress_increment = growth_rate * dev_delta_time / 3600.0  # Scale to reasonable units
+        
+        # Update progress, capped at 1.0
+        new_progress = min(1.0, current_progress + progress_increment)
+        self._growth_progress[module_name][capability] = new_progress
+        
+        # Record history for analysis
+        self._growth_rate_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "module": module_name,
+            "capability": capability,
+            "growth_rate": growth_rate,
+            "progress": new_progress,
+            "stage": self.dev_stages.get_current_stage(),
+            "age": self.dev_stages.get_age()
+        })
+        
+        # Emit event if significant progress made
+        if int(new_progress * 100) > int(current_progress * 100):
+            self.event_system.emit(Event(
+                name="capability_progress_updated",
+                data={
+                    "module": module_name,
+                    "capability": capability,
+                    "previous_progress": current_progress,
+                    "new_progress": new_progress,
+                    "growth_rate": growth_rate
+                }
+            ))
+            
+        return new_progress
+    
+    def update_all(self) -> None:
+        """
+        Update growth progress for all registered capabilities.
+        
+        This method updates all capabilities based on their current growth rates.
+        """
+        current_time = time.time()
+        delta_time = current_time - self._last_update_time
+        
+        # Update each registered module and capability
+        for module_name, capabilities in self._growth_progress.items():
+            for capability in capabilities:
+                self.update_growth_progress(module_name, capability, delta_time)
                 
-                # Apply module-specific adjustments
-                module_multiplier = self.module_growth_rates.get(module, 1.0)
-                rate = base_rate * module_multiplier
+        # Update last update time
+        self._last_update_time = current_time
+    
+    def get_capability_progress(self, module_name: str, capability: str) -> float:
+        """
+        Get the current progress level for a capability.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability to get progress for
+            
+        Returns:
+        --------
+        float
+            Current progress level (0.0-1.0)
+        """
+        return self._growth_progress.get(module_name, {}).get(capability, 0.0)
+    
+    def get_module_progress(self, module_name: str) -> Dict[str, float]:
+        """
+        Get progress levels for all capabilities in a module.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module to get progress for
+            
+        Returns:
+        --------
+        Dict[str, float]
+            Dictionary mapping capability names to progress levels
+        """
+        return self._growth_progress.get(module_name, {}).copy()
+    
+    def get_overall_progress(self) -> float:
+        """
+        Get overall progress across all capabilities.
+        
+        Returns:
+        --------
+        float
+            Average progress across all capabilities (0.0-1.0)
+        """
+        total_progress = 0.0
+        capability_count = 0
+        
+        for module_progress in self._growth_progress.values():
+            for progress in module_progress.values():
+                total_progress += progress
+                capability_count += 1
                 
-                # Apply age modifiers
-                age_multiplier = self._get_age_multiplier(age)
-                rate *= age_multiplier
-                
-                # Apply natural cyclical variation
-                cycle_multiplier = self._get_cycle_multiplier(capability, age)
-                rate *= cycle_multiplier
-                
-                # Apply critical period effects
-                rate *= critical_period_multiplier
-                
-                # Apply active factors
-                if active_factors:
-                    factor_multiplier = self._calculate_factor_multiplier(active_factors)
-                    rate *= factor_multiplier
-                
-                # Apply adaptive adjustments if any
-                if capability in self.adaptive_adjustments:
-                    rate *= self.adaptive_adjustments[capability]
-                
-                # Apply random variation
-                if self.parameters.variability > 0:
-                    variation = 1.0 + (random.random() * 2 - 1) * self.parameters.variability
-                    rate *= variation
-                    
-                # Ensure rate is within valid bounds
-                rate = max(0.001, min(1.0, rate))
-                
-                # Record growth rate in history for plateau detection
-                self._record_growth_rate(capability, rate)
-                
-                return rate
-                
-        except Exception as e:
-            error_msg = f"Failed to calculate growth rate for {capability} in {module}: {str(e)}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            raise DevelopmentError(error_msg, details={
+        return total_progress / max(1, capability_count)
+    
+    def set_capability_progress(
+        self, 
+        module_name: str, 
+        capability: str, 
+        progress: float
+    ) -> None:
+        """
+        Manually set progress for a capability.
+        
+        Parameters:
+        -----------
+        module_name : str
+            Name of the module containing the capability
+        capability : str
+            Name of the capability to set progress for
+        progress : float
+            Progress level to set (0.0-1.0)
+        """
+        if progress < 0.0 or progress > 1.0:
+            raise ValueError("Progress must be between 0.0 and 1.0")
+            
+        # Ensure module and capability are registered
+        if module_name not in self._growth_progress:
+            self._growth_progress[module_name] = {}
+            
+        # Get current progress for event
+        current_progress = self._growth_progress.get(module_name, {}).get(capability, 0.0)
+        
+        # Set new progress
+        self._growth_progress[module_name][capability] = progress
+        
+        # Emit event for progress change
+        self.event_system.emit(Event(
+            name="capability_progress_set",
+            data={
+                "module": module_name,
                 "capability": capability,
-                "module": module,
-                "age": age,
-                "original_error": str(e)
-            })
-    
-    def _get_age_multiplier(self, age: float) -> float:
-        """
-        Get the age-based multiplier for the given developmental age
-        
-        Args:
-            age: The developmental age
-            
-        Returns:
-            The age-based multiplier
-        """
-        # Check cache first
-        cache_key = round(age, 2)  # Round to 2 decimal places for cache
-        if cache_key in self._cache["age_multipliers"] and self._is_cache_valid():
-            return self._cache["age_multipliers"][cache_key]
-            
-        if not self.parameters.age_modifiers:
-            return 1.0
-            
-        # Find the appropriate age bracket
-        for i, (bracket_age, multiplier) in enumerate(sorted(self.parameters.age_modifiers)):
-            if age < bracket_age:
-                if i == 0:
-                    result = multiplier
-                    break
-                
-                # Interpolate between brackets
-                prev_age, prev_mult = self.parameters.age_modifiers[i-1]
-                weight = (age - prev_age) / (bracket_age - prev_age)
-                result = prev_mult + weight * (multiplier - prev_mult)
-                break
-        else:
-            # If beyond the last bracket, use the last multiplier
-            result = self.parameters.age_modifiers[-1][1]
-        
-        # Cache the result
-        self._cache["age_multipliers"][cache_key] = result
-        return result
-    
-    def _get_cycle_multiplier(self, capability: str, age: float) -> float:
-        """
-        Calculate natural cyclical variations in growth rate
-        
-        This simulates natural periods of faster and slower growth
-        that occur during development.
-        
-        Args:
-            capability: The capability to calculate for
-            age: The developmental age
-            
-        Returns:
-            The cycle-based multiplier
-        """
-        # Check cache first
-        cache_key = (capability, round(age, 2))  # Round to 2 decimal places for cache
-        if cache_key in self._cache["cycle_multipliers"] and self._is_cache_valid():
-            return self._cache["cycle_multipliers"][cache_key]
-            
-        if capability not in self.growth_cycle_state:
-            return 1.0
-            
-        state = self.growth_cycle_state[capability]
-        phase = state["phase"]
-        frequency = state["frequency"]
-        
-        # Calculate position in the cycle based on age
-        cycle_position = phase + (age * frequency * 2 * math.pi)
-        
-        # Sinusoidal variation centered on 1.0 with +/- 20% variation
-        result = 1.0 + 0.2 * math.sin(cycle_position)
-        
-        # Cache the result
-        self._cache["cycle_multipliers"][cache_key] = result
-        return result
-    
-    def _calculate_factor_multiplier(self, active_factors: Dict[str, bool]) -> float:
-        """
-        Calculate the combined effect of all active factors
-        
-        Args:
-            active_factors: Dictionary of factor name -> is_active
-            
-        Returns:
-            Combined multiplier for all active factors
-        """
-        combined_multiplier = 1.0
-        
-        for factor, is_active in active_factors.items():
-            if not is_active:
-                continue
-                
-            # Check if it's an acceleration factor
-            if factor in self.parameters.acceleration_factors:
-                combined_multiplier *= self.parameters.acceleration_factors[factor]
-                
-            # Check if it's an inhibition factor
-            elif factor in self.parameters.inhibition_factors:
-                combined_multiplier *= self.parameters.inhibition_factors[factor]
-                
-        return combined_multiplier
-    
-    def register_acceleration_factor(self, name: str, multiplier: float) -> None:
-        """
-        Register a new acceleration factor
-        
-        Args:
-            name: The name of the factor
-            multiplier: The multiplier to apply (must be > 1.0)
-            
-        Raises:
-            ValueError: If multiplier is invalid
-        """
-        if multiplier <= 1.0:
-            raise ValueError(f"Acceleration factor multiplier must be greater than 1.0, got {multiplier}")
-            
-        with self._lock:
-            self.parameters.acceleration_factors[name] = multiplier
-            logger.info(f"Registered acceleration factor '{name}' with multiplier {multiplier}")
-    
-    def register_inhibition_factor(self, name: str, multiplier: float) -> None:
-        """
-        Register a new inhibition factor
-        
-        Args:
-            name: The name of the factor
-            multiplier: The multiplier to apply (must be < 1.0 and > 0)
-            
-        Raises:
-            ValueError: If multiplier is invalid
-        """
-        if not 0.0 < multiplier < 1.0:
-            raise ValueError(f"Inhibition factor multiplier must be between 0.0 and 1.0, got {multiplier}")
-            
-        with self._lock:
-            self.parameters.inhibition_factors[name] = multiplier
-            logger.info(f"Registered inhibition factor '{name}' with multiplier {multiplier}")
-    
-    def update_capability_base_rate(self, capability: str, base_rate: float) -> None:
-        """
-        Update the base growth rate for a specific capability
-        
-        Args:
-            capability: The capability to update
-            base_rate: The new base rate (0.0-1.0)
-            
-        Raises:
-            ValueError: If base_rate is outside valid range
-        """
-        if not 0.0 <= base_rate <= 1.0:
-            raise ValueError(f"Base rate must be between 0.0 and 1.0, got {base_rate}")
-            
-        with self._lock:
-            self.capability_base_rates[capability] = base_rate
-            logger.info(f"Updated base rate for '{capability}' to {base_rate}")
-    
-    def update_module_growth_rate(self, module: str, multiplier: float) -> None:
-        """
-        Update the growth rate multiplier for a specific module
-        
-        Args:
-            module: The module to update
-            multiplier: The new multiplier (must be positive)
-            
-        Raises:
-            ValueError: If multiplier is invalid
-        """
-        if multiplier <= 0:
-            raise ValueError(f"Module growth rate multiplier must be positive, got {multiplier}")
-            
-        with self._lock:
-            self.module_growth_rates[module] = multiplier
-            logger.info(f"Updated growth rate multiplier for '{module}' to {multiplier}")
-    
-    def detect_developmental_plateau(self, 
-                                    capability: str, 
-                                    recent_growth: List[float],
-                                    threshold: float = 0.01) -> bool:
-        """
-        Detect if development has plateaued for a capability
-        
-        Args:
-            capability: The capability to check
-            recent_growth: List of recent growth amounts
-            threshold: Threshold for plateau detection
-            
-        Returns:
-            True if a plateau is detected, False otherwise
-        """
-        if len(recent_growth) < 5:
-            return False  # Need at least 5 data points
-            
-        # Calculate average growth
-        avg_growth = sum(recent_growth) / len(recent_growth)
-        
-        # Calculate variance
-        variance = sum((g - avg_growth) ** 2 for g in recent_growth) / len(recent_growth)
-        std_dev = variance ** 0.5
-        
-        # Check if growth is consistently low with low variance
-        return avg_growth < threshold and std_dev < threshold / 2
-    
-    def get_plateau_intervention(self, 
-                               capability: str, 
-                               module: str, 
-                               age: float) -> Dict[str, Any]:
-        """
-        Get intervention recommendations for a developmental plateau
-        
-        Args:
-            capability: The capability that has plateaued
-            module: The module this capability belongs to
-            age: Current developmental age
-            
-        Returns:
-            Dictionary with intervention recommendations
-        """
-        with self._lock:
-            # Check if we have growth history for this capability
-            if capability not in self.growth_history or len(self.growth_history[capability]) < 5:
-                return {"has_plateau": False}
-                
-            # Check for plateau
-            recent_growth = self.growth_history[capability][-5:]
-            has_plateau = self.detect_developmental_plateau(capability, recent_growth)
-            
-            if not has_plateau:
-                return {"has_plateau": False}
-                
-            # Generate intervention recommendations
-            interventions = []
-            
-            # Recommend focused learning
-            interventions.append({
-                "type": "focused_learning",
-                "description": f"Focus specifically on {capability} development",
-                "expected_impact": "high"
-            })
-            
-            # Recommend new experiences
-            interventions.append({
-                "type": "new_experiences",
-                "description": f"Introduce novel stimuli related to {capability}",
-                "expected_impact": "medium"
-            })
-            
-            # Recommend temporary growth rate boost
-            if capability in self.adaptive_adjustments:
-                current_adjustment = self.adaptive_adjustments[capability]
-                new_adjustment = min(2.0, current_adjustment * 1.2)  # Increase by 20%, max 2x
-            else:
-                new_adjustment = 1.2  # Start with 20% boost
-                
-            self.adaptive_adjustments[capability] = new_adjustment
-            
-            interventions.append({
-                "type": "growth_rate_adjustment",
-                "description": f"Temporary growth rate boost applied: {new_adjustment:.2f}x",
-                "expected_impact": "high",
-                "automatic": True
-            })
-            
-            return {
-                "has_plateau": True,
-                "capability": capability,
-                "module": module,
-                "age": age,
-                "recent_growth_rates": recent_growth,
-                "interventions": interventions
+                "previous_progress": current_progress,
+                "new_progress": progress
             }
-    
-    def _record_growth_rate(self, capability: str, rate: float) -> None:
-        """
-        Record a growth rate in history for plateau detection
+        ))
         
-        Args:
-            capability: The capability
-            rate: The growth rate
+        logger.info(f"Manually set {module_name}.{capability} progress to {progress:.2f}")
+    
+    def get_growth_rate_history(
+        self, 
+        module_name: Optional[str] = None, 
+        capability: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
         """
-        if capability not in self.growth_history:
-            self.growth_history[capability] = []
-            
-        history = self.growth_history[capability]
-        history.append(rate)
+        Get history of growth rate changes for analysis.
         
-        # Limit history size
-        if len(history) > self.max_history_length:
-            self.growth_history[capability] = history[-self.max_history_length:]
-    
-    def _is_cache_valid(self) -> bool:
-        """Check if cache is still valid"""
-        time_diff = (datetime.now() - self._cache["last_cache_update"]).total_seconds()
-        return time_diff < self._cache_ttl
-    
-    def _invalidate_cache(self) -> None:
-        """Invalidate the cache"""
-        self._cache["age_multipliers"] = {}
-        self._cache["cycle_multipliers"] = {}
-        self._cache["last_cache_update"] = datetime.min
-    
-    def get_state(self) -> Dict[str, Any]:
-        """
-        Get the current state for persistence
-        
-        Returns:
-            Dictionary with the complete state
-        """
-        with self._lock:
-            return {
-                "parameters": self.parameters.to_dict(),
-                "capability_base_rates": self.capability_base_rates,
-                "module_growth_rates": self.module_growth_rates,
-                "growth_cycle_state": self.growth_cycle_state,
-                "adaptive_adjustments": self.adaptive_adjustments
-            }
-    
-    def load_state(self, state: Dict[str, Any]) -> None:
-        """
-        Load a previously saved state
-        
-        Args:
-            state: The state dictionary to load
-            
-        Raises:
-            ValueError: If state dictionary is invalid
-        """
-        if not state:
-            raise ValueError("State dictionary cannot be empty")
-            
-        with self._lock:
-            if "parameters" in state:
-                params = state["parameters"]
-                self.parameters = GrowthRateParameters(
-                    base_rate=params.get("base_rate", 0.01),
-                    variability=params.get("variability", 0.2),
-                    acceleration_factors=params.get("acceleration_factors", {}),
-                    inhibition_factors=params.get("inhibition_factors", {}),
-                    age_modifiers=params.get("age_modifiers", [])
-                )
-                
-            if "capability_base_rates" in state:
-                self.capability_base_rates = state["capability_base_rates"]
-                
-            if "module_growth_rates" in state:
-                self.module_growth_rates = state["module_growth_rates"]
-                
-            if "growth_cycle_state" in state:
-                self.growth_cycle_state = state["growth_cycle_state"]
-                
-            if "adaptive_adjustments" in state:
-                self.adaptive_adjustments = state["adaptive_adjustments"]
-                
-            # Invalidate cache after state load
-            self._invalidate_cache()
-            
-            logger.info("Growth rate controller state loaded")
-    
-    def save_state_to_file(self, filepath: str) -> None:
-        """
-        Save the current state to a file
-        
-        Args:
-            filepath: Path to save the state file
-            
-        Raises:
-            IOError: If file cannot be written
-        """
-        state = self.get_state()
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        
-        with open(filepath, 'w') as f:
-            json.dump(state, f, indent=2, default=str)
-            
-        logger.info(f"Growth rate controller state saved to {filepath}")
-    
-    def load_state_from_file(self, filepath: str) -> None:
-        """
-        Load state from a file
-        
-        Args:
-            filepath: Path to the state file
-            
-        Raises:
-            FileNotFoundError: If the file doesn't exist
-            IOError: If file cannot be read
-            ValueError: If file contains invalid state
-        """
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"State file not found: {filepath}")
-            
-        with open(filepath, 'r') as f:
-            state = json.load(f)
-            
-        self.load_state(state)
-        logger.info(f"Growth rate controller state loaded from {filepath}")
-    
-    def reset_adaptive_adjustments(self) -> None:
-        """Reset all adaptive growth rate adjustments"""
-        with self._lock:
-            self.adaptive_adjustments = {}
-            logger.info("Adaptive growth rate adjustments reset")
-    
-    def get_capability_growth_history(self, capability: str) -> List[float]:
-        """
-        Get the growth history for a specific capability
-        
-        Args:
-            capability: The capability to get history for
+        Parameters:
+        -----------
+        module_name : Optional[str]
+            Filter by module name
+        capability : Optional[str]
+            Filter by capability name
+        limit : int
+            Maximum number of records to return
             
         Returns:
-            List of recent growth rates, or empty list if no history
+        --------
+        List[Dict[str, Any]]
+            List of growth rate history records
         """
-        with self._lock:
-            return self.growth_history.get(capability, [])[:]  # Return a copy 
+        filtered_history = self._growth_rate_history
+        
+        if module_name is not None:
+            filtered_history = [
+                record for record in filtered_history 
+                if record["module"] == module_name
+            ]
+            
+        if capability is not None:
+            filtered_history = [
+                record for record in filtered_history
+                if record["capability"] == capability
+            ]
+            
+        # Return most recent records first
+        return list(reversed(filtered_history))[:limit]
+    
+    def get_state(self) -> StateDict:
+        """
+        Get the current state as a dictionary for saving.
+        
+        Returns:
+        --------
+        StateDict
+            Current state dictionary
+        """
+        return {
+            "capability_usage": self._capability_usage,
+            "growth_progress": self._growth_progress,
+            "last_update_time": self._last_update_time
+        }
+    
+    def load_state(self, state: StateDict) -> None:
+        """
+        Load state from a state dictionary.
+        
+        Parameters:
+        -----------
+        state : StateDict
+            State dictionary to load from
+        """
+        self._capability_usage = state["capability_usage"]
+        self._growth_progress = state["growth_progress"]
+        self._last_update_time = state["last_update_time"]
+        
+        logger.info("Growth rate controller state loaded")
