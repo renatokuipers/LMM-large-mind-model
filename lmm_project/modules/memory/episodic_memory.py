@@ -1,821 +1,848 @@
-from typing import Dict, List, Any, Optional, Tuple, Union, Set
-from pydantic import BaseModel, Field
-from datetime import datetime, timedelta
-import numpy as np
+"""
+Episodic Memory Module
+
+This module implements episodic memory capabilities, storing temporally organized
+experiences and events with their contextual details. Episodic memories include
+information about what happened, where it happened, and when it happened.
+"""
+
+from typing import Dict, List, Any, Optional, Set, Tuple, Union
+import time
 import uuid
-import os
-import json
+import logging
+import numpy as np
+from datetime import datetime, timedelta
 from pathlib import Path
+import os
+import pickle
+import json
+from collections import deque
+import torch
 
 from lmm_project.modules.base_module import BaseModule
-from lmm_project.core.event_bus import EventBus
+from lmm_project.core.event_bus import EventBus 
 from lmm_project.core.message import Message
-from lmm_project.modules.memory.models import EpisodicMemory, Memory
-from lmm_project.utils.vector_store import VectorStore
+from lmm_project.modules.memory.models import EpisodicMemory, MemoryConsolidationEvent
+from lmm_project.modules.memory.neural_net import MemoryNeuralNetwork
 
-class EpisodicMemoryModule(BaseModule):
+logger = logging.getLogger(__name__)
+
+class EpisodicMemorySystem:
     """
-    Episodic memory system for experiences and events
+    Episodic memory system for storing and retrieving event memories
     
-    Episodic memory represents specific events, experiences, and 
-    autobiographical information. This memory type is crucial for 
-    self-identity and autobiographical knowledge.
+    Episodic memory stores experiences with their temporal, spatial, and emotional
+    context. It develops over time, starting with basic event recording and
+    eventually supporting detailed autobiographical memory.
+    
+    Development stages:
+    - Stage 0 (0.0-0.2): Basic event storage with minimal context
+    - Stage 1 (0.2-0.4): Time-based memory organization and simple retrieval
+    - Stage 2 (0.4-0.6): Context-based episodic recall and emotional tagging
+    - Stage 3 (0.6-0.8): Narrative connection between related episodes
+    - Stage 4 (0.8-1.0): Autobiographical memory with self-reference
     """
-    # Episode storage
-    episodes: Dict[str, EpisodicMemory] = Field(default_factory=dict)
-    # Vector store for semantic search
-    vector_store: Optional[VectorStore] = None
-    # Narratives (collections of related episodes)
-    narratives: Dict[str, List[str]] = Field(default_factory=dict)
-    # Episode contexts (grouping by context)
-    contexts: Dict[str, Set[str]] = Field(default_factory=dict)
-    # Temporal ordering of episodes (by event time)
-    temporal_index: List[Tuple[datetime, str]] = Field(default_factory=list)
-    # Storage directory
-    storage_dir: str = Field(default="storage/memories/episodic")
-    # Forgetting rate (memories below this vividness may be forgotten)
-    forgetting_rate: float = Field(default=0.02)
-    # Time bias (recent memories are emphasized)
-    time_bias: float = Field(default=0.8)
     
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
-    
-    def __init__(self, module_id: str, event_bus: Optional[EventBus] = None, **data):
-        """Initialize episodic memory module"""
-        super().__init__(
-            module_id=module_id,
-            module_type="episodic_memory",
-            event_bus=event_bus,
-            **data
+    def __init__(
+        self, 
+        max_episodes: int = 1000,
+        development_level: float = 0.0,
+        embedding_dim: int = 128,
+        base_directory: Optional[str] = None
+    ):
+        """
+        Initialize episodic memory system
+        
+        Args:
+            max_episodes: Maximum number of episodes to store
+            development_level: Initial development level (0.0-1.0)
+            embedding_dim: Dimension for memory embeddings
+            base_directory: Directory for persistent storage
+        """
+        self.episodes: Dict[str, EpisodicMemory] = {}
+        self.temporal_index: List[str] = []  # Episode IDs in temporal order
+        self.context_index: Dict[str, List[str]] = {}  # Context -> episode IDs
+        self.entity_index: Dict[str, List[str]] = {}  # Entity -> episode IDs
+        self.narrative_index: Dict[str, List[str]] = {}  # Narrative ID -> episode IDs
+        self.emotion_index: Dict[str, List[str]] = {}  # Emotion category -> episode IDs
+        
+        self.max_episodes = max_episodes
+        self.episode_count = 0
+        self.development_level = development_level
+        self.embedding_dim = embedding_dim
+        self.last_consolidation = datetime.now()
+        self.base_directory = base_directory
+        
+        # Recent episodes cache (for faster access to recent memories)
+        self.recent_episodes = deque(maxlen=50)
+        
+        # Memory for important life events (never pruned)
+        self.important_events: Dict[str, EpisodicMemory] = {}
+        
+        # Neural network for encoding and retrieval
+        self.neural_network = MemoryNeuralNetwork(
+            input_dim=embedding_dim,
+            hidden_dim=256,
+            output_dim=embedding_dim,
+            memory_type="episodic",
+            learning_rate=0.01,
+            device="auto"  # Use GPU if available
         )
         
-        # Create storage directory
-        os.makedirs(self.storage_dir, exist_ok=True)
+        # Update neural network development level
+        self.neural_network.update_development(development_level)
         
-        # Initialize vector store
-        self.vector_store = VectorStore(
-            dimension=768,
-            storage_dir="storage/embeddings/episodic"
-        )
-        
-        # Try to load previous episodes
-        self._load_episodes()
-        
-        # Subscribe to relevant events
-        if self.event_bus:
-            self.subscribe_to_message("experience_recorded", self._handle_experience_recorded)
-            self.subscribe_to_message("episodic_query", self._handle_episodic_query)
-            self.subscribe_to_message("memory_consolidation", self._handle_memory_consolidation)
+        # Load stored episodes if base directory is provided
+        if base_directory:
+            self._load_episodes()
     
-    def process_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def store_episode(self, episode_data: Dict[str, Any]) -> str:
         """
-        Process episodic memory operations
+        Store a new episode in memory
         
-        Parameters:
-        input_data: Dictionary containing operation data
-            - operation: The operation to perform (add_episode, get_episode,
-                         search_episodes, create_narrative, etc.)
-            - Additional parameters depend on the operation
-            
+        Args:
+            episode_data: Data representing the episode
+                Must include 'content' and 'context' keys
+                
         Returns:
-        Dictionary containing operation results
+            ID of the stored episode
         """
-        operation = input_data.get("operation", "")
-        
-        if operation == "add_episode":
-            episode_data = input_data.get("episode", {})
-            return self.add_episode(episode_data)
-        
-        elif operation == "get_episode":
-            episode_id = input_data.get("episode_id", "")
-            return self.get_episode(episode_id)
-        
-        elif operation == "search_episodes":
-            query = input_data.get("query", "")
-            return self.search_episodes(query)
-        
-        elif operation == "create_narrative":
-            episodes = input_data.get("episodes", [])
-            narrative_name = input_data.get("narrative_name", f"narrative_{uuid.uuid4().hex[:8]}")
-            return self.create_narrative(episodes, narrative_name)
-        
-        elif operation == "get_recent_episodes":
-            count = input_data.get("count", 5)
-            return self.get_recent_episodes(count)
-        
-        elif operation == "get_episodes_by_context":
-            context = input_data.get("context", "")
-            return self.get_episodes_by_context(context)
+        # Basic validation
+        if 'content' not in episode_data or 'context' not in episode_data:
+            logger.error("Episode data must include 'content' and 'context'")
+            return ""
             
-        return {"status": "error", "message": f"Unknown operation: {operation}"}
-    
-    def update_development(self, amount: float) -> float:
-        """
-        Update episodic memory's developmental level
+        # Generate episode ID
+        episode_id = f"ep_{uuid.uuid4().hex[:8]}"
         
-        As episodic memory develops:
-        - Episode detail and vividness increases
-        - Temporal ordering becomes more accurate
-        - Narrative formation becomes more sophisticated
-        - Emotional binding to memories improves
-        
-        Parameters:
-        amount: Amount to increase development level
-        
-        Returns:
-        New development level
-        """
-        prev_level = self.development_level
-        self.development_level = min(1.0, self.development_level + amount)
-        
-        # Update parameters based on development
-        delta = self.development_level - prev_level
-        
-        # Improve forgetting rate
-        forgetting_decrease = delta * 0.003
-        self.forgetting_rate = max(0.001, self.forgetting_rate - forgetting_decrease)
-        
-        # Adjust time bias (more developed episodic memory can better maintain 
-        # older memories, so we reduce recency bias)
-        time_bias_decrease = delta * 0.05
-        self.time_bias = max(0.3, self.time_bias - time_bias_decrease)
-        
-        return self.development_level
-    
-    def add_episode(self, episode_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Add a new episode to episodic memory
-        
-        Parameters:
-        episode_data: Dictionary containing episode data
-            - content: Description of the episode
-            - context: Where this memory took place
-            - involved_entities: Optional list of involved entities
-            - emotional_impact: Optional dict of emotions and intensities
-            - importance: Optional importance value (0.0-1.0)
-            - is_first_person: Optional flag for first-person perspective
-            - vividness: Optional vividness value (0.0-1.0)
+        # Add timestamp if not provided
+        if "timestamp" not in episode_data:
+            episode_data["timestamp"] = datetime.now()
             
-        Returns:
-        Operation result
-        """
-        # Create episode ID if not provided
-        if "id" not in episode_data:
-            episode_data["id"] = str(uuid.uuid4())
-            
-        episode_id = episode_data["id"]
-        
-        # Ensure required fields
-        if "content" not in episode_data:
-            return {"status": "error", "message": "No content provided"}
-            
-        if "context" not in episode_data:
-            episode_data["context"] = "unknown"
-        
-        # Default event time to now if not provided
+        # Add event_time if not provided
         if "event_time" not in episode_data:
-            episode_data["event_time"] = datetime.now()
-        
-        # Create EpisodicMemory object
-        episode = EpisodicMemory(**episode_data)
-        
-        # Store episode
-        self.episodes[episode_id] = episode
-        
-        # Add to context index
-        context = episode.context
-        if context not in self.contexts:
-            self.contexts[context] = set()
-        self.contexts[context].add(episode_id)
-        
-        # Add to temporal index
-        self.temporal_index.append((episode.event_time, episode_id))
-        self.temporal_index.sort(key=lambda x: x[0])
-        
-        # Add to narrative if specified
-        narrative_id = episode_data.get("narrative_id")
-        if narrative_id:
-            if narrative_id not in self.narratives:
-                self.narratives[narrative_id] = []
-            self.narratives[narrative_id].append(episode_id)
-        
-        # Generate embedding if not provided
-        if not episode.embedding:
-            # Combine content and context for better embedding
-            embedding_text = f"{episode.content} in {episode.context}"
-            episode.embedding = self._generate_embedding(embedding_text)
+            episode_data["event_time"] = episode_data["timestamp"]
             
-            # Add to vector store if embedding exists
-            if episode.embedding:
-                self.vector_store.add(
-                    embeddings=[episode.embedding],
-                    metadata_list=[{
-                        "id": episode_id,
-                        "content": episode.content,
-                        "context": episode.context
-                    }]
-                )
-        
-        # Save to disk
-        self._save_episode(episode)
-        
-        # Publish event
-        self.publish_message("episode_added", {
-            "episode_id": episode_id,
-            "content": episode.content,
-            "context": episode.context
-        })
-        
-        return {
-            "status": "success",
-            "episode_id": episode_id
-        }
-    
-    def get_episode(self, episode_id: str) -> Dict[str, Any]:
-        """
-        Get a specific episode by ID
-        
-        Parameters:
-        episode_id: ID of the episode to retrieve
-        
-        Returns:
-        Operation result containing episode data
-        """
-        # Check if episode exists
-        if episode_id not in self.episodes:
-            return {"status": "error", "message": f"Episode not found: {episode_id}"}
-        
-        episode = self.episodes[episode_id]
-        
-        # Update activation
-        episode.update_activation(0.3)
-        
-        # Get episode data
-        result = episode.model_dump()
-        
-        # Convert datetime objects to strings
-        for key, value in result.items():
-            if isinstance(value, datetime):
-                result[key] = value.isoformat()
-        
-        # Get adjacent episodes in narratives
-        if episode.narrative_id:
-            narrative = self.narratives.get(episode.narrative_id, [])
-            if narrative:
-                try:
-                    pos = narrative.index(episode_id)
-                    result["previous_episode"] = narrative[pos-1] if pos > 0 else None
-                    result["next_episode"] = narrative[pos+1] if pos < len(narrative)-1 else None
-                except ValueError:
-                    result["previous_episode"] = None
-                    result["next_episode"] = None
-        
-        # Publish event
-        self.publish_message("episode_retrieved", {
-            "episode_id": episode_id,
-            "content": episode.content
-        })
-        
-        # Return episode data
-        return {
-            "status": "success",
-            "episode": result,
-            "episode_id": episode_id
-        }
-    
-    def search_episodes(self, query: str, limit: int = 5) -> Dict[str, Any]:
-        """
-        Search for episodes by semantic similarity
-        
-        Parameters:
-        query: Text query
-        limit: Maximum number of results
-        
-        Returns:
-        Operation result containing matching episodes
-        """
-        # Generate embedding for query
-        query_embedding = self._generate_embedding(query)
-        
-        if not query_embedding:
-            return {"status": "error", "message": "Failed to generate embedding for query"}
-        
-        # Search vector store
+        # Generate embedding based on development level
+        embedding = self._generate_embedding(episode_data)
+        if embedding is not None:
+            episode_data["embedding"] = embedding.tolist()
+            
+        # Create EpisodicMemory object
         try:
-            indices, distances, metadata = self.vector_store.search(
-                query_embedding=query_embedding,
-                k=limit
+            episode = EpisodicMemory(**episode_data)
+        except Exception as e:
+            logger.error(f"Error creating episodic memory: {e}")
+            # Create with minimal data
+            episode = EpisodicMemory(
+                content=episode_data.get('content', ''),
+                context=episode_data.get('context', ''),
+                importance=episode_data.get('importance', 0.5)
             )
             
-            # Collect results
-            results = []
-            for idx, dist, meta in zip(indices, distances, metadata):
-                episode_id = meta.get("id")
-                if episode_id in self.episodes:
-                    episode = self.episodes[episode_id]
-                    # Update activation
-                    episode.update_activation(0.2)
-                    results.append({
-                        "episode_id": episode_id,
-                        "content": episode.content,
-                        "context": episode.context,
-                        "event_time": episode.event_time.isoformat(),
-                        "similarity_score": 1.0 - min(1.0, float(dist))
-                    })
+        # Store the episode
+        self.episodes[episode_id] = episode
+        
+        # Add to indices based on development level
+        self._add_to_indices(episode_id, episode)
+        
+        # Add to recent episodes
+        self.recent_episodes.appendleft(episode_id)
+        
+        # If it's an important event, add to important events
+        if episode.importance >= 0.8:
+            self.important_events[episode_id] = episode
             
-            # Publish event
-            self.publish_message("episode_search_results", {
-                "query": query,
-                "result_count": len(results)
-            })
+        # Increment episode count
+        self.episode_count += 1
+        
+        # Check if we need to consolidate/prune
+        current_time = datetime.now()
+        if (current_time - self.last_consolidation).total_seconds() > 3600:  # Every hour
+            self._consolidate_memories()
+            self.last_consolidation = current_time
             
-            return {
-                "status": "success",
-                "results": results,
-                "query": query
-            }
+        # If we're over capacity, prune
+        if len(self.episodes) > self.max_episodes:
+            self._prune_episodes()
             
-        except Exception as e:
-            return {"status": "error", "message": f"Search failed: {str(e)}"}
-    
-    def create_narrative(self, episode_ids: List[str], narrative_name: str) -> Dict[str, Any]:
+        # Save episode if base directory is set
+        if self.base_directory and self.development_level >= 0.4:
+            self._save_episode(episode_id, episode)
+            
+        return episode_id
+        
+    def retrieve_episode(self, episode_id: str) -> Optional[EpisodicMemory]:
         """
-        Create a narrative from multiple episodes
+        Retrieve a specific episode by ID
         
-        Parameters:
-        episode_ids: List of episode IDs to include in the narrative
-        narrative_name: Name for the narrative
-        
+        Args:
+            episode_id: ID of the episode to retrieve
+            
         Returns:
-        Operation result
+            EpisodicMemory object or None if not found
         """
-        if not episode_ids:
-            return {"status": "error", "message": "No episodes provided"}
+        # Check if episode exists
+        if episode_id in self.episodes:
+            episode = self.episodes[episode_id]
+            
+            # Update access count and timestamp
+            episode.access_count += 1
+            episode.last_accessed = datetime.now()
+            
+            # Increase activation level
+            episode.update_activation(0.2)
+            
+            return episode
+            
+        return None
         
-        # Check if all episodes exist
-        missing_episodes = [eid for eid in episode_ids if eid not in self.episodes]
-        if missing_episodes:
-            return {"status": "error", "message": f"Episodes not found: {missing_episodes}"}
+    def search_by_content(self, query: str, limit: int = 10) -> List[EpisodicMemory]:
+        """
+        Search for episodes by content
         
-        # Create narrative ID
-        narrative_id = f"narrative_{uuid.uuid4().hex[:8]}"
+        Args:
+            query: Text to search for in episode content
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of matching EpisodicMemory objects
+        """
+        # Simple text search by default
+        results = []
+        
+        # For more advanced developmental stages, use embeddings
+        if self.development_level >= 0.4 and hasattr(self, 'neural_network'):
+            # Generate query embedding
+            query_embedding = self._text_to_embedding(query)
+            
+            if query_embedding is not None:
+                return self._search_by_embedding(query_embedding, limit)
+        
+        # Fallback to simple text search
+        for episode_id, episode in self.episodes.items():
+            if query.lower() in episode.content.lower():
+                results.append(episode)
+                if len(results) >= limit:
+                    break
+                    
+        return results
+        
+    def search_by_time_range(
+        self, 
+        start_time: datetime, 
+        end_time: datetime, 
+        limit: int = 10
+    ) -> List[EpisodicMemory]:
+        """
+        Search for episodes within a time range
+        
+        Args:
+            start_time: Start of time range
+            end_time: End of time range
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of matching EpisodicMemory objects
+        """
+        results = []
+        
+        # Only enabled at development level 0.2+
+        if self.development_level < 0.2:
+            logger.warning("Time-based search requires development level 0.2+")
+            return results
+            
+        # Search through temporal index
+        for episode_id in self.temporal_index:
+            if episode_id in self.episodes:
+                episode = self.episodes[episode_id]
+                
+                # Check if event_time is within range
+                if start_time <= episode.event_time <= end_time:
+                    results.append(episode)
+                    if len(results) >= limit:
+                        break
+                        
+        return results
+        
+    def search_by_context(self, context: str, limit: int = 10) -> List[EpisodicMemory]:
+        """
+        Search for episodes by context
+        
+        Args:
+            context: Context to search for
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of matching EpisodicMemory objects
+        """
+        results = []
+        
+        # Only enabled at development level 0.4+
+        if self.development_level < 0.4:
+            logger.warning("Context-based search requires development level 0.4+")
+            return results
+            
+        # Direct lookup in context index
+        if context in self.context_index:
+            episode_ids = self.context_index[context][:limit]
+            for episode_id in episode_ids:
+                if episode_id in self.episodes:
+                    results.append(self.episodes[episode_id])
+        
+        # If we didn't find enough direct matches, try partial matching
+        if len(results) < limit:
+            for ctx, episode_ids in self.context_index.items():
+                if context.lower() in ctx.lower():
+                    for episode_id in episode_ids:
+                        if episode_id in self.episodes and self.episodes[episode_id] not in results:
+                            results.append(self.episodes[episode_id])
+                            if len(results) >= limit:
+                                break
+                                
+        return results
+        
+    def get_recent_episodes(self, limit: int = 10) -> List[EpisodicMemory]:
+        """
+        Get most recent episodes
+        
+        Args:
+            limit: Maximum number of episodes to return
+            
+        Returns:
+            List of recent EpisodicMemory objects
+        """
+        results = []
+        
+        # Use recent episodes cache for faster access
+        for episode_id in list(self.recent_episodes)[:limit]:
+            if episode_id in self.episodes:
+                results.append(self.episodes[episode_id])
+                
+        return results
+        
+    def get_emotional_episodes(
+        self, 
+        valence: Optional[float] = None, 
+        arousal: Optional[float] = None,
+        limit: int = 10
+    ) -> List[EpisodicMemory]:
+        """
+        Get episodes with specific emotional characteristics
+        
+        Args:
+            valence: Target emotional valence (-1.0 to 1.0), or None for any
+            arousal: Target emotional arousal (0.0 to 1.0), or None for any
+            limit: Maximum number of episodes to return
+            
+        Returns:
+            List of matching EpisodicMemory objects
+        """
+        results = []
+        
+        # Only enabled at development level 0.6+
+        if self.development_level < 0.6:
+            logger.warning("Emotional search requires development level 0.6+")
+            return results
+            
+        # Search all episodes and filter by emotional characteristics
+        for episode_id, episode in self.episodes.items():
+            match = True
+            
+            if valence is not None:
+                # Match within a range of the target valence
+                if abs(episode.emotional_valence - valence) > 0.3:
+                    match = False
+                    
+            if arousal is not None and match:
+                # Match within a range of the target arousal
+                if abs(episode.emotional_arousal - arousal) > 0.3:
+                    match = False
+                    
+            if match:
+                results.append(episode)
+                if len(results) >= limit:
+                    break
+                    
+        return results
+        
+    def get_narrative_episodes(self, narrative_id: str) -> List[EpisodicMemory]:
+        """
+        Get all episodes in a narrative sequence
+        
+        Args:
+            narrative_id: ID of the narrative to retrieve
+            
+        Returns:
+            List of episodes in the narrative, ordered by sequence position
+        """
+        results = []
+        
+        # Only enabled at development level 0.8+
+        if self.development_level < 0.8:
+            logger.warning("Narrative retrieval requires development level 0.8+")
+            return results
+            
+        # Check if narrative exists
+        if narrative_id in self.narrative_index:
+            episode_ids = self.narrative_index[narrative_id]
+            
+            # Get all episodes in the narrative
+            episodes = []
+            for episode_id in episode_ids:
+                if episode_id in self.episodes:
+                    episodes.append(self.episodes[episode_id])
+                    
+            # Sort by sequence position
+            episodes.sort(key=lambda x: x.sequence_position if x.sequence_position is not None else 9999)
+            results = episodes
+            
+        return results
+        
+    def create_narrative(self, episode_ids: List[str], narrative_name: str = "") -> str:
+        """
+        Create a narrative by linking episodes in sequence
+        
+        Args:
+            episode_ids: List of episode IDs to include in the narrative
+            narrative_name: Optional name for the narrative
+            
+        Returns:
+            ID of the created narrative
+        """
+        # Only enabled at development level 0.8+
+        if self.development_level < 0.8:
+            logger.warning("Narrative creation requires development level 0.8+")
+            return ""
+            
+        # Generate narrative ID
+        narrative_id = f"narr_{uuid.uuid4().hex[:8]}"
+        if not narrative_name:
+            narrative_name = f"Narrative {narrative_id}"
+            
+        # Create narrative
+        self.narrative_index[narrative_id] = []
         
         # Add episodes to narrative
-        self.narratives[narrative_id] = episode_ids
-        
-        # Update narrative ID and sequence position in episodes
         for i, episode_id in enumerate(episode_ids):
-            episode = self.episodes[episode_id]
-            episode.narrative_id = narrative_id
-            episode.sequence_position = i
-            self._save_episode(episode)
-        
-        # Save narratives
-        self._save_narratives()
-        
-        # Publish event
-        self.publish_message("narrative_created", {
-            "narrative_id": narrative_id,
-            "narrative_name": narrative_name,
-            "episode_count": len(episode_ids)
-        })
-        
-        return {
-            "status": "success",
-            "narrative_id": narrative_id,
-            "narrative_name": narrative_name,
-            "episodes": episode_ids
-        }
-    
-    def get_recent_episodes(self, count: int = 5) -> Dict[str, Any]:
-        """
-        Get the most recent episodes
-        
-        Parameters:
-        count: Number of episodes to retrieve
-        
-        Returns:
-        Operation result containing recent episodes
-        """
-        if not self.temporal_index:
-            return {"status": "error", "message": "No episodes available", "episodes": []}
-        
-        # Get the most recent episodes
-        recent_indices = self.temporal_index[-count:]
-        recent_indices.reverse()  # Most recent first
-        
-        recent_episodes = []
-        for _, episode_id in recent_indices:
             if episode_id in self.episodes:
+                # Update episode with narrative information
                 episode = self.episodes[episode_id]
-                recent_episodes.append({
-                    "episode_id": episode_id,
-                    "content": episode.content,
-                    "context": episode.context,
-                    "event_time": episode.event_time.isoformat()
-                })
+                episode.narrative_id = narrative_id
+                episode.sequence_position = i
+                
+                # Add to narrative index
+                self.narrative_index[narrative_id].append(episode_id)
+                
+        return narrative_id
         
-        return {
-            "status": "success",
-            "episodes": recent_episodes,
-            "count": len(recent_episodes)
-        }
-    
-    def get_episodes_by_context(self, context: str) -> Dict[str, Any]:
+    def update_development(self, amount: float) -> float:
         """
-        Get episodes by context
+        Update the developmental level of episodic memory
         
-        Parameters:
-        context: Context to filter by
-        
-        Returns:
-        Operation result containing episodes in the context
-        """
-        if context not in self.contexts:
-            return {"status": "error", "message": f"Context not found: {context}", "episodes": []}
-        
-        context_episode_ids = self.contexts[context]
-        context_episodes = []
-        
-        for episode_id in context_episode_ids:
-            if episode_id in self.episodes:
-                episode = self.episodes[episode_id]
-                context_episodes.append({
-                    "episode_id": episode_id,
-                    "content": episode.content,
-                    "event_time": episode.event_time.isoformat(),
-                    "importance": episode.importance
-                })
-        
-        # Sort by event time (most recent first)
-        context_episodes.sort(key=lambda x: x["event_time"], reverse=True)
-        
-        return {
-            "status": "success",
-            "context": context,
-            "episodes": context_episodes,
-            "count": len(context_episodes)
-        }
-    
-    def decay_episodes(self) -> Dict[str, Any]:
-        """
-        Apply memory decay to episodic memories
-        
-        Episodes with low vividness and importance may be forgotten
-        based on the system's forgetting rate.
-        
-        Returns:
-        Operation result
-        """
-        before_count = len(self.episodes)
-        forgotten_count = 0
-        
-        # Identify candidates for forgetting
-        to_forget = []
-        
-        for episode_id, episode in self.episodes.items():
-            # Calculate forgetting probability
-            forget_probability = self._calculate_forget_probability(episode)
+        Args:
+            amount: Amount to increase development by
             
-            # Check if episode should be forgotten
-            if np.random.random() < forget_probability:
-                to_forget.append(episode_id)
-        
-        # Forget episodes
-        for episode_id in to_forget:
-            self._forget_episode(episode_id)
-            forgotten_count += 1
-        
-        return {
-            "status": "success",
-            "before_count": before_count,
-            "forgotten_count": forgotten_count,
-            "after_count": len(self.episodes)
-        }
-    
-    def count_episodes(self) -> int:
-        """Count the number of stored episodes"""
-        return len(self.episodes)
-    
-    def save_state(self) -> str:
-        """
-        Save the current state of episodic memory
-        
         Returns:
-        Path to saved state directory
+            New development level
         """
-        # Save episodes
-        for episode_id, episode in self.episodes.items():
-            self._save_episode(episode)
+        old_level = self.development_level
+        self.development_level = min(1.0, max(0.0, self.development_level + amount))
         
-        # Save narratives
-        self._save_narratives()
+        # If significant change, adjust neural network
+        if abs(self.development_level - old_level) >= 0.1:
+            self.neural_network.update_development(amount)
+            
+            # Log development change
+            logger.info(f"Episodic memory development updated to {self.development_level:.2f}")
+            
+            # If development crosses certain thresholds, enable new features
+            if old_level < 0.4 <= self.development_level:
+                logger.info("Episodic memory now supports context-based recall")
+                
+            if old_level < 0.6 <= self.development_level:
+                logger.info("Episodic memory now supports emotional tagging")
+                
+            if old_level < 0.8 <= self.development_level:
+                logger.info("Episodic memory now supports narrative sequencing")
+                
+        return self.development_level
         
-        # Save contexts
-        self._save_contexts()
+    def _generate_embedding(self, episode_data: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Generate embedding for an episode based on content and context"""
+        # Simple embedding generation at basic development levels
+        if self.development_level < 0.3:
+            # Random embedding as placeholder
+            return np.random.randn(self.embedding_dim).astype(np.float32)
+            
+        # More sophisticated embedding at higher development levels
+        if hasattr(self, 'neural_network'):
+            # Combine content and context for input
+            input_text = f"{episode_data['content']} {episode_data.get('context', '')}"
+            return self._text_to_embedding(input_text)
+            
+        return None
         
-        # Save temporal index
-        self._save_temporal_index()
-        
-        # Save vector store
-        self.vector_store.save()
-        
-        return self.storage_dir
-    
-    def _save_episode(self, episode: EpisodicMemory) -> None:
-        """Save a single episode to disk"""
+    def _text_to_embedding(self, text: str) -> Optional[np.ndarray]:
+        """Convert text to an embedding vector"""
         try:
-            episodes_dir = Path(self.storage_dir) / "episodes"
-            episodes_dir.mkdir(parents=True, exist_ok=True)
+            # Simple character-based embedding for demonstration
+            # In a real system, this would use a more sophisticated embedding model
+            chars = list(text.lower())
+            char_codes = [ord(c) % 256 for c in chars]
             
-            episode_path = episodes_dir / f"{episode.id}.json"
-            with open(episode_path, "w") as f:
-                # We need to convert the episode to a dict and handle datetime objects
+            # Pad or truncate to embedding_dim
+            if len(char_codes) >= self.embedding_dim:
+                char_codes = char_codes[:self.embedding_dim]
+            else:
+                char_codes = char_codes + [0] * (self.embedding_dim - len(char_codes))
+                
+            # Convert to numpy array and normalize
+            embedding = np.array(char_codes, dtype=np.float32)
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+                
+            return embedding
+            
+        except Exception as e:
+            logger.error(f"Error generating text embedding: {e}")
+            return None
+            
+    def _search_by_embedding(self, query_embedding: np.ndarray, limit: int = 10) -> List[EpisodicMemory]:
+        """Search for episodes by embedding similarity"""
+        results = []
+        similarities = []
+        
+        # Convert query embedding to tensor
+        query_tensor = torch.tensor(query_embedding, dtype=torch.float32)
+        query_tensor = query_tensor.to(self.neural_network.device)
+        
+        # Compare with all episode embeddings
+        for episode_id, episode in self.episodes.items():
+            if episode.embedding is not None:
+                # Convert episode embedding to tensor
+                episode_tensor = torch.tensor(episode.embedding, dtype=torch.float32)
+                episode_tensor = episode_tensor.to(self.neural_network.device)
+                
+                # Calculate cosine similarity
+                similarity = torch.nn.functional.cosine_similarity(
+                    query_tensor.unsqueeze(0),
+                    episode_tensor.unsqueeze(0)
+                ).item()
+                
+                similarities.append((episode, similarity))
+                
+        # Sort by similarity (descending)
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        
+        # Return top matches
+        results = [item[0] for item in similarities[:limit]]
+        return results
+        
+    def _add_to_indices(self, episode_id: str, episode: EpisodicMemory) -> None:
+        """Add episode to appropriate indices based on development level"""
+        # Temporal index (available at all levels)
+        # Insert at appropriate position based on event_time
+        inserted = False
+        for i, existing_id in enumerate(self.temporal_index):
+            if existing_id in self.episodes:
+                existing_episode = self.episodes[existing_id]
+                if episode.event_time < existing_episode.event_time:
+                    self.temporal_index.insert(i, episode_id)
+                    inserted = True
+                    break
+        if not inserted:
+            self.temporal_index.append(episode_id)
+            
+        # Context index (level 0.4+)
+        if self.development_level >= 0.4:
+            if episode.context not in self.context_index:
+                self.context_index[episode.context] = []
+            if episode_id not in self.context_index[episode.context]:
+                self.context_index[episode.context].append(episode_id)
+                
+        # Entity index (level 0.5+)
+        if self.development_level >= 0.5:
+            for entity in episode.involved_entities:
+                if entity not in self.entity_index:
+                    self.entity_index[entity] = []
+                if episode_id not in self.entity_index[entity]:
+                    self.entity_index[entity].append(episode_id)
+                    
+        # Narrative index (level 0.8+)
+        if self.development_level >= 0.8 and episode.narrative_id:
+            if episode.narrative_id not in self.narrative_index:
+                self.narrative_index[episode.narrative_id] = []
+            if episode_id not in self.narrative_index[episode.narrative_id]:
+                self.narrative_index[episode.narrative_id].append(episode_id)
+                
+        # Emotion index (level 0.6+)
+        if self.development_level >= 0.6:
+            # Categorize emotions into buckets
+            valence = episode.emotional_valence
+            arousal = episode.emotional_arousal
+            
+            # Simple emotion categorization
+            if valence > 0.3 and arousal > 0.5:
+                emotion = "excitement"
+            elif valence > 0.3 and arousal <= 0.5:
+                emotion = "contentment"
+            elif valence <= 0.3 and valence >= -0.3:
+                emotion = "neutral"
+            elif valence < -0.3 and arousal > 0.5:
+                emotion = "fear/anger"
+            else:
+                emotion = "sadness"
+                
+            if emotion not in self.emotion_index:
+                self.emotion_index[emotion] = []
+            if episode_id not in self.emotion_index[emotion]:
+                self.emotion_index[emotion].append(episode_id)
+                
+    def _consolidate_memories(self) -> None:
+        """
+        Consolidate memories to strengthen important ones and link related episodes
+        
+        This process simulates memory consolidation during rest/sleep phases.
+        """
+        # Only run consolidation at development level 0.3+
+        if self.development_level < 0.3:
+            return
+            
+        # Track changes for consolidation event
+        strength_changes = {}
+        
+        # Strengthen frequently accessed memories
+        for episode_id, episode in self.episodes.items():
+            if episode.access_count > 0:
+                # Calculate memory strength increase based on access count and importance
+                strength_increase = min(0.1, 0.01 * episode.access_count * (0.5 + episode.importance))
+                episode.decay_rate = max(0.001, episode.decay_rate - 0.0005 * strength_increase)
+                
+                strength_changes[episode_id] = strength_increase
+                
+                # Reset access count after consolidation
+                episode.access_count = 0
+                
+        # Link related episodes at higher development levels
+        if self.development_level >= 0.7:
+            self._link_related_episodes()
+            
+        # Create consolidation event record
+        if strength_changes:
+            consolidation_event = MemoryConsolidationEvent(
+                memory_ids=list(strength_changes.keys()),
+                strength_changes=strength_changes,
+                reason="sleep"
+            )
+            
+            logger.info(f"Memory consolidation complete: {len(strength_changes)} episodes affected")
+            
+    def _link_related_episodes(self) -> None:
+        """Link episodes that are related by context, time, or content"""
+        # Only available at development level 0.7+
+        if self.development_level < 0.7:
+            return
+            
+        # Get recent episodes to analyze
+        recent_ids = list(self.recent_episodes)[:100]  # Limit to 100 most recent
+        
+        # Group by context
+        context_groups = {}
+        for episode_id in recent_ids:
+            if episode_id in self.episodes:
+                episode = self.episodes[episode_id]
+                if episode.context not in context_groups:
+                    context_groups[episode.context] = []
+                context_groups[episode.context].append(episode_id)
+                
+        # Create narratives for sequential episodes in same context
+        for context, episode_ids in context_groups.items():
+            if len(episode_ids) >= 3:  # Need at least 3 episodes to form a meaningful narrative
+                # Sort by time
+                episodes_with_time = []
+                for ep_id in episode_ids:
+                    if ep_id in self.episodes:
+                        episodes_with_time.append((ep_id, self.episodes[ep_id].event_time))
+                
+                # Sort chronologically
+                episodes_with_time.sort(key=lambda x: x[1])
+                sorted_ids = [x[0] for x in episodes_with_time]
+                
+                # Check if these episodes span a reasonable timeframe (e.g., hours not years)
+                if len(episodes_with_time) >= 2:
+                    earliest = episodes_with_time[0][1]
+                    latest = episodes_with_time[-1][1]
+                    timespan = (latest - earliest).total_seconds()
+                    
+                    # If timespan is reasonable (< 24 hours), create a narrative
+                    if timespan < 86400:  # 24 hours in seconds
+                        narrative_name = f"Events at {context} on {earliest.strftime('%Y-%m-%d')}"
+                        self.create_narrative(sorted_ids, narrative_name)
+                        
+    def _prune_episodes(self) -> None:
+        """Remove least important episodes when over capacity"""
+        # Don't prune if under capacity
+        if len(self.episodes) <= self.max_episodes:
+            return
+            
+        # Number to remove
+        to_remove = len(self.episodes) - self.max_episodes
+        
+        # Sort episodes by importance (least important first)
+        candidates = []
+        for episode_id, episode in self.episodes.items():
+            # Skip important life events
+            if episode_id in self.important_events:
+                continue
+                
+            # Calculate pruning score (lower = more likely to be pruned)
+            # Consider: importance, recency, access count, emotional impact
+            recency_factor = 1.0
+            
+            if episode.last_accessed:
+                # Calculate days since last access
+                days_since_access = (datetime.now() - episode.last_accessed).days
+                recency_factor = max(0.1, 1.0 - (days_since_access / 100.0))
+                
+            pruning_score = (
+                episode.importance * 0.4 + 
+                recency_factor * 0.3 + 
+                min(1.0, episode.access_count / 10.0) * 0.2 +
+                abs(episode.emotional_valence) * 0.1
+            )
+            
+            candidates.append((episode_id, pruning_score))
+            
+        # Sort by pruning score (ascending)
+        candidates.sort(key=lambda x: x[1])
+        
+        # Remove the lowest-scoring episodes
+        for episode_id, _ in candidates[:to_remove]:
+            # Remove from all indices
+            self._remove_from_indices(episode_id)
+            
+            # Remove the episode
+            if episode_id in self.episodes:
+                del self.episodes[episode_id]
+                
+            # Also remove from recent episodes if present
+            if episode_id in self.recent_episodes:
+                self.recent_episodes.remove(episode_id)
+                
+        logger.info(f"Pruned {to_remove} episodes from episodic memory")
+        
+    def _remove_from_indices(self, episode_id: str) -> None:
+        """Remove episode from all indices"""
+        # Temporal index
+        if episode_id in self.temporal_index:
+            self.temporal_index.remove(episode_id)
+            
+        # Context index
+        for context, ids in self.context_index.items():
+            if episode_id in ids:
+                ids.remove(episode_id)
+                
+        # Entity index
+        for entity, ids in self.entity_index.items():
+            if episode_id in ids:
+                ids.remove(episode_id)
+                
+        # Narrative index
+        for narrative, ids in self.narrative_index.items():
+            if episode_id in ids:
+                ids.remove(episode_id)
+                
+        # Emotion index
+        for emotion, ids in self.emotion_index.items():
+            if episode_id in ids:
+                ids.remove(episode_id)
+                
+    def _save_episode(self, episode_id: str, episode: EpisodicMemory) -> None:
+        """Save episode to disk for persistence"""
+        if not self.base_directory:
+            return
+            
+        try:
+            # Create directory if it doesn't exist
+            episodes_dir = os.path.join(self.base_directory, "episodes")
+            os.makedirs(episodes_dir, exist_ok=True)
+            
+            # Save episode to JSON file
+            episode_path = os.path.join(episodes_dir, f"{episode_id}.json")
+            with open(episode_path, 'w') as f:
+                # Convert episode to dictionary
                 episode_dict = episode.model_dump()
-                # Convert datetime to string
+                # Convert datetime objects to strings
                 for key, value in episode_dict.items():
                     if isinstance(value, datetime):
                         episode_dict[key] = value.isoformat()
+                
                 json.dump(episode_dict, f, indent=2)
+                
         except Exception as e:
-            print(f"Error saving episode {episode.id}: {e}")
-    
-    def _save_narratives(self) -> None:
-        """Save narratives to disk"""
-        try:
-            narrative_path = Path(self.storage_dir) / "narratives.json"
-            with open(narrative_path, "w") as f:
-                json.dump(self.narratives, f, indent=2)
-        except Exception as e:
-            print(f"Error saving narratives: {e}")
-    
-    def _save_contexts(self) -> None:
-        """Save contexts to disk"""
-        try:
-            # Convert sets to lists for JSON serialization
-            contexts_dict = {context: list(episodes) for context, episodes in self.contexts.items()}
+            logger.error(f"Error saving episode {episode_id}: {e}")
             
-            contexts_path = Path(self.storage_dir) / "contexts.json"
-            with open(contexts_path, "w") as f:
-                json.dump(contexts_dict, f, indent=2)
-        except Exception as e:
-            print(f"Error saving contexts: {e}")
-    
-    def _save_temporal_index(self) -> None:
-        """Save temporal index to disk"""
-        try:
-            # Convert datetime objects to strings
-            temporal_index = [(dt.isoformat(), eid) for dt, eid in self.temporal_index]
-            
-            temporal_path = Path(self.storage_dir) / "temporal_index.json"
-            with open(temporal_path, "w") as f:
-                json.dump(temporal_index, f, indent=2)
-        except Exception as e:
-            print(f"Error saving temporal index: {e}")
-    
     def _load_episodes(self) -> None:
         """Load episodes from disk"""
-        try:
-            # Load episodes
-            episodes_dir = Path(self.storage_dir) / "episodes"
-            episodes_dir.mkdir(parents=True, exist_ok=True)
+        if not self.base_directory:
+            return
             
-            for file_path in episodes_dir.glob("*.json"):
+        try:
+            # Check if episodes directory exists
+            episodes_dir = os.path.join(self.base_directory, "episodes")
+            if not os.path.exists(episodes_dir):
+                return
+                
+            # Load all episode files
+            episode_files = [f for f in os.listdir(episodes_dir) if f.endswith('.json')]
+            
+            for filename in episode_files:
                 try:
-                    with open(file_path, "r") as f:
+                    episode_path = os.path.join(episodes_dir, filename)
+                    with open(episode_path, 'r') as f:
                         episode_data = json.load(f)
-                        # Convert string back to datetime
-                        if "timestamp" in episode_data and isinstance(episode_data["timestamp"], str):
-                            episode_data["timestamp"] = datetime.fromisoformat(episode_data["timestamp"])
-                        if "event_time" in episode_data and isinstance(episode_data["event_time"], str):
-                            episode_data["event_time"] = datetime.fromisoformat(episode_data["event_time"])
-                        if "last_accessed" in episode_data and episode_data["last_accessed"] and isinstance(episode_data["last_accessed"], str):
-                            episode_data["last_accessed"] = datetime.fromisoformat(episode_data["last_accessed"])
                         
-                        # Create episode object
-                        episode = EpisodicMemory(**episode_data)
-                        self.episodes[episode.id] = episode
-                        
-                        # Add to vector store if embedding exists
-                        if episode.embedding:
-                            self.vector_store.add(
-                                embeddings=[episode.embedding],
-                                metadata_list=[{
-                                    "id": episode.id,
-                                    "content": episode.content,
-                                    "context": episode.context
-                                }]
-                            )
+                    # Convert string timestamps back to datetime
+                    for key in ['timestamp', 'event_time', 'last_accessed']:
+                        if key in episode_data and episode_data[key]:
+                            try:
+                                episode_data[key] = datetime.fromisoformat(episode_data[key])
+                            except:
+                                episode_data[key] = datetime.now()
+                                
+                    # Create episode object
+                    episode = EpisodicMemory(**episode_data)
+                    
+                    # Extract episode ID from filename
+                    episode_id = filename.split('.')[0]
+                    
+                    # Store in memory
+                    self.episodes[episode_id] = episode
+                    
+                    # Add to indices
+                    self._add_to_indices(episode_id, episode)
+                    
+                    # Update episode count
+                    self.episode_count += 1
+                    
                 except Exception as e:
-                    print(f"Error loading episode from {file_path}: {e}")
+                    logger.error(f"Error loading episode file {filename}: {e}")
+                    
+            logger.info(f"Loaded {self.episode_count} episodes from disk")
             
-            # Load narratives
-            narrative_path = Path(self.storage_dir) / "narratives.json"
-            if narrative_path.exists():
-                with open(narrative_path, "r") as f:
-                    self.narratives = json.load(f)
-            
-            # Load contexts
-            contexts_path = Path(self.storage_dir) / "contexts.json"
-            if contexts_path.exists():
-                with open(contexts_path, "r") as f:
-                    contexts_dict = json.load(f)
-                    # Convert lists back to sets
-                    self.contexts = {context: set(episodes) for context, episodes in contexts_dict.items()}
-            
-            # Load temporal index
-            temporal_path = Path(self.storage_dir) / "temporal_index.json"
-            if temporal_path.exists():
-                with open(temporal_path, "r") as f:
-                    temporal_data = json.load(f)
-                    # Convert strings back to datetime
-                    self.temporal_index = [(datetime.fromisoformat(dt), eid) for dt, eid in temporal_data]
-            
-            print(f"Loaded {len(self.episodes)} episodes from disk")
         except Exception as e:
-            print(f"Error loading episodes: {e}")
+            logger.error(f"Error loading episodes: {e}")
     
-    def _forget_episode(self, episode_id: str) -> None:
-        """
-        Forget (remove) an episode
-        
-        Parameters:
-        episode_id: ID of the episode to forget
-        """
-        if episode_id not in self.episodes:
-            return
-            
-        episode = self.episodes[episode_id]
-        
-        # Remove from episodes
-        del self.episodes[episode_id]
-        
-        # Remove from context
-        context = episode.context
-        if context in self.contexts and episode_id in self.contexts[context]:
-            self.contexts[context].remove(episode_id)
-            if not self.contexts[context]:
-                del self.contexts[context]
-        
-        # Remove from narrative
-        narrative_id = episode.narrative_id
-        if narrative_id and narrative_id in self.narratives:
-            if episode_id in self.narratives[narrative_id]:
-                self.narratives[narrative_id].remove(episode_id)
-                if not self.narratives[narrative_id]:
-                    del self.narratives[narrative_id]
-        
-        # Remove from temporal index
-        self.temporal_index = [(dt, eid) for dt, eid in self.temporal_index if eid != episode_id]
-        
-        # Delete episode file
-        self._delete_episode_file(episode_id)
-        
-        # Publish event
-        self.publish_message("episode_forgotten", {
-            "episode_id": episode_id,
-            "content": episode.content
-        })
-    
-    def _delete_episode_file(self, episode_id: str) -> None:
-        """Delete an episode file from disk"""
-        try:
-            episode_path = Path(self.storage_dir) / "episodes" / f"{episode_id}.json"
-            if episode_path.exists():
-                episode_path.unlink()
-        except Exception as e:
-            print(f"Error deleting episode file {episode_id}: {e}")
-    
-    def _calculate_forget_probability(self, episode: EpisodicMemory) -> float:
-        """Calculate the probability of forgetting an episode"""
-        # Base forgetting probability from forgetting rate
-        prob = self.forgetting_rate
-        
-        # Adjust based on episode properties
-        
-        # Importance reduces forgetting
-        prob -= episode.importance * 0.5
-        
-        # Vividness reduces forgetting
-        prob -= episode.vividness * 0.3
-        
-        # Recent access reduces forgetting
-        if episode.last_accessed:
-            days_since_access = (datetime.now() - episode.last_accessed).days
-            recency_factor = 1.0 / (1.0 + np.exp(-0.1 * days_since_access + 3))
-            prob += recency_factor * 0.2
-        
-        # Emotional impact reduces forgetting (strong emotions are remembered)
-        emotional_strength = 0.0
-        if episode.emotional_impact:
-            emotional_values = [abs(v) for v in episode.emotional_impact.values()]
-            if emotional_values:
-                emotional_strength = max(emotional_values)
-        prob -= emotional_strength * 0.4
-        
-        # Narrative episodes are less likely to be forgotten
-        if episode.narrative_id:
-            prob -= 0.15
-        
-        # Time bias (older episodes more likely to be forgotten)
-        days_old = (datetime.now() - episode.event_time).days
-        time_factor = 1.0 / (1.0 + np.exp(-0.05 * days_old + 3))
-        prob += time_factor * self.time_bias * 0.3
-        
-        # Ensure probability is between 0 and 1
-        return max(0.0, min(1.0, prob))
-    
-    def _generate_embedding(self, text: str) -> Optional[List[float]]:
-        """Generate an embedding for text"""
-        try:
-            from lmm_project.utils.llm_client import LLMClient
-            client = LLMClient()
-            embedding = client.get_embedding(text)
-            return embedding
-        except Exception as e:
-            print(f"Error generating embedding: {e}")
-            return None
-    
-    # Event handlers
-    
-    def _handle_experience_recorded(self, message: Message) -> None:
-        """
-        Handle experience recorded events
-        
-        When an experience is recorded, it should be added to episodic memory.
-        """
-        content = message.content
-        experience = content.get("experience", "")
-        
-        if not experience:
-            return
-            
-        # Create episode data
-        episode_data = {
-            "content": experience,
-            "context": content.get("context", "unknown"),
-            "event_time": content.get("event_time", datetime.now()),
-            "importance": content.get("importance", 0.5)
-        }
-        
-        # Add emotional impact if available
-        if "emotions" in content:
-            episode_data["emotional_impact"] = content["emotions"]
-            
-        # Add involved entities if available
-        if "entities" in content:
-            episode_data["involved_entities"] = content["entities"]
-            
-        # Add the episode
-        self.add_episode(episode_data)
-    
-    def _handle_episodic_query(self, message: Message) -> None:
-        """Handle episodic query events"""
-        content = message.content
-        query = content.get("query", "")
-        
-        if not query:
-            return
-            
-        results = self.search_episodes(query)
-        
-        if self.event_bus and results.get("status") == "success":
-            # Publish results
-            self.publish_message("episodic_query_response", {
-                "requester": message.sender,
-                "results": results.get("results", []),
-                "query": query
-            })
-    
-    def _handle_memory_consolidation(self, message: Message) -> None:
-        """
-        Handle memory consolidation events
-        
-        During consolidation (e.g., during simulated sleep), episodic 
-        memories may be strengthened, weakened, or organized into narratives.
-        """
-        content = message.content
-        event = content.get("event", {})
-        
-        if not event:
-            return
-            
-        # Apply changes to episodes
-        memory_ids = event.get("memory_ids", [])
-        strength_changes = event.get("strength_changes", {})
-        
-        for memory_id, change in strength_changes.items():
-            if memory_id in self.episodes:
-                episode = self.episodes[memory_id]
-                
-                # Adjust vividness and importance
-                episode.vividness = max(0.0, min(1.0, episode.vividness + change * 0.5))
-                episode.importance = max(0.0, min(1.0, episode.importance + change * 0.3))
-                
-                # Save episode
-                self._save_episode(episode)
-        
-        # Apply decay to all episodes
-        self.decay_episodes() 
+    def get_state(self) -> Dict[str, Any]:
+        """Get the current state of episodic memory"""
+        return {
+            "episode_count": len(self.episodes),
+            "important_events_count": len(self.important_events),
+            "development_level": self.development_level,
+            "max_capacity": self.max_episodes,
+            "contexts": list(self.context_index.keys()),
+            "narratives": list(self.narrative_index.keys()),
+            "emotion_categories": list(self.emotion_index.keys())
+        } 

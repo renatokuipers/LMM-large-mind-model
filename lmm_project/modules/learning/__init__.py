@@ -347,3 +347,140 @@ class LearningSystem(BaseModule):
         
         base_state.update(module_state)
         return base_state
+        
+    def save_state(self) -> Dict[str, Any]:
+        """
+        Save the current state of the learning system
+        
+        Returns:
+            Dictionary containing the serialized state
+        """
+        # Get base state
+        state = self.get_state()
+        
+        # Add full learning events history (limited to max events)
+        state["learning_events"] = self.learning_events
+        
+        # Save states of all submodules
+        state["associative_learning_full"] = self.associative_learning.save_state()
+        state["reinforcement_learning_full"] = self.reinforcement_learning.save_state()
+        state["procedural_learning_full"] = self.procedural_learning.save_state()
+        state["meta_learning_full"] = self.meta_learning.save_state()
+        
+        # Add operation handlers mapping (just names, not functions)
+        state["operations"] = list(self.operation_handlers.keys())
+        
+        # Add timestamp
+        state["saved_at"] = datetime.now().isoformat()
+        
+        return state
+        
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """
+        Load a previously saved state
+        
+        Args:
+            state: Dictionary containing the state to load
+        """
+        # Load development level first
+        if "development_level" in state:
+            self.development_level = state["development_level"]
+            
+        # Load learning events history
+        if "learning_events" in state:
+            self.learning_events = state["learning_events"]
+            # Ensure we don't exceed max events
+            if len(self.learning_events) > self.max_events:
+                self.learning_events = self.learning_events[-self.max_events:]
+        
+        # Load states for all submodules
+        if "associative_learning_full" in state:
+            self.associative_learning.load_state(state["associative_learning_full"])
+            
+        if "reinforcement_learning_full" in state:
+            self.reinforcement_learning.load_state(state["reinforcement_learning_full"])
+            
+        if "procedural_learning_full" in state:
+            self.procedural_learning.load_state(state["procedural_learning_full"])
+            
+        if "meta_learning_full" in state:
+            self.meta_learning.load_state(state["meta_learning_full"])
+            
+        # Re-register event handlers if event bus exists
+        if self.event_bus:
+            self.subscribe_to_message("perception_input", self._handle_perception)
+            self.subscribe_to_message("memory_retrieval", self._handle_memory_retrieval)
+            
+        logger.info(f"Loaded learning system state with {len(self.learning_events)} learning events")
+        
+    def subscribe_to_message(self, message_type: str, callback: callable) -> None:
+        """
+        Subscribe to a message type on the event bus
+        
+        Args:
+            message_type: Type of message to subscribe to
+            callback: Function to call when a message is received
+        """
+        if self.event_bus:
+            self.event_bus.subscribe(message_type, callback)
+            
+    def publish_message(self, message_type: str, content: Any) -> None:
+        """
+        Publish a message to the event bus
+        
+        Args:
+            message_type: Type of message to publish
+            content: Content of the message
+        """
+        if self.event_bus:
+            message = Message(
+                sender=self.module_id,
+                message_type=message_type,
+                content=content
+            )
+            self.event_bus.publish(message)
+            
+    def get_learning_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about learning progress
+        
+        Returns:
+            Dictionary with learning statistics
+        """
+        # Count learning events by type
+        event_counts = {}
+        for event in self.learning_events:
+            learning_type = event.get("learning_type", "unknown")
+            if learning_type not in event_counts:
+                event_counts[learning_type] = 0
+            event_counts[learning_type] += 1
+            
+        # Calculate success rates
+        success_rates = {}
+        for learning_type, count in event_counts.items():
+            successes = sum(1 for e in self.learning_events if e.get("learning_type") == learning_type and e.get("success", False))
+            success_rates[learning_type] = successes / count if count > 0 else 0
+            
+        # Get development levels across components
+        development_levels = {
+            "associative": self.associative_learning.development_level,
+            "reinforcement": self.reinforcement_learning.development_level,
+            "procedural": self.procedural_learning.development_level,
+            "meta": self.meta_learning.development_level,
+            "overall": self.development_level
+        }
+        
+        return {
+            "event_counts": event_counts,
+            "success_rates": success_rates,
+            "development_levels": development_levels,
+            "total_events": len(self.learning_events),
+            "milestone": self.get_current_milestone()
+        }
+        
+    def get_current_milestone(self) -> str:
+        """Get the current developmental milestone for learning"""
+        for level in sorted(self.development_milestones.keys(), reverse=True):
+            if self.development_level >= level:
+                return self.development_milestones[level]
+        return self.development_milestones[0.0]

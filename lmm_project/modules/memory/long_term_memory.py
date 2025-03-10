@@ -1,4 +1,10 @@
-# Empty placeholder files 
+"""
+Long-Term Memory Module
+
+This module implements long-term memory for storing persistent information
+after consolidation from working memory. It includes mechanisms for storage,
+retrieval, forgetting, and consolidation of memories.
+"""
 
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from pydantic import BaseModel, Field

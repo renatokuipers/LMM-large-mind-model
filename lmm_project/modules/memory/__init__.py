@@ -19,6 +19,8 @@ import numpy as np
 from lmm_project.modules.base_module import BaseModule
 from lmm_project.core.event_bus import EventBus
 from lmm_project.core.message import Message
+from lmm_project.modules.memory.associative_memory import AssociativeMemoryModule
+from lmm_project.modules.memory.long_term_memory import LongTermMemory
 
 logger = logging.getLogger(__name__)
 
@@ -486,6 +488,8 @@ class MemorySystem(BaseModule):
         self.working_memory = WorkingMemory(capacity=3)
         self.episodic_memory = EpisodicMemory(max_episodes=100)
         self.semantic_memory = SemanticMemory(max_items=500)
+        self.long_term_memory = LongTermMemory(module_id="long_term_memory", event_bus=event_bus)
+        self.associative_memory = AssociativeMemoryModule(module_id="associative_memory", event_bus=event_bus)
         
         # Adjust memory parameters based on development level
         self._adjust_memory_for_development()
@@ -496,6 +500,7 @@ class MemorySystem(BaseModule):
             self.subscribe_to_message("memory_retrieve")
             self.subscribe_to_message("perception_result")
             self.subscribe_to_message("attention_focus_update")
+            self.subscribe_to_message("memory_consolidation")
     
     def _adjust_memory_for_development(self):
         """Adjust memory parameters based on developmental level"""
@@ -508,6 +513,14 @@ class MemorySystem(BaseModule):
         
         # Semantic memory also expands with development
         self.semantic_memory.max_items = int(500 + self.development_level * 9500)
+        
+        # Adjust consolidation threshold for long-term memory based on development
+        if self.development_level >= 0.5:
+            self.long_term_memory.consolidation_threshold = max(0.4, 0.7 - self.development_level * 0.3)
+            
+        # Adjust associative memory's hebbian rate based on development
+        if self.development_level >= 0.6:
+            self.associative_memory.hebbian_rate = min(0.05, 0.01 + self.development_level * 0.04)
         
         logger.debug(f"Memory capacity updated: WM={self.working_memory.capacity}, " 
                     f"EM={self.episodic_memory.max_episodes}, SM={self.semantic_memory.max_items}")
@@ -630,6 +643,36 @@ class MemorySystem(BaseModule):
                 "concept_id": concept_id,
                 "memory_type": "semantic"
             }
+            
+        elif memory_type == "long_term" and self.development_level >= 0.7:
+            # Store in long-term memory
+            result = self.long_term_memory.store_memory(content)
+            
+            return {
+                "status": result.get("status", "error"),
+                "memory_id": result.get("memory_id", None),
+                "memory_type": "long_term"
+            }
+            
+        elif memory_type == "associative" and self.development_level >= 0.8:
+            # Create association between memories
+            if "source_id" in content and "target_id" in content:
+                result = self.associative_memory.associate(
+                    source_id=content["source_id"],
+                    target_id=content["target_id"],
+                    link_type=content.get("link_type", "general"),
+                    strength=content.get("strength", 0.5)
+                )
+                return {
+                    "status": result.get("status", "error"),
+                    "association_id": result.get("association_id", None),
+                    "memory_type": "associative"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": "Associative memory requires source_id and target_id"
+                }
             
         else:
             return {
@@ -762,6 +805,62 @@ class MemorySystem(BaseModule):
                 return {
                     "status": "error",
                     "error": "No retrieval criteria specified for semantic memory"
+                }
+                
+        elif memory_type == "long_term" and self.development_level >= 0.7:
+            # Retrieve from long-term memory
+            if "memory_id" in input_data:
+                result = self.long_term_memory.retrieve_memory(input_data["memory_id"])
+                return {
+                    "status": result.get("status", "error"),
+                    "memory": result.get("memory", None),
+                    "memory_type": "long_term"
+                }
+            elif "query" in input_data:
+                # Search by content
+                result = self.long_term_memory.search_memories(
+                    query=input_data["query"],
+                    limit=input_data.get("limit", 5)
+                )
+                return {
+                    "status": result.get("status", "error"),
+                    "memories": result.get("memories", []),
+                    "count": result.get("count", 0),
+                    "memory_type": "long_term"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": "Must provide memory_id or query for long-term memory retrieval"
+                }
+                
+        elif memory_type == "associative" and self.development_level >= 0.8:
+            # Retrieve from associative memory
+            if "memory_id" in input_data:
+                result = self.associative_memory.get_associations(input_data["memory_id"])
+                return {
+                    "status": result.get("status", "error"),
+                    "associations": result.get("associations", []),
+                    "count": result.get("count", 0),
+                    "memory_type": "associative"
+                }
+            elif "source_id" in input_data and "target_id" in input_data:
+                # Find path between memories
+                result = self.associative_memory.find_path(
+                    source_id=input_data["source_id"],
+                    target_id=input_data["target_id"],
+                    max_depth=input_data.get("max_depth", 3)
+                )
+                return {
+                    "status": result.get("status", "error"),
+                    "path": result.get("path", []),
+                    "path_length": result.get("path_length", 0),
+                    "memory_type": "associative"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": "Must provide memory_id or source_id/target_id for associative memory retrieval"
                 }
                 
         else:
@@ -967,7 +1066,9 @@ class MemorySystem(BaseModule):
         state.update({
             "working_memory": self.working_memory.get_state(),
             "episodic_memory": self.episodic_memory.get_state() if self.development_level >= 0.4 else "Not yet developed",
-            "semantic_memory": self.semantic_memory.get_state() if self.development_level >= 0.6 else "Not yet developed"
+            "semantic_memory": self.semantic_memory.get_state() if self.development_level >= 0.6 else "Not yet developed",
+            "long_term_memory": self.long_term_memory.get_state() if self.development_level >= 0.7 else "Not yet developed",
+            "associative_memory": self.associative_memory.get_state() if self.development_level >= 0.8 else "Not yet developed"
         })
         
         return state 

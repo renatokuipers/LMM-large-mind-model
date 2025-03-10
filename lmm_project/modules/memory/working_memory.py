@@ -1,4 +1,11 @@
-# Empty placeholder files 
+"""
+Working Memory Module
+
+This module implements the working memory system, which provides a limited
+capacity buffer for temporarily storing information that is currently being
+processed or attended to. Information in working memory decays over time
+unless actively maintained through rehearsal.
+"""
 
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field

@@ -7,11 +7,20 @@ import torch.optim as optim
 from pathlib import Path
 import os
 import pickle
+import logging
 
 from lmm_project.neural_substrate.neural_network import NeuralNetwork
 from lmm_project.neural_substrate.neuron import Neuron
 from lmm_project.neural_substrate.synapse import Synapse
 from lmm_project.neural_substrate.activation_functions import sigmoid, relu, tanh
+
+logger = logging.getLogger(__name__)
+
+def get_device():
+    """Get the appropriate device for tensor operations."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
 
 class MemoryNeuralNetwork:
     """
@@ -27,7 +36,7 @@ class MemoryNeuralNetwork:
         output_dim: int, 
         memory_type: str = "generic",
         learning_rate: float = 0.01,
-        device: str = "cpu"
+        device: str = "auto"  # "auto", "cpu", or "cuda"
     ):
         """
         Initialize memory neural network
@@ -38,14 +47,21 @@ class MemoryNeuralNetwork:
         output_dim: Output dimension
         memory_type: Type of memory network (working, semantic, episodic, associative)
         learning_rate: Learning rate for training
-        device: Device to run computations on ("cpu" or "cuda")
+        device: Device to run computations on ("auto", "cpu" or "cuda")
         """
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.memory_type = memory_type
         self.learning_rate = learning_rate
-        self.device = device
+        
+        # Set device based on availability
+        if device == "auto":
+            self.device = get_device()
+        else:
+            self.device = torch.device(device)
+            
+        logger.info(f"Memory neural network created on device: {self.device}")
         
         # Create neural network based on memory type
         if memory_type == "working":
@@ -59,122 +75,131 @@ class MemoryNeuralNetwork:
         else:
             self.network = self._create_generic_memory_network()
             
-        # Move network to device
-        self.network.to(device)
+        # Move network to the appropriate device
+        self.network.to(self.device)
         
-        # Create optimizer
-        self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
+        # Set up optimizer
+        self.optimizer = optim.Adam(self.network.parameters(), lr=self.learning_rate)
         
-        # Track development level (affects network complexity)
+        # Hebbian learning matrix for associative memory
+        self.hebbian_matrix = None
+        if memory_type == "associative":
+            self.hebbian_matrix = np.zeros((output_dim, output_dim))
+            
+        # Track development level
         self.development_level = 0.0
         
-        # Hebbian learning components
-        self.hebbian_learning_enabled = True
-        self.hebbian_learning_rate = 0.001
-        self.hebbian_decay_rate = 0.0001
-        
-        # Association matrices for hebbian learning
-        self.association_matrix = np.zeros((hidden_dim, hidden_dim))
-    
+        # Optimize for performance if using CUDA
+        if self.device.type == "cuda":
+            # Enable cuDNN benchmark for potentially faster performance
+            torch.backends.cudnn.benchmark = True
+            logger.info(f"CUDA version: {torch.version.cuda}")
+            logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
+            
+            # Use mixed precision if available (PyTorch 1.6+)
+            if hasattr(torch.cuda, 'amp') and torch.cuda.is_available():
+                logger.info("Enabling mixed precision training for memory networks")
+                self.scaler = torch.cuda.amp.GradScaler()
+                self.use_mixed_precision = True
+            else:
+                self.use_mixed_precision = False
+                
     def _create_working_memory_network(self) -> nn.Module:
         """
         Create neural network for working memory
         
-        Working memory requires:
-        - Fast update capability
-        - Limited capacity
-        - Decay over time
-        - Attention-based gating
+        Working memory maintains active representations for current processing.
         """
+        # Define working memory network
         class WorkingMemoryNetwork(nn.Module):
             def __init__(self, input_dim, hidden_dim, output_dim):
                 super().__init__()
-                self.encoder = nn.Linear(input_dim, hidden_dim)
-                self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
-                self.attention = nn.MultiheadAttention(hidden_dim, num_heads=4)
-                self.decoder = nn.Linear(hidden_dim, output_dim)
-                self.gate = nn.Linear(hidden_dim, 1)
+                
+                # Encoder
+                self.encoder = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, hidden_dim // 2),
+                    nn.ReLU()
+                )
+                
+                # LSTM for maintaining items over time
+                self.lstm = nn.LSTM(hidden_dim // 2, hidden_dim // 2, batch_first=True)
+                
+                # Output layer
+                self.output = nn.Linear(hidden_dim // 2, output_dim)
                 
             def forward(self, x, hidden=None):
                 # Encode input
-                x = F.relu(self.encoder(x))
+                encoded = self.encoder(x)
                 
-                # Reshape for GRU if needed
-                if len(x.shape) == 2:
-                    x = x.unsqueeze(1)  # Add sequence dimension
+                # Reshape for LSTM if needed (batch, seq, features)
+                if len(encoded.shape) == 2:
+                    encoded = encoded.unsqueeze(1)
                 
-                # Process with GRU
+                # Process through LSTM
                 if hidden is None:
-                    output, hidden = self.gru(x)
+                    lstm_out, hidden = self.lstm(encoded)
                 else:
-                    output, hidden = self.gru(x, hidden)
+                    lstm_out, hidden = self.lstm(encoded, hidden)
                 
-                # Apply attention
-                attn_output, _ = self.attention(output, output, output)
-                
-                # Apply gating (determines what enters working memory)
-                gate_values = torch.sigmoid(self.gate(attn_output))
-                gated_output = gate_values * attn_output
-                
-                # Decode output
-                output = self.decoder(gated_output)
+                # Get output
+                output = self.output(lstm_out[:, -1])
                 
                 return output, hidden
-                
+        
         return WorkingMemoryNetwork(self.input_dim, self.hidden_dim, self.output_dim)
     
     def _create_semantic_memory_network(self) -> nn.Module:
         """
         Create neural network for semantic memory
         
-        Semantic memory requires:
-        - Pattern completion
-        - Hierarchical structure
-        - Concept association
+        Semantic memory focuses on knowledge representation and concept relationships.
         """
+        # Define semantic memory network
         class SemanticMemoryNetwork(nn.Module):
             def __init__(self, input_dim, hidden_dim, output_dim):
                 super().__init__()
-                # Lower-level feature extraction
-                self.encoder = nn.Sequential(
+                
+                # Concept encoder
+                self.concept_encoder = nn.Sequential(
                     nn.Linear(input_dim, hidden_dim),
                     nn.ReLU(),
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.ReLU()
                 )
                 
-                # Concept association layers
-                self.association = nn.Linear(hidden_dim, hidden_dim)
+                # Concept embedding
+                self.embedding = nn.Linear(hidden_dim, output_dim)
                 
-                # Hierarchical structure
-                self.hierarchy_up = nn.Linear(hidden_dim, hidden_dim // 2)
-                self.hierarchy_down = nn.Linear(hidden_dim // 2, hidden_dim)
+                # Concept completion network
+                self.completion = nn.Sequential(
+                    nn.Linear(output_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, input_dim)
+                )
                 
-                # Output layer
-                self.decoder = nn.Linear(hidden_dim, output_dim)
+                # Relation network
+                self.relation = nn.Bilinear(output_dim, output_dim, 1)
                 
             def forward(self, x, completion_target=None):
                 # Encode features
-                features = self.encoder(x)
+                encoded = self.concept_encoder(x)
                 
-                # Apply associative activation
-                assoc = torch.sigmoid(self.association(features))
-                features = features * assoc
+                # Get concept embedding
+                embedding = self.embedding(encoded)
                 
-                # Hierarchical processing (abstraction)
-                abstract = F.relu(self.hierarchy_up(features))
-                
-                # Pattern completion (if partial input)
+                # If completion target is provided, compute reconstruction loss
                 if completion_target is not None:
-                    # Use abstract representation to fill in missing details
-                    completed = self.hierarchy_down(abstract)
-                    # Blend with target
-                    mask = (completion_target != 0).float()
-                    features = mask * completion_target + (1 - mask) * completed
-                
-                # Final output
-                output = self.decoder(features)
-                return output, features
+                    completion = self.completion(embedding)
+                    completion_loss = F.mse_loss(completion, completion_target)
+                else:
+                    completion_loss = torch.tensor(0.0)
+                    
+                return {
+                    "embedding": embedding,
+                    "completion_loss": completion_loss
+                }
                 
         return SemanticMemoryNetwork(self.input_dim, self.hidden_dim, self.output_dim)
     
@@ -182,70 +207,72 @@ class MemoryNeuralNetwork:
         """
         Create neural network for episodic memory
         
-        Episodic memory requires:
-        - Temporal sequence encoding
-        - Context binding
-        - Emotional tagging
-        - Vividness modulation
+        Episodic memory stores specific events and experiences with temporal context.
         """
+        # Define episodic memory network
         class EpisodicMemoryNetwork(nn.Module):
             def __init__(self, input_dim, hidden_dim, output_dim):
                 super().__init__()
+                
                 # Content encoder
-                self.content_encoder = nn.Linear(input_dim, hidden_dim)
+                self.content_encoder = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, hidden_dim // 2),
+                    nn.ReLU()
+                )
                 
                 # Context encoder
-                self.context_encoder = nn.Linear(input_dim, hidden_dim // 2)
+                self.context_encoder = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim // 2),
+                    nn.ReLU()
+                )
                 
-                # Temporal sequence processing
+                # LSTM for temporal sequence
                 self.temporal = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
                 
-                # Emotional tagging
-                self.emotion_encoder = nn.Linear(input_dim, 2)  # valence, arousal
+                # Output layer
+                self.output = nn.Linear(hidden_dim, output_dim)
                 
-                # Context binding mechanism
-                self.context_binding = nn.Bilinear(hidden_dim, hidden_dim // 2, hidden_dim)
-                
-                # Vividness modulation
-                self.vividness = nn.Linear(hidden_dim, 1)
-                
-                # Decoder
-                self.decoder = nn.Linear(hidden_dim, output_dim)
+                # Emotional salience layer
+                self.emotional = nn.Sequential(
+                    nn.Linear(hidden_dim, 2),  # valence and arousal
+                    nn.Tanh()  # -1 to 1 for valence, 0 to 1 for arousal after adjustment
+                )
                 
             def forward(self, content, context=None, prev_hidden=None):
                 # Encode content
-                content_features = F.relu(self.content_encoder(content))
+                content_encoded = self.content_encoder(content)
                 
-                # Reshape for LSTM if needed
-                if len(content_features.shape) == 2:
-                    content_features = content_features.unsqueeze(1)
-                
-                # Process temporal aspects
-                if prev_hidden is None:
-                    temporal_output, (h, c) = self.temporal(content_features)
-                else:
-                    temporal_output, (h, c) = self.temporal(content_features, prev_hidden)
-                
-                # Emotional tagging
-                emotion = torch.tanh(self.emotion_encoder(content))
-                
-                # Apply context binding if context provided
+                # Encode context if provided
                 if context is not None:
-                    context_features = F.relu(self.context_encoder(context))
-                    bound_features = self.context_binding(
-                        temporal_output.squeeze(1), context_features
-                    )
+                    context_encoded = self.context_encoder(context)
+                    # Combine content and context
+                    combined = torch.cat([content_encoded, context_encoded], dim=-1)
                 else:
-                    bound_features = temporal_output.squeeze(1)
+                    # Just use content with zero padding for context portion
+                    padding = torch.zeros_like(content_encoded)
+                    combined = torch.cat([content_encoded, padding], dim=-1)
                 
-                # Apply vividness modulation
-                vividness = torch.sigmoid(self.vividness(bound_features))
-                modulated_features = vividness * bound_features
+                # Reshape for LSTM if needed (batch, seq, features)
+                if len(combined.shape) == 2:
+                    combined = combined.unsqueeze(1)
                 
-                # Generate output
-                output = self.decoder(modulated_features)
+                # Process through LSTM
+                if prev_hidden is None:
+                    lstm_out, hidden = self.temporal(combined)
+                else:
+                    lstm_out, hidden = self.temporal(combined, prev_hidden)
                 
-                return output, (h, c), emotion, vividness
+                # Get episode embedding
+                embedding = self.output(lstm_out[:, -1])
+                
+                # Get emotional salience
+                emotion = self.emotional(lstm_out[:, -1])
+                valence = emotion[:, 0]  # -1 to 1
+                arousal = (emotion[:, 1] + 1) / 2  # Scale to 0 to 1
+                
+                return embedding, valence, arousal, hidden
                 
         return EpisodicMemoryNetwork(self.input_dim, self.hidden_dim, self.output_dim)
     
@@ -253,91 +280,75 @@ class MemoryNeuralNetwork:
         """
         Create neural network for associative memory
         
-        Associative memory requires:
-        - Pattern association
-        - Hebbian learning
-        - Pattern completion
-        - Spreading activation
+        Associative memory focuses on connections between different memories.
         """
+        # Define associative memory network
         class AssociativeMemoryNetwork(nn.Module):
             def __init__(self, input_dim, hidden_dim, output_dim):
                 super().__init__()
-                # Feature extraction
-                self.encoder = nn.Linear(input_dim, hidden_dim)
                 
-                # Associative network (fully connected)
-                self.association_layer = nn.Linear(hidden_dim, hidden_dim)
+                # Feature encoder
+                self.encoder = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, output_dim)
+                )
                 
-                # Pattern completion
-                self.completion_layer = nn.Linear(hidden_dim, hidden_dim)
+                # Association strength predictor (for two patterns)
+                self.association_strength = nn.Sequential(
+                    nn.Linear(output_dim * 2, hidden_dim // 2),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim // 2, 1),
+                    nn.Sigmoid()  # 0 to 1 strength
+                )
                 
-                # Output generation
-                self.decoder = nn.Linear(hidden_dim, output_dim)
-                
-                # Stored patterns for association
-                self.register_buffer("stored_patterns", torch.zeros(100, hidden_dim))
+                # Stored patterns (for Hebbian learning)
+                self.patterns = {}
                 self.pattern_count = 0
+                self.max_patterns = 1000
                 
             def store_pattern(self, pattern):
-                """Store a pattern for future association"""
-                if self.pattern_count < 100:
-                    self.stored_patterns[self.pattern_count] = pattern
-                    self.pattern_count += 1
-                else:
-                    # Replace oldest pattern (simple circular buffer)
-                    self.stored_patterns[self.pattern_count % 100] = pattern
-                    self.pattern_count += 1
+                """Store a pattern for Hebbian learning"""
+                pattern_id = str(self.pattern_count)
+                self.patterns[pattern_id] = pattern
+                self.pattern_count += 1
+                
+                # Remove oldest if at capacity
+                if len(self.patterns) > self.max_patterns:
+                    oldest_id = str(self.pattern_count - self.max_patterns - 1)
+                    if oldest_id in self.patterns:
+                        del self.patterns[oldest_id]
+                
+                return pattern_id
                 
             def forward(self, x, hebbian_matrix=None):
                 # Extract features
-                features = F.relu(self.encoder(x))
+                features = self.encoder(x)
                 
-                # Apply associative layer
-                associations = torch.tanh(self.association_layer(features))
-                
-                # If hebbian matrix provided, apply Hebbian learning
+                # If Hebbian matrix provided, compute associative activations
                 if hebbian_matrix is not None:
-                    # Convert to tensor if numpy array
-                    if isinstance(hebbian_matrix, np.ndarray):
-                        hebbian_matrix = torch.tensor(
-                            hebbian_matrix, 
-                            device=x.device, 
-                            dtype=torch.float32
-                        )
-                    
-                    # Apply Hebbian associations
-                    hebbian_associations = torch.matmul(features, hebbian_matrix)
-                    associations = associations + hebbian_associations
+                    # Convert features to numpy for Hebbian computation
+                    features_np = features.detach().cpu().numpy()
+                    # Apply Hebbian associative recall
+                    associations = np.dot(features_np, hebbian_matrix)
+                    # Convert back to tensor
+                    associations_tensor = torch.from_numpy(associations).to(features.device)
+                    # Combine with direct features (residual connection)
+                    output = features + 0.5 * torch.tensor(associations_tensor, dtype=features.dtype)
+                else:
+                    output = features
                 
-                # Check for pattern completion with stored patterns
-                if self.pattern_count > 0:
-                    # Calculate similarity with stored patterns
-                    similarities = torch.matmul(
-                        features, 
-                        self.stored_patterns[:self.pattern_count].t()
-                    )
-                    # Get most similar pattern
-                    max_sim, idx = torch.max(similarities, dim=1)
-                    # If similarity above threshold, blend with pattern
-                    threshold = 0.7
-                    mask = (max_sim > threshold).float().unsqueeze(1)
-                    most_similar = self.stored_patterns[idx]
-                    completion = self.completion_layer(most_similar)
-                    features = mask * completion + (1 - mask) * features
-                
-                # Generate output
-                output = self.decoder(features)
-                
-                return output, features
+                return output
                 
         return AssociativeMemoryNetwork(self.input_dim, self.hidden_dim, self.output_dim)
     
     def _create_generic_memory_network(self) -> nn.Module:
-        """Create a generic neural network for memory"""
+        """Create a generic memory network used as fallback"""
+        # Define a simple generic network
         class GenericMemoryNetwork(nn.Module):
             def __init__(self, input_dim, hidden_dim, output_dim):
                 super().__init__()
-                self.model = nn.Sequential(
+                self.network = nn.Sequential(
                     nn.Linear(input_dim, hidden_dim),
                     nn.ReLU(),
                     nn.Linear(hidden_dim, hidden_dim),
@@ -346,60 +357,65 @@ class MemoryNeuralNetwork:
                 )
                 
             def forward(self, x):
-                return self.model(x), None
+                return self.network(x)
                 
         return GenericMemoryNetwork(self.input_dim, self.hidden_dim, self.output_dim)
     
     def forward(self, x: Union[np.ndarray, torch.Tensor], **kwargs) -> Tuple[torch.Tensor, Any]:
         """
-        Forward pass through the neural network
+        Forward pass through the memory network
         
         Parameters:
-        x: Input data
+        x: Input tensor/array
         **kwargs: Additional arguments for specific memory types
         
         Returns:
-        Tuple of (output, additional_outputs)
+        Tuple of output tensor and additional data
         """
-        # Convert numpy array to tensor if needed
+        # Convert numpy arrays to tensors if needed
         if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32, device=self.device)
+            x = torch.tensor(x, dtype=torch.float32)
+            
+        # Ensure input is on the correct device
+        x = x.to(self.device)
         
-        # Make sure x is float32
-        x = x.to(dtype=torch.float32, device=self.device)
-        
-        # Forward pass depends on memory type
-        with torch.no_grad():
-            if self.memory_type == "working":
-                hidden = kwargs.get("hidden", None)
-                output, hidden = self.network(x, hidden)
-                return output, hidden
+        # Forward through appropriate network
+        if self.memory_type == "working":
+            hidden = kwargs.get("hidden", None)
+            output, new_hidden = self.network(x, hidden)
+            return output, {"hidden": new_hidden}
+            
+        elif self.memory_type == "semantic":
+            completion_target = kwargs.get("completion_target", None)
+            if completion_target is not None and isinstance(completion_target, np.ndarray):
+                completion_target = torch.tensor(completion_target, dtype=torch.float32).to(self.device)
                 
-            elif self.memory_type == "semantic":
-                completion_target = kwargs.get("completion_target", None)
-                output, features = self.network(x, completion_target)
-                return output, features
+            results = self.network(x, completion_target)
+            return results["embedding"], {"completion_loss": results["completion_loss"]}
+            
+        elif self.memory_type == "episodic":
+            context = kwargs.get("context", None)
+            prev_hidden = kwargs.get("prev_hidden", None)
+            
+            if context is not None and isinstance(context, np.ndarray):
+                context = torch.tensor(context, dtype=torch.float32).to(self.device)
                 
-            elif self.memory_type == "episodic":
-                context = kwargs.get("context", None)
-                prev_hidden = kwargs.get("prev_hidden", None)
-                output, hidden, emotion, vividness = self.network(x, context, prev_hidden)
-                return output, (hidden, emotion, vividness)
-                
-            elif self.memory_type == "associative":
-                # Apply Hebbian learning if enabled
-                if self.hebbian_learning_enabled:
-                    output, features = self.network(x, self.association_matrix)
-                    # Update association matrix with new pattern
-                    self._update_hebbian_matrix(features.detach().cpu().numpy())
-                    return output, features
-                else:
-                    output, features = self.network(x)
-                    return output, features
-                    
-            else:
-                output, _ = self.network(x)
-                return output, None
+            embedding, valence, arousal, hidden = self.network(x, context, prev_hidden)
+            return embedding, {
+                "valence": valence, 
+                "arousal": arousal, 
+                "hidden": hidden
+            }
+            
+        elif self.memory_type == "associative":
+            # Use Hebbian matrix if available
+            output = self.network(x, self.hebbian_matrix)
+            return output, {}
+            
+        else:
+            # Generic memory network
+            output = self.network(x)
+            return output, {}
     
     def train(
         self, 
@@ -408,130 +424,150 @@ class MemoryNeuralNetwork:
         **kwargs
     ) -> Dict[str, float]:
         """
-        Train the neural network
+        Train the memory network
         
         Parameters:
-        inputs: Input data
-        targets: Target outputs
-        **kwargs: Additional arguments for specific memory types
+        inputs: Training inputs
+        targets: Training targets
+        **kwargs: Additional training parameters
         
         Returns:
         Dictionary with training metrics
         """
         # Convert numpy arrays to tensors if needed
         if isinstance(inputs, np.ndarray):
-            inputs = torch.tensor(inputs, dtype=torch.float32, device=self.device)
+            inputs = torch.tensor(inputs, dtype=torch.float32)
         if isinstance(targets, np.ndarray):
-            targets = torch.tensor(targets, dtype=torch.float32, device=self.device)
+            targets = torch.tensor(targets, dtype=torch.float32)
+            
+        # Ensure inputs and targets are on the correct device
+        inputs = inputs.to(self.device)
+        targets = targets.to(self.device)
         
         # Set network to training mode
         self.network.train()
         
-        # Forward pass
+        # Zero gradients
         self.optimizer.zero_grad()
         
-        if self.memory_type == "working":
-            hidden = kwargs.get("hidden", None)
-            outputs, hidden = self.network(inputs, hidden)
-            loss = F.mse_loss(outputs, targets)
-            
-        elif self.memory_type == "semantic":
-            completion_target = kwargs.get("completion_target", None)
-            outputs, features = self.network(inputs, completion_target)
-            loss = F.mse_loss(outputs, targets)
-            
-        elif self.memory_type == "episodic":
-            context = kwargs.get("context", None)
-            prev_hidden = kwargs.get("prev_hidden", None)
-            outputs, (hidden, emotion, vividness) = self.network(inputs, context, prev_hidden)
-            
-            # Optional emotional target
-            emotion_targets = kwargs.get("emotion_targets", None)
-            if emotion_targets is not None:
-                # Combine content loss and emotion loss
-                content_loss = F.mse_loss(outputs, targets)
-                emotion_loss = F.mse_loss(emotion, emotion_targets)
-                loss = content_loss + 0.5 * emotion_loss
-            else:
-                loss = F.mse_loss(outputs, targets)
+        # Use mixed precision if available and enabled
+        if hasattr(self, 'use_mixed_precision') and self.use_mixed_precision:
+            with torch.cuda.amp.autocast():
+                # Forward pass
+                outputs, additional = self.forward(inputs, **kwargs)
                 
-        elif self.memory_type == "associative":
-            outputs, features = self.network(inputs)
-            loss = F.mse_loss(outputs, targets)
-            
-            # Store pattern for future associations
-            if kwargs.get("store_pattern", False):
-                self.network.store_pattern(features.detach())
+                # Compute loss
+                if self.memory_type == "semantic":
+                    # For semantic memory, combine reconstruction and target losses
+                    target_loss = F.mse_loss(outputs, targets)
+                    completion_loss = additional.get("completion_loss", 0.0)
+                    loss = target_loss + completion_loss
+                else:
+                    # Standard loss for other memory types
+                    loss = F.mse_loss(outputs, targets)
                 
+            # Scale gradients and optimize
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
         else:
-            outputs, _ = self.network(inputs)
-            loss = F.mse_loss(outputs, targets)
+            # Standard training process
+            # Forward pass
+            outputs, additional = self.forward(inputs, **kwargs)
+            
+            # Compute loss
+            if self.memory_type == "semantic":
+                # For semantic memory, combine reconstruction and target losses
+                target_loss = F.mse_loss(outputs, targets)
+                completion_loss = additional.get("completion_loss", 0.0)
+                loss = target_loss + completion_loss
+            else:
+                # Standard loss for other memory types
+                loss = F.mse_loss(outputs, targets)
+            
+            # Backward pass and optimize
+            loss.backward()
+            self.optimizer.step()
         
-        # Backward pass and optimization
-        loss.backward()
-        self.optimizer.step()
+        # Update Hebbian matrix for associative memory
+        if self.memory_type == "associative" and outputs.shape[0] > 0:
+            output_np = outputs.detach().cpu().numpy()
+            # Extract first example if batch
+            if len(output_np.shape) > 1:
+                output_np = output_np[0]
+            self._update_hebbian_matrix(output_np)
         
+        # Return training metrics
         return {
-            "loss": loss.item()
+            "loss": loss.item(),
+            "type": self.memory_type
         }
     
     def _update_hebbian_matrix(self, features: np.ndarray) -> None:
-        """
-        Update Hebbian association matrix
-        
-        Implements Hebbian learning rule: "Neurons that fire together, wire together"
-        
-        Parameters:
-        features: Feature activations
-        """
-        if len(features.shape) > 1:
-            # Use first example if batch
-            features = features[0]
+        """Update Hebbian matrix for associative memory"""
+        if self.hebbian_matrix is None:
+            return
             
-        # Outer product of features with itself
-        associations = np.outer(features, features)
+        # Update Hebbian connections
+        # Outer product represents connection strengths between all pairs of neurons
+        outer_product = np.outer(features, features)
         
-        # Apply learning rate
-        delta = self.hebbian_learning_rate * associations
+        # Scale learning based on development level
+        # More primitive reinforcement at early stages, more nuanced at later stages
+        hebbian_lr = 0.01 + (0.04 * self.development_level)
         
-        # Update association matrix (with decay)
-        self.association_matrix = (1 - self.hebbian_decay_rate) * self.association_matrix + delta
+        # Apply development-dependent learning rate
+        self.hebbian_matrix = (1.0 - hebbian_lr) * self.hebbian_matrix + hebbian_lr * outer_product
+        
+        # Apply normalization to prevent runaway values
+        max_val = np.max(np.abs(self.hebbian_matrix))
+        if max_val > 0:
+            self.hebbian_matrix /= max_val
     
     def update_development(self, amount: float) -> float:
         """
-        Update the network's developmental level
-        
-        As the network develops:
-        - More complex representations emerge
-        - Learning becomes more efficient
-        - Connections become more stable
+        Update developmental level and adjust network accordingly
         
         Parameters:
-        amount: Amount to increase development level
+        amount: Amount to increase development level by
         
         Returns:
         New development level
         """
-        prev_level = self.development_level
-        self.development_level = min(1.0, self.development_level + amount)
+        # Update development level
+        old_level = self.development_level
+        self.development_level = min(1.0, max(0.0, self.development_level + amount))
         
-        # Development affects learning parameters
-        delta = self.development_level - prev_level
+        # Only make adjustments if significant change
+        if abs(self.development_level - old_level) < 0.01:
+            return self.development_level
+            
+        # Adjust network based on development level
+        if self.memory_type == "working":
+            # Working memory LSTM layers might get more complex with development
+            if hasattr(self.network, 'lstm'):
+                # Adjust dropout based on development (lower dropout at higher levels)
+                for module in self.network.modules():
+                    if isinstance(module, nn.Dropout):
+                        module.p = max(0.1, 0.5 - (self.development_level * 0.4))
         
-        # Adjust learning rate (decreases as network matures)
-        self.learning_rate = max(0.001, self.learning_rate - delta * 0.005)
+        elif self.memory_type == "associative":
+            # Associative memory might have more patterns with development
+            if hasattr(self.network, 'max_patterns'):
+                self.network.max_patterns = int(1000 + (9000 * self.development_level))
+        
+        # Adjust learning rate based on development
+        # Higher development = more refined, slower learning
+        self.learning_rate = max(0.001, 0.01 - (0.008 * self.development_level))
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = self.learning_rate
             
-        # Increase Hebbian learning capabilities
-        self.hebbian_learning_rate = min(0.01, self.hebbian_learning_rate + delta * 0.001)
-        self.hebbian_decay_rate = max(0.00001, self.hebbian_decay_rate - delta * 0.0001)
-        
+        logger.info(f"Updated memory network development to {self.development_level:.2f}")
         return self.development_level
     
     def save(self, path: str) -> None:
         """
-        Save the neural network to disk
+        Save memory network to disk
         
         Parameters:
         path: Path to save the model
@@ -539,48 +575,140 @@ class MemoryNeuralNetwork:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(path), exist_ok=True)
         
-        # Save network parameters
-        torch.save(self.network.state_dict(), f"{path}_weights.pt")
+        # Save to CPU to avoid issues with GPU-specific tensors
+        device_backup = next(self.network.parameters()).device
+        cpu_state_dict = {k: v.cpu() for k, v in self.network.state_dict().items()}
         
-        # Save optimizer state
-        torch.save(self.optimizer.state_dict(), f"{path}_optimizer.pt")
+        # Prepare data to save
+        save_data = {
+            "network_state": cpu_state_dict,
+            "memory_type": self.memory_type,
+            "dimensions": {
+                "input_dim": self.input_dim,
+                "hidden_dim": self.hidden_dim,
+                "output_dim": self.output_dim
+            },
+            "development_level": self.development_level,
+            "learning_rate": self.learning_rate
+        }
         
-        # Save Hebbian matrix and other parameters
-        with open(f"{path}_config.pkl", 'wb') as f:
-            pickle.dump({
-                'input_dim': self.input_dim,
-                'hidden_dim': self.hidden_dim,
-                'output_dim': self.output_dim,
-                'memory_type': self.memory_type,
-                'learning_rate': self.learning_rate,
-                'development_level': self.development_level,
-                'hebbian_learning_enabled': self.hebbian_learning_enabled,
-                'hebbian_learning_rate': self.hebbian_learning_rate,
-                'hebbian_decay_rate': self.hebbian_decay_rate,
-                'association_matrix': self.association_matrix
-            }, f)
+        # Add Hebbian matrix if applicable
+        if self.hebbian_matrix is not None:
+            save_data["hebbian_matrix"] = self.hebbian_matrix
+        
+        # Save data
+        torch.save(save_data, path)
+        
+        # Restore model to original device
+        self.network.to(device_backup)
+        logger.info(f"Memory network saved to {path}")
     
     def load(self, path: str) -> None:
         """
-        Load the neural network from disk
+        Load memory network from disk
         
         Parameters:
-        path: Path to load the model from
+        path: Path to the saved model
         """
-        # Load network parameters
-        self.network.load_state_dict(torch.load(f"{path}_weights.pt"))
-        
-        # Load optimizer state
-        self.optimizer.load_state_dict(torch.load(f"{path}_optimizer.pt"))
-        
-        # Load Hebbian matrix and other parameters
-        with open(f"{path}_config.pkl", 'rb') as f:
-            config = pickle.load(f)
+        if not os.path.exists(path):
+            logger.error(f"Model file not found: {path}")
+            return
+            
+        try:
+            # Load data using the current device
+            save_data = torch.load(path, map_location=self.device)
+            
+            # Check if memory type matches
+            if save_data["memory_type"] != self.memory_type:
+                logger.warning(f"Memory type mismatch: saved={save_data['memory_type']}, current={self.memory_type}")
+                # Create a new network of the correct type
+                self.memory_type = save_data["memory_type"]
+                if self.memory_type == "working":
+                    self.network = self._create_working_memory_network()
+                elif self.memory_type == "semantic":
+                    self.network = self._create_semantic_memory_network()
+                elif self.memory_type == "episodic":
+                    self.network = self._create_episodic_memory_network()
+                elif self.memory_type == "associative":
+                    self.network = self._create_associative_memory_network()
+                else:
+                    self.network = self._create_generic_memory_network()
+                
+                # Move to correct device
+                self.network.to(self.device)
+            
+            # Load network state
+            self.network.load_state_dict(save_data["network_state"])
             
             # Update parameters
-            self.development_level = config['development_level']
-            self.learning_rate = config['learning_rate']
-            self.hebbian_learning_enabled = config['hebbian_learning_enabled']
-            self.hebbian_learning_rate = config['hebbian_learning_rate']
-            self.hebbian_decay_rate = config['hebbian_decay_rate']
-            self.association_matrix = config['association_matrix']
+            self.input_dim = save_data["dimensions"]["input_dim"]
+            self.hidden_dim = save_data["dimensions"]["hidden_dim"]
+            self.output_dim = save_data["dimensions"]["output_dim"]
+            self.development_level = save_data["development_level"]
+            self.learning_rate = save_data["learning_rate"]
+            
+            # Update optimizer learning rate
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = self.learning_rate
+            
+            # Load Hebbian matrix if available
+            if "hebbian_matrix" in save_data and self.memory_type == "associative":
+                self.hebbian_matrix = save_data["hebbian_matrix"]
+            
+            logger.info(f"Memory network loaded from {path}")
+            
+        except Exception as e:
+            logger.error(f"Error loading memory network: {e}")
+            
+    def to_gpu(self):
+        """Move network to GPU if available"""
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            self.network.to(device)
+            self.device = device
+            logger.info("Memory network moved to GPU")
+            
+            # Enable mixed precision if available
+            if hasattr(torch.cuda, 'amp'):
+                logger.info("Enabling mixed precision for memory network")
+                self.scaler = torch.cuda.amp.GradScaler()
+                self.use_mixed_precision = True
+        else:
+            logger.warning("GPU not available, network remains on CPU")
+            
+    def to_cpu(self):
+        """Move network to CPU"""
+        device = torch.device("cpu")
+        self.network.to(device)
+        self.device = device
+        self.use_mixed_precision = False
+        logger.info("Memory network moved to CPU")
+        
+    def free_memory(self):
+        """Free memory used by the network (useful for GPU memory management)"""
+        if self.device.type == "cuda":
+            # Move to CPU temporarily
+            self.to_cpu()
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+            logger.info("Memory network GPU memory freed")
+                
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the memory network
+        
+        Returns:
+        Dictionary with state information
+        """
+        return {
+            "memory_type": self.memory_type,
+            "dimensions": {
+                "input_dim": self.input_dim,
+                "hidden_dim": self.hidden_dim,
+                "output_dim": self.output_dim
+            },
+            "development_level": self.development_level,
+            "learning_rate": self.learning_rate,
+            "device": str(self.device),
+            "parameters": sum(p.numel() for p in self.network.parameters())
+        }

@@ -10,6 +10,12 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+def get_device():
+    """Get the appropriate device for tensor operations."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
 class LearningNetwork(nn.Module):
     """
     Neural network for the learning module that processes learning experiences
@@ -36,6 +42,9 @@ class LearningNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.developmental_level = developmental_level
+        
+        # Get device (CUDA if available)
+        self.device = get_device()
         
         # Experience encoding network
         self.encoder = nn.Sequential(
@@ -74,6 +83,16 @@ class LearningNetwork(nn.Module):
         
         # Initialize learning history
         self.learning_history = []
+        
+        # Move model to appropriate device
+        self.to(self.device)
+        logger.info(f"Learning network initialized on device: {self.device}")
+        
+        # Enable cuDNN benchmark for performance optimization if available
+        if self.device.type == 'cuda':
+            torch.backends.cudnn.benchmark = True
+            logger.info(f"CUDA version: {torch.version.cuda}")
+            logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
         
     def _apply_developmental_scaling(self):
         """
@@ -126,6 +145,9 @@ class LearningNetwork(nn.Module):
             Dictionary with encoded experience, extracted patterns,
             reinforcement prediction, and strategy selection
         """
+        # Ensure input is on the correct device
+        x = x.to(self.device)
+        
         # Encode the experience
         encoded = self.encoder(x)
         
@@ -161,6 +183,9 @@ class LearningNetwork(nn.Module):
         Returns:
             Dictionary with prediction error and updated prediction
         """
+        # Ensure experience is on the correct device
+        experience = experience.to(self.device)
+        
         # Get current prediction
         with torch.no_grad():
             output = self.forward(experience)
@@ -184,11 +209,34 @@ class LearningNetwork(nn.Module):
             "updated_prediction": current_prediction + (prediction_error * learning_rate)
         }
     
+    def batch_process_experiences(self, experiences: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Process a batch of experiences efficiently
+        
+        Args:
+            experiences: Batch of experience tensors [batch_size, input_dim]
+            
+        Returns:
+            Dictionary with batch results
+        """
+        # Ensure experiences are on the correct device
+        experiences = experiences.to(self.device)
+        
+        # Forward pass
+        results = self.forward(experiences)
+        
+        return results
+        
     def save(self, path: str):
         """Save model to disk"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        # Move model to CPU for saving to avoid GPU memory issues
+        device_backup = next(self.parameters()).device
+        cpu_state_dict = {k: v.cpu() for k, v in self.state_dict().items()}
+        
         torch.save({
-            "model_state": self.state_dict(),
+            "model_state": cpu_state_dict,
             "config": {
                 "input_dim": self.input_dim,
                 "hidden_dim": self.hidden_dim,
@@ -197,6 +245,9 @@ class LearningNetwork(nn.Module):
             },
             "learning_history": self.learning_history
         }, path)
+        
+        # Move model back to original device
+        self.to(device_backup)
         logger.info(f"Learning network saved to {path}")
     
     def load(self, path: str):
@@ -206,7 +257,7 @@ class LearningNetwork(nn.Module):
             return False
         
         try:
-            checkpoint = torch.load(path)
+            checkpoint = torch.load(path, map_location=self.device)
             self.load_state_dict(checkpoint["model_state"])
             self.developmental_level = checkpoint["config"]["developmental_level"]
             self.learning_history = checkpoint.get("learning_history", [])
@@ -226,6 +277,197 @@ class LearningNetwork(nn.Module):
             "config": {
                 "input_dim": self.input_dim,
                 "hidden_dim": self.hidden_dim,
-                "output_dim": self.output_dim
+                "output_dim": self.output_dim,
+                "device": str(self.device)
             }
         }
+        
+    def free_memory(self):
+        """Free GPU memory if using CUDA"""
+        if self.device.type == 'cuda':
+            # Move model to CPU
+            self.to(torch.device('cpu'))
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+            logger.info("Freed GPU memory")
+            
+    def to_gpu(self):
+        """Move model to GPU if available"""
+        if torch.cuda.is_available():
+            self.to(torch.device('cuda'))
+            self.device = torch.device('cuda')
+            logger.info("Moved model to GPU")
+        else:
+            logger.warning("GPU not available, model remains on CPU")
+            
+    def to_cpu(self):
+        """Move model to CPU"""
+        self.to(torch.device('cpu'))
+        self.device = torch.device('cpu')
+        logger.info("Moved model to CPU")
+
+
+class AssociativeLearningNetwork(LearningNetwork):
+    """Specialized network for associative learning with pattern detection focus"""
+    
+    def __init__(
+        self,
+        input_dim: int = 64,
+        hidden_dim: int = 128,
+        output_dim: int = 32,
+        developmental_level: float = 0.0
+    ):
+        super().__init__(input_dim, hidden_dim, output_dim, developmental_level)
+        
+        # Add pattern similarity network
+        self.similarity_network = nn.Sequential(
+            nn.Linear(output_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        ).to(self.device)
+    
+    def compute_similarity(self, pattern1: torch.Tensor, pattern2: torch.Tensor) -> float:
+        """Compute similarity between two patterns"""
+        # Ensure patterns are on the correct device
+        pattern1 = pattern1.to(self.device)
+        pattern2 = pattern2.to(self.device)
+        
+        # Concatenate patterns
+        combined = torch.cat((pattern1, pattern2), dim=-1)
+        
+        # Compute similarity
+        with torch.no_grad():
+            similarity = self.similarity_network(combined)
+            
+        return similarity.item()
+
+
+class ReinforcementLearningNetwork(LearningNetwork):
+    """Specialized network for reinforcement learning with policy focus"""
+    
+    def __init__(
+        self,
+        input_dim: int = 64,
+        hidden_dim: int = 128,
+        output_dim: int = 32,
+        action_dim: int = 10,
+        developmental_level: float = 0.0
+    ):
+        super().__init__(input_dim, hidden_dim, output_dim, developmental_level)
+        
+        # Add Q-value network for reinforcement learning
+        self.action_dim = action_dim
+        self.q_network = nn.Sequential(
+            nn.Linear(output_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, action_dim)
+        ).to(self.device)
+    
+    def compute_q_values(self, state: torch.Tensor) -> torch.Tensor:
+        """Compute Q-values for a state"""
+        # Ensure state is on the correct device
+        state = state.to(self.device)
+        
+        # Extract patterns from state
+        with torch.no_grad():
+            output = self.forward(state)
+            patterns = output["extracted_patterns"]
+            
+            # Compute Q-values
+            q_values = self.q_network(patterns)
+            
+        return q_values
+
+
+class ProceduralLearningNetwork(LearningNetwork):
+    """Specialized network for procedural learning with sequence focus"""
+    
+    def __init__(
+        self,
+        input_dim: int = 64,
+        hidden_dim: int = 128,
+        output_dim: int = 32,
+        seq_length: int = 5,
+        developmental_level: float = 0.0
+    ):
+        super().__init__(input_dim, hidden_dim, output_dim, developmental_level)
+        
+        # Add sequence prediction network
+        self.seq_length = seq_length
+        self.lstm = nn.LSTM(
+            input_size=output_dim,
+            hidden_size=hidden_dim,
+            num_layers=2,
+            batch_first=True,
+            dropout=0.3
+        ).to(self.device)
+        
+        self.sequence_predictor = nn.Sequential(
+            nn.Linear(hidden_dim, output_dim)
+        ).to(self.device)
+    
+    def predict_next_in_sequence(self, sequence: torch.Tensor) -> torch.Tensor:
+        """Predict the next item in a sequence"""
+        # Ensure sequence is on the correct device
+        sequence = sequence.to(self.device)
+        
+        # Process each item in sequence
+        seq_features = []
+        for i in range(sequence.shape[0]):
+            with torch.no_grad():
+                item = sequence[i:i+1]
+                output = self.forward(item)
+                seq_features.append(output["extracted_patterns"])
+        
+        # Stack features
+        seq_features = torch.cat(seq_features, dim=0).unsqueeze(0)  # Add batch dimension
+        
+        # Process with LSTM
+        with torch.no_grad():
+            lstm_out, _ = self.lstm(seq_features)
+            prediction = self.sequence_predictor(lstm_out[:, -1])
+            
+        return prediction
+
+
+class MetaLearningNetwork(LearningNetwork):
+    """Specialized network for meta-learning with strategy focus"""
+    
+    def __init__(
+        self,
+        input_dim: int = 64,
+        hidden_dim: int = 128,
+        output_dim: int = 32,
+        strategy_dim: int = 10,
+        developmental_level: float = 0.0
+    ):
+        super().__init__(input_dim, hidden_dim, output_dim, developmental_level)
+        
+        # Add strategy optimization network
+        self.strategy_dim = strategy_dim
+        self.strategy_optimizer = nn.Sequential(
+            nn.Linear(output_dim + strategy_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, strategy_dim)
+        ).to(self.device)
+    
+    def optimize_strategy(self, state: torch.Tensor, current_strategy: torch.Tensor) -> torch.Tensor:
+        """Optimize a learning strategy for the current state"""
+        # Ensure tensors are on the correct device
+        state = state.to(self.device)
+        current_strategy = current_strategy.to(self.device)
+        
+        # Extract features
+        with torch.no_grad():
+            output = self.forward(state)
+            features = output["extracted_patterns"]
+            
+            # Combine features with current strategy
+            combined = torch.cat((features, current_strategy), dim=-1)
+            
+            # Optimize strategy
+            optimized_strategy = self.strategy_optimizer(combined)
+            
+        return optimized_strategy
