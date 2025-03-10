@@ -18,28 +18,18 @@ from pydantic import BaseModel, Field, field_validator
 import random
 from enum import Enum
 from datetime import datetime
+import re
+import logging
 
-from lmm_project.interfaces.mother.models import PersonalityTrait, MotherPersonality, TeachingStyle
+from lmm_project.interfaces.mother.models import (
+    PersonalityTrait,
+    MotherPersonality,
+    TeachingStyle,
+    EmotionalValence,
+    PersonalityProfile
+)
 
-
-class EmotionalValence(str, Enum):
-    """Types of emotional valence for responses"""
-    VERY_POSITIVE = "very_positive"
-    POSITIVE = "positive"
-    NEUTRAL = "neutral"
-    CONCERNED = "concerned"
-    FIRM = "firm"
-
-
-class PersonalityProfile(str, Enum):
-    """Pre-defined personality profiles for the Mother LLM"""
-    NURTURING = "nurturing"
-    ACADEMIC = "academic"
-    BALANCED = "balanced"
-    PLAYFUL = "playful"
-    SOCRATIC = "socratic"
-    MINDFUL = "mindful"
-
+logger = logging.getLogger(__name__)
 
 # Define baseline trait values for different personality profiles
 PERSONALITY_PROFILES = {

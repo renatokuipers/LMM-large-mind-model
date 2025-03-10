@@ -15,6 +15,8 @@ Homeostatic regulation is critical for healthy cognitive development, as it ensu
 the system operates within optimal parameters while adapting to developmental stages.
 """
 
+from typing import Dict, Type, Any
+
 from .models import (
     HomeostaticSystem, 
     HomeostaticNeedType, 
@@ -43,7 +45,7 @@ __all__ = [
 ]
 
 # Mapping of need types to their primary regulators
-NEED_REGULATORS = {
+NEED_REGULATORS: Dict[HomeostaticNeedType, Type[Any]] = {
     HomeostaticNeedType.ENERGY: EnergyRegulator,
     HomeostaticNeedType.AROUSAL: ArousalController,
     HomeostaticNeedType.COGNITIVE_LOAD: CognitiveLoadBalancer,

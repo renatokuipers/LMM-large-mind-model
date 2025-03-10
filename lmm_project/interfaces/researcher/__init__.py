@@ -12,14 +12,39 @@ the development of the LMM system. It includes components for:
 These tools enable scientific study of the developing mind model.
 """
 
-from lmm_project.interfaces.researcher.models import ResearchMetrics
+from lmm_project.interfaces.researcher.models import (
+    ResearchMetrics,
+    DevelopmentalStage,
+    MetricCategory,
+    CognitiveModuleState,
+    DevelopmentalMilestone,
+    DevelopmentalEvent,
+    LearningAnalysis,
+    NeuralActivitySnapshot,
+    DevelopmentalTrajectory,
+    VisualizationRequest,
+    SystemStateSnapshot
+)
 from lmm_project.interfaces.researcher.development_tracker import DevelopmentTracker
 from lmm_project.interfaces.researcher.metrics_collector import MetricsCollector
 from lmm_project.interfaces.researcher.state_observer import StateObserver
 
 __all__ = [
-    'ResearchMetrics',
+    # Main classes
     'DevelopmentTracker',
     'MetricsCollector',
     'StateObserver',
+    
+    # Models
+    'ResearchMetrics',
+    'DevelopmentalStage',
+    'MetricCategory',
+    'CognitiveModuleState',
+    'DevelopmentalMilestone',
+    'DevelopmentalEvent',
+    'LearningAnalysis',
+    'NeuralActivitySnapshot',
+    'DevelopmentalTrajectory',
+    'VisualizationRequest',
+    'SystemStateSnapshot'
 ] 

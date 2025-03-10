@@ -15,32 +15,11 @@ from enum import Enum
 import random
 from datetime import datetime
 
-from lmm_project.interfaces.mother.models import InteractionPattern, TeachingStyle
-
-
-class InteractionType(str, Enum):
-    """Types of interaction patterns"""
-    REPETITION = "repetition"
-    MIRRORING = "mirroring"
-    TURN_TAKING = "turn_taking"
-    ELABORATION = "elaboration"
-    QUESTIONING = "questioning"
-    STORYTELLING = "storytelling"
-    PLAYFUL = "playful"
-    INSTRUCTIONAL = "instructional"
-    CONVERSATIONAL = "conversational"
-    SOCRATIC = "socratic"
-    PROBLEM_SOLVING = "problem_solving"
-    EMOTIONAL_SUPPORT = "emotional_support"
-
-
-class InteractionComplexity(str, Enum):
-    """Complexity levels for interactions"""
-    VERY_SIMPLE = "very_simple"
-    SIMPLE = "simple"
-    MODERATE = "moderate"
-    COMPLEX = "complex"
-    VERY_COMPLEX = "very_complex"
+from lmm_project.interfaces.mother.models import (
+    InteractionPattern,
+    InteractionType, 
+    InteractionComplexity
+)
 
 
 # Define interaction patterns for different developmental stages

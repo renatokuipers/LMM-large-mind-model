@@ -13,7 +13,7 @@ def should_exclude_dir(dirname):
     return dirname in excluded_dirs
 
 def should_include_file(filename):
-    included_extensions = {'.js', '.jsx', '.json', '.css', '.html', '.py', '.env', '.tsx', '.ts', '.yaml', '.txt'}
+    included_extensions = {'.js', '.jsx', '.json', '.css', '.html', '.py', '.env', '.tsx', '.ts', '.yaml', '.txt', '.yml', '.env'}
     _, ext = os.path.splitext(filename)
     return ext in included_extensions
 

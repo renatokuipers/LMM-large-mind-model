@@ -12,7 +12,7 @@ These learning engines work together to create a comprehensive learning system
 that enables the LMM to develop and adapt through experience.
 """
 
-from typing import Dict, List, Any, Optional, Set, Union
+from typing import Dict, List, Any, Optional, Set, Union, Tuple
 import logging
 from datetime import datetime
 
@@ -275,6 +275,171 @@ class LearningSystem:
             logger.info(f"Set learning rate for {engine_type} engine to {learning_rate}")
         else:
             logger.warning(f"Unknown engine type: {engine_type}")
+    
+    # ---------- Hebbian Engine Methods ----------
+    
+    def set_hebbian_learning_rule(self, rule: str) -> None:
+        """
+        Set the learning rule for the Hebbian engine
+        
+        Args:
+            rule: Learning rule to use (hebbian, oja, bcm, or stdp)
+        """
+        self.hebbian_engine.set_learning_rule(rule)
+        logger.info(f"Set Hebbian learning rule to {rule}")
+    
+    # ---------- Reinforcement Engine Methods ----------
+    
+    def set_exploration_rate(self, rate: float) -> None:
+        """
+        Set the exploration rate for the reinforcement engine
+        
+        Args:
+            rate: New exploration rate (0.0 to 1.0)
+        """
+        self.reinforcement_engine.set_exploration_rate(rate)
+        logger.info(f"Set reinforcement exploration rate to {rate}")
+    
+    def set_learning_method(self, method: str) -> None:
+        """
+        Set the learning method for the reinforcement engine
+        
+        Args:
+            method: Learning method to use (q_learning, sarsa, or actor_critic)
+        """
+        self.reinforcement_engine.set_learning_method(method)
+        logger.info(f"Set reinforcement learning method to {method}")
+    
+    def decay_exploration(self, decay_factor: float = 0.99) -> None:
+        """
+        Decay the exploration rate for the reinforcement engine
+        
+        Args:
+            decay_factor: Factor to multiply the current exploration rate by
+        """
+        self.reinforcement_engine.decay_exploration(decay_factor)
+        logger.info(f"Decayed reinforcement exploration rate by factor {decay_factor}")
+    
+    def get_action_selection(
+        self, 
+        options: Dict[str, float], 
+        use_exploration: bool = True
+    ) -> Tuple[str, float]:
+        """
+        Get an action selection from the reinforcement engine
+        
+        Args:
+            options: Dictionary mapping action IDs to their values
+            use_exploration: Whether to use exploration in selection
+            
+        Returns:
+            Tuple of (selected action ID, action value)
+        """
+        return self.reinforcement_engine.get_action_selection(options, use_exploration)
+    
+    # ---------- Pruning Engine Methods ----------
+    
+    def set_pruning_strategy(self, strategy: str) -> None:
+        """
+        Set the pruning strategy for the pruning engine
+        
+        Args:
+            strategy: Pruning strategy to use (weight, usage, importance, or combined)
+        """
+        self.pruning_engine.set_pruning_strategy(strategy)
+        logger.info(f"Set pruning strategy to {strategy}")
+    
+    def set_weight_threshold(self, threshold: float) -> None:
+        """
+        Set the weight threshold for the pruning engine
+        
+        Args:
+            threshold: New weight threshold
+        """
+        self.pruning_engine.set_weight_threshold(threshold)
+        logger.info(f"Set pruning weight threshold to {threshold}")
+    
+    def set_usage_threshold(self, threshold: float) -> None:
+        """
+        Set the usage threshold for the pruning engine
+        
+        Args:
+            threshold: New usage threshold
+        """
+        self.pruning_engine.set_usage_threshold(threshold)
+        logger.info(f"Set pruning usage threshold to {threshold}")
+    
+    def set_importance_threshold(self, threshold: float) -> None:
+        """
+        Set the importance threshold for the pruning engine
+        
+        Args:
+            threshold: New importance threshold
+        """
+        self.pruning_engine.set_importance_threshold(threshold)
+        logger.info(f"Set pruning importance threshold to {threshold}")
+    
+    def set_max_prune_percent(self, percent: float) -> None:
+        """
+        Set the maximum pruning percentage for the pruning engine
+        
+        Args:
+            percent: New maximum percentage (0.0 to 1.0)
+        """
+        self.pruning_engine.set_max_prune_percent(percent)
+        logger.info(f"Set maximum pruning percentage to {percent}")
+    
+    def set_pruning_frequency(self, frequency: int) -> None:
+        """
+        Set how often pruning is applied
+        
+        Args:
+            frequency: New pruning frequency
+        """
+        self.pruning_engine.set_pruning_frequency(frequency)
+        logger.info(f"Set pruning frequency to {frequency}")
+    
+    def set_recovery_probability(self, probability: float) -> None:
+        """
+        Set the probability of recovering pruned synapses
+        
+        Args:
+            probability: New recovery probability (0.0 to 1.0)
+        """
+        self.pruning_engine.set_recovery_probability(probability)
+        logger.info(f"Set pruning recovery probability to {probability}")
+    
+    # ---------- Consolidation Engine Methods ----------
+    
+    def set_consolidation_threshold(self, threshold: float) -> None:
+        """
+        Set the consolidation threshold for the consolidation engine
+        
+        Args:
+            threshold: New consolidation threshold (0.0 to 1.0)
+        """
+        self.consolidation_engine.set_consolidation_threshold(threshold)
+        logger.info(f"Set consolidation threshold to {threshold}")
+    
+    def set_reactivation_strength(self, strength: float) -> None:
+        """
+        Set the pattern reactivation strength for the consolidation engine
+        
+        Args:
+            strength: New reactivation strength (0.0 to 1.0)
+        """
+        self.consolidation_engine.set_reactivation_strength(strength)
+        logger.info(f"Set consolidation reactivation strength to {strength}")
+    
+    def set_stabilization_rate(self, rate: float) -> None:
+        """
+        Set the memory stabilization rate for the consolidation engine
+        
+        Args:
+            rate: New stabilization rate (0.0 to 1.0)
+        """
+        self.consolidation_engine.set_stabilization_rate(rate)
+        logger.info(f"Set consolidation stabilization rate to {rate}")
     
     def get_state(self) -> Dict[str, Any]:
         """

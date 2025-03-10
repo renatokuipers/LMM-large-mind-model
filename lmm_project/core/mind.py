@@ -285,12 +285,169 @@ class Mind:
             return {"error": "Cognitive load too high for input processing"}
         
         results = {}
+        module_outputs = {}
         
-        # First, process through perception
+        # Start a new processing cycle
+        cycle_message = Message(
+            sender="mind",
+            message_type="processing_cycle_start",
+            content={
+                "input_data": input_data,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        self.event_bus.publish(cycle_message)
+        
+        # 1. PERCEPTION - Process through perception module
         if "perception" in self.modules:
-            results["perception"] = self.modules["perception"].process_input(input_data)
+            logger.debug("Processing input through perception module")
+            perception_results = self.modules["perception"].process_input(input_data)
+            module_outputs["perception"] = perception_results
+            results["perception"] = perception_results
+        else:
+            logger.warning("No perception module available")
+            return {"error": "Perception module not available"}
             
-        # TODO: Implement full cognitive pipeline
+        # 2. ATTENTION - Focus on relevant aspects of perceived input
+        if "attention" in self.modules:
+            logger.debug("Applying attention to perceived input")
+            attention_results = self.modules["attention"].process_input({
+                "perception_data": perception_results,
+                "current_focus": self.state_manager.get_state("current_focus")
+            })
+            module_outputs["attention"] = attention_results
+            results["attention"] = attention_results
+            
+            # Update salience for further processing
+            salient_data = attention_results.get("salient_data", perception_results)
+        else:
+            salient_data = perception_results
+        
+        # 3. WORKING MEMORY - Place attended information in working memory
+        if "memory" in self.modules and hasattr(self.modules["memory"], "update_working_memory"):
+            logger.debug("Updating working memory with attended information")
+            memory_results = self.modules["memory"].update_working_memory(salient_data)
+            module_outputs["working_memory"] = memory_results
+            results["working_memory"] = memory_results
+            
+            # Retrieve relevant long-term memories based on current context
+            ltm_retrieval = self.modules["memory"].retrieve_relevant_memories(salient_data)
+            module_outputs["memory_retrieval"] = ltm_retrieval
+            results["memory_retrieval"] = ltm_retrieval
+            
+            # Create an integrated context combining perception, attention, and memory
+            context = {
+                "current_input": salient_data,
+                "working_memory": memory_results,
+                "relevant_memories": ltm_retrieval
+            }
+        else:
+            context = {"current_input": salient_data}
+        
+        # 4. LANGUAGE PROCESSING - Process linguistic aspects of the input
+        if "language" in self.modules:
+            logger.debug("Processing linguistic content")
+            language_results = self.modules["language"].process_input(context)
+            module_outputs["language"] = language_results
+            results["language"] = language_results
+            
+            # Add linguistic understanding to context
+            context["linguistic_understanding"] = language_results
+        
+        # 5. EMOTIONAL PROCESSING - Evaluate emotional aspects of the input
+        if "emotion" in self.modules:
+            logger.debug("Processing emotional content")
+            emotion_results = self.modules["emotion"].process_input(context)
+            module_outputs["emotion"] = emotion_results
+            results["emotion"] = emotion_results
+            
+            # Add emotional response to context
+            context["emotional_response"] = emotion_results
+        
+        # 6. SOCIAL PROCESSING - Evaluate social implications
+        if "social" in self.modules:
+            logger.debug("Processing social implications")
+            social_results = self.modules["social"].process_input(context)
+            module_outputs["social"] = social_results
+            results["social"] = social_results
+            
+            # Add social understanding to context
+            context["social_understanding"] = social_results
+        
+        # 7. BELIEF PROCESSING - Update beliefs based on new information
+        if "belief" in self.modules:
+            logger.debug("Updating beliefs based on new information")
+            belief_results = self.modules["belief"].process_input(context)
+            module_outputs["belief"] = belief_results
+            results["belief"] = belief_results
+            
+            # Add updated beliefs to context
+            context["updated_beliefs"] = belief_results
+        
+        # 8. EXECUTIVE PROCESSING - Planning, decision making, inhibition
+        if "executive" in self.modules:
+            logger.debug("Performing executive processing")
+            executive_results = self.modules["executive"].process_input(context)
+            module_outputs["executive"] = executive_results
+            results["executive"] = executive_results
+            
+            # Add executive decisions to context
+            context["executive_decisions"] = executive_results
+        
+        # 9. CONSCIOUSNESS - Global workspace integration
+        if "consciousness" in self.modules:
+            logger.debug("Integrating information in consciousness")
+            consciousness_results = self.modules["consciousness"].process_input({
+                "module_outputs": module_outputs,
+                "integrated_context": context
+            })
+            results["consciousness"] = consciousness_results
+            
+            # The conscious state represents the mind's current integrated understanding
+            conscious_state = consciousness_results.get("conscious_state", {})
+            self.state_manager.update_state({"conscious_state": conscious_state})
+        
+        # 10. CREATIVITY - Generate creative responses or novel associations
+        if "creativity" in self.modules:
+            logger.debug("Generating creative associations")
+            creativity_results = self.modules["creativity"].process_input(context)
+            results["creativity"] = creativity_results
+        
+        # 11. LEARNING - Update neural connections based on experience
+        if "learning" in self.modules:
+            logger.debug("Applying learning from current experience")
+            learning_input = {
+                "experience": context,
+                "module_outputs": module_outputs,
+                "developmental_stage": self.developmental_stage
+            }
+            learning_results = self.modules["learning"].process_input(learning_input)
+            results["learning"] = learning_results
+        
+        # 12. IDENTITY - Update self-model based on experience
+        if "identity" in self.modules:
+            logger.debug("Updating self-model")
+            identity_results = self.modules["identity"].process_input(context)
+            results["identity"] = identity_results
+            
+        # Complete the processing cycle
+        cycle_complete_message = Message(
+            sender="mind",
+            message_type="processing_cycle_complete",
+            content={
+                "processing_results": results,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        self.event_bus.publish(cycle_complete_message)
+        
+        # Store this experience in memory if available
+        if "memory" in self.modules and hasattr(self.modules["memory"], "store_experience"):
+            self.modules["memory"].store_experience({
+                "input": input_data,
+                "processing_results": results,
+                "timestamp": datetime.now().isoformat()
+            })
         
         return results
         

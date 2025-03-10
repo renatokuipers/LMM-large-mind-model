@@ -15,43 +15,13 @@ from enum import Enum
 import random
 from datetime import datetime, timedelta
 
-from lmm_project.interfaces.mother.models import TeachingStrategy
+from lmm_project.interfaces.mother.models import (
+    TeachingStrategy,
+    LearningGoalCategory,
+    LearningMode,
+    ComprehensionLevel
+)
 from lmm_project.core.exceptions import MotherLLMError
-
-
-class LearningGoalCategory(str, Enum):
-    """Categories of learning goals for curriculum development"""
-    PATTERN_RECOGNITION = "pattern_recognition"
-    LANGUAGE_ACQUISITION = "language_acquisition"
-    OBJECT_PERMANENCE = "object_permanence"
-    EMOTIONAL_UNDERSTANDING = "emotional_understanding"
-    SOCIAL_AWARENESS = "social_awareness"
-    CAUSAL_REASONING = "causal_reasoning"
-    ABSTRACT_THINKING = "abstract_thinking"
-    IDENTITY_FORMATION = "identity_formation"
-    CREATIVE_THINKING = "creative_thinking"
-    METACOGNITION = "metacognition"
-    
-
-class LearningMode(str, Enum):
-    """Different modes of learning interaction"""
-    EXPLORATION = "exploration"
-    INSTRUCTION = "instruction"
-    PRACTICE = "practice"
-    REFLECTION = "reflection"
-    ASSESSMENT = "assessment"
-    PLAY = "play"
-    CONVERSATION = "conversation"
-
-
-class ComprehensionLevel(str, Enum):
-    """Levels of comprehension for a concept or topic"""
-    NONE = "none"
-    MINIMAL = "minimal"
-    PARTIAL = "partial"
-    FUNCTIONAL = "functional"
-    SOLID = "solid"
-    MASTERY = "mastery"
 
 
 # Define strategies for different teaching styles
