@@ -1,15 +1,23 @@
 import json
 import logging
 import os
+import time
 from typing import Dict, List, Optional, Any, Union, Tuple
 from pathlib import Path
+import requests
 
 from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.utils.config_manager import get_config
 from lmm_project.utils.llm_client import LLMClient, Message
 from lmm_project.utils.tts_client import text_to_speech
 
-from .models import MotherInput, MotherResponse, EmotionalTone, TeachingMethod
+from .models import (
+    MotherInput, 
+    MotherResponse, 
+    EmotionalTone, 
+    TeachingMethod,
+    InteractionPattern
+)
 from .personality import Personality
 from .teaching_strategies import TeachingStrategies
 from .interaction_patterns import InteractionPatterns
@@ -41,7 +49,7 @@ class MotherLLM:
             tts_voice: Voice to use for TTS
         """
         # Get configuration from environment or config file
-        config = get_config().config
+        config = get_config()
         
         # Load configuration
         llm_url = config.get("LLM_API_URL", "http://192.168.2.12:1234")
@@ -56,7 +64,7 @@ class MotherLLM:
         
         # TTS configuration
         if use_tts is None:
-            use_tts = config.get("interfaces", {}).get("mother", {}).get("tts_enabled", True)
+            use_tts = config.get("interfaces.mother.tts_enabled", True)
         self.use_tts = use_tts
         
         if tts_voice is None:
@@ -81,44 +89,72 @@ class MotherLLM:
         Returns:
             A response from the Mother
         """
-        # Prepare context for decision making
-        context = input_data.context or {}
+        logger = logging.getLogger(__name__)
+        logger.info(f"respond called with input: {input_data}")
         
-        # Select teaching strategy based on age and context
-        teaching_method = self.teaching.select_strategy(input_data.age, context)
-        
-        # Determine emotional tone based on personality and context
-        emotional_tone = self.personality.determine_tone(context)
-        
-        # Select interaction pattern
-        interaction_pattern = self.interaction.select_interaction_pattern(
-            input_data.age,
-            context,
-            teaching_method,
-            emotional_tone
-        )
-        
-        # Build prompt for the LLM
-        prompt = self._build_prompt(
-            input_data, 
-            teaching_method, 
-            interaction_pattern
-        )
-        
-        # Generate response using LLM
-        llm_response = self._generate_llm_response(prompt)
-        
-        # Parse the response
-        response = self._parse_response(llm_response, emotional_tone, teaching_method)
-        
-        # Use text-to-speech if enabled
-        if self.use_tts:
-            self._speak_response(response)
-        
-        # Update interaction history
-        self._update_history(input_data, response)
-        
-        return response
+        try:
+            # Prepare context for decision making
+            context = input_data.context or {}
+            logger.debug(f"Context for decision making: {context}")
+            
+            # Select teaching strategy based on age and context
+            logger.debug(f"Selecting teaching strategy for age: {input_data.age}")
+            teaching_method = self.teaching.select_strategy(input_data.age, context)
+            logger.debug(f"Selected teaching method: {teaching_method}")
+            
+            # Determine emotional tone based on personality and context
+            logger.debug(f"Determining emotional tone")
+            emotional_tone = self.personality.determine_tone(context)
+            logger.debug(f"Selected emotional tone: {emotional_tone}")
+            
+            # Select interaction pattern
+            logger.debug(f"Selecting interaction pattern")
+            interaction_pattern = self.interaction.select_interaction_pattern(
+                input_data.age,
+                context,
+                teaching_method,
+                emotional_tone
+            )
+            logger.debug(f"Selected interaction pattern: {interaction_pattern}")
+            
+            # Build prompt for the LLM
+            logger.debug(f"Building prompt")
+            prompt = self._build_prompt(
+                input_data, 
+                teaching_method, 
+                interaction_pattern
+            )
+            logger.debug(f"Built prompt with {len(prompt)} messages")
+            
+            # Generate response using LLM
+            logger.debug(f"Generating LLM response")
+            llm_response = self._generate_llm_response(prompt)
+            logger.debug(f"Generated LLM response: {llm_response[:100]}...")
+            
+            # Parse the response
+            logger.debug(f"Parsing response")
+            response = self._parse_response(llm_response, emotional_tone, teaching_method)
+            logger.debug(f"Parsed response: {response}")
+            
+            # Use text-to-speech if enabled
+            if self.use_tts:
+                logger.debug(f"Using TTS")
+                self._speak_response(response)
+            
+            # Update interaction history
+            self._update_history(input_data, response)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error in mother.respond: {e}", exc_info=True)
+            # Create a fallback response
+            fallback_response = MotherResponse(
+                content="I'm having trouble formulating a response right now. Let's try again in a moment.",
+                tone=EmotionalTone.ENCOURAGING,
+                voice_settings={"voice": self.tts_voice, "speed": 1.0}
+            )
+            return fallback_response
     
     def _build_prompt(
         self, 
@@ -160,12 +196,12 @@ class MotherLLM:
     
     def _create_system_message(
         self, 
-        age: float, 
+        age: float,
         teaching_method: TeachingMethod,
-        interaction_pattern: Any
+        interaction_pattern: InteractionPattern
     ) -> str:
         """
-        Create the system message that instructs the LLM how to respond.
+        Create the system message for the LLM.
         
         Args:
             age: Current developmental age
@@ -175,10 +211,11 @@ class MotherLLM:
         Returns:
             System message string
         """
-        # Personality traits information
-        warmth = self.personality.get_trait(self.personality.PRESETS["nurturing"].keys()[0])
-        expressiveness = self.personality.get_trait(self.personality.PRESETS["nurturing"].keys()[2])
-        structure = self.personality.get_trait(self.personality.PRESETS["nurturing"].keys()[3])
+        # Personality traits information - convert keys to list first
+        nurturing_keys = list(self.personality.PRESETS["nurturing"].keys())
+        warmth = self.personality.get_trait(nurturing_keys[0])
+        expressiveness = self.personality.get_trait(nurturing_keys[2])
+        structure = self.personality.get_trait(nurturing_keys[3])
         
         # Complexity level
         complexity = interaction_pattern.complexity_level
@@ -214,25 +251,44 @@ Never use markdown in your responses.
     
     def _generate_llm_response(self, messages: List[Message]) -> str:
         """
-        Generate a response using the LLM.
+        Generate a response from the LLM.
         
         Args:
-            messages: The conversation messages
+            messages: List of messages for the LLM
             
         Returns:
-            The LLM's response text
+            Raw response from the LLM
         """
-        try:
-            response = self.llm_client.chat_completion(
-                messages=messages,
-                model=self.model_name,
-                temperature=0.7
-            )
-            return response
-        except Exception as e:
-            logger.error(f"Error generating LLM response: {e}")
-            # Fallback response in case of error
-            return "I'm thinking about how to respond to that. Let's talk about it more in a moment."
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.llm_client.chat_completion(
+                    messages,
+                    model=self.model_name,
+                    temperature=0.7,
+                    max_tokens=1024
+                )
+                return response
+                
+            except requests.exceptions.RequestException as e:
+                # Network-related error
+                logger.error(f"Network error calling LLM API (attempt {attempt+1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                    
+            except Exception as e:
+                # Other unexpected error
+                logger.error(f"Error calling LLM (attempt {attempt+1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                    
+        # If we've exhausted retries, raise a more specific exception
+        logger.error("Failed to get response from LLM after multiple attempts")
+        raise RuntimeError("Unable to communicate with language model service after multiple attempts")
     
     def _parse_response(
         self, 
@@ -294,25 +350,66 @@ Never use markdown in your responses.
     
     def _speak_response(self, response: MotherResponse) -> None:
         """
-        Speak the response using text-to-speech.
+        Convert the response text to speech and play it.
         
         Args:
             response: The response to speak
         """
         try:
-            # Extract voice settings
-            voice = response.voice_settings.get("voice", self.tts_voice)
-            speed = response.voice_settings.get("speed", 1.0)
+            logger.info(f"Generating TTS for response with voice '{self.tts_voice}' at speed {0.85}")
             
-            # Use TTS to speak the response
-            text_to_speech(
-                text=response.content,
-                voice=voice,
-                speed=speed,
-                auto_play=True
+            # Call the TTS service to generate audio
+            tts_result = text_to_speech(
+                response.content, 
+                voice=self.tts_voice,
+                speed=0.85,  # Slightly slower for maternal voice
+                auto_play=False  # We'll handle playback ourselves
             )
+            
+            # Extract the audio path from the TTS result
+            audio_path = None
+            if tts_result and isinstance(tts_result, dict):
+                # Pattern 1: Direct audio_path key
+                if 'audio_path' in tts_result and tts_result['audio_path']:
+                    audio_path = tts_result['audio_path']
+                # Pattern 2: Nested inside audio_info
+                elif 'audio_info' in tts_result and isinstance(tts_result['audio_info'], dict) and 'path' in tts_result['audio_info']:
+                    audio_path = tts_result['audio_info']['path']
+                    
+            # Store the TTS result for later reference
+            self.last_tts_result = tts_result
+            
+            if audio_path and os.path.exists(audio_path):
+                logger.info(f"TTS generated successfully: {tts_result}")
+                logger.info(f"Audio file path: {audio_path}")
+                
+                # Attempt to play the audio directly
+                try:
+                    import soundfile as sf
+                    import sounddevice as sd
+                    
+                    # Load the audio file
+                    data, samplerate = sf.read(audio_path)
+                    logger.info(f"Audio file loaded with sample rate: {samplerate} and shape: {data.shape}")
+                    
+                    # Play the audio
+                    sd.play(data, samplerate)
+                    logger.info(f"Audio playback started directly with sounddevice")
+                except Exception as e:
+                    logger.error(f"Error playing audio directly: {str(e)}")
+                    
+                    # Fall back to system audio player if direct playback fails
+                    try:
+                        from lmm_project.utils.audio_player import play_audio
+                        play_audio(audio_path, blocking=False)
+                        logger.info(f"Audio playback started with system audio player")
+                    except Exception as e2:
+                        logger.error(f"Fallback audio playback also failed: {str(e2)}")
+            else:
+                logger.warning(f"TTS generation failed or invalid audio path. TTS result: {tts_result}")
+                
         except Exception as e:
-            logger.error(f"Error using text-to-speech: {e}")
+            logger.error(f"Error in TTS: {e}", exc_info=True)
     
     def _update_history(self, input_data: MotherInput, response: MotherResponse) -> None:
         """

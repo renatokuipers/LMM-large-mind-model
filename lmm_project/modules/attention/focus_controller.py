@@ -5,10 +5,11 @@ from uuid import UUID, uuid4
 from datetime import datetime
 import time
 import numpy as np
+import json
 
 from lmm_project.utils.logging_utils import get_module_logger
-from lmm_project.core.event_bus import EventBus, Event
-from lmm_project.core.message import Message, MessageType, Recipient
+from lmm_project.core.event_bus import EventBus
+from lmm_project.core.message import Message, MessageType, ModuleType, TextContent
 
 from .models import (
     AttentionMode,
@@ -71,7 +72,7 @@ class FocusController:
         # Timer events for attention span management
         self._event_bus.subscribe("timer_tick", self._handle_timer_tick)
     
-    def _handle_salience_assessment(self, event: Event) -> None:
+    def _handle_salience_assessment(self, event: Dict[str, Any]) -> None:
         """
         Handle a salience assessment event.
         
@@ -80,7 +81,7 @@ class FocusController:
         """
         try:
             # Extract assessment data
-            assessment_data = event.data.get("assessment")
+            assessment_data = event.get("assessment")
             if not assessment_data:
                 logger.warning("Received assessment event with no assessment data")
                 return
@@ -112,7 +113,7 @@ class FocusController:
         except Exception as e:
             logger.error(f"Error handling salience assessment: {e}")
     
-    def _handle_focus_request(self, event: Event) -> None:
+    def _handle_focus_request(self, event: Dict[str, Any]) -> None:
         """
         Handle a request to focus attention.
         
@@ -121,7 +122,7 @@ class FocusController:
         """
         try:
             # Extract request data
-            request_data = event.data.get("request")
+            request_data = event.get("request")
             if not request_data:
                 logger.warning("Received focus request with no request data")
                 return
@@ -167,7 +168,7 @@ class FocusController:
         except Exception as e:
             logger.error(f"Error handling focus request: {e}")
     
-    def _handle_timer_tick(self, event: Event) -> None:
+    def _handle_timer_tick(self, event: Dict[str, Any]) -> None:
         """
         Handle timer tick events to manage attention span.
         
@@ -192,14 +193,14 @@ class FocusController:
             # Consider natural attention shift
             self._consider_attention_decay()
     
-    def _handle_age_update(self, event: Event) -> None:
+    def _handle_age_update(self, event: Dict[str, Any]) -> None:
         """
         Handle development age update event.
         
         Args:
             event: The event containing the new age
         """
-        new_age = event.data.get("new_age")
+        new_age = event.get("new_age")
         if new_age is not None:
             self.update_developmental_age(new_age)
     
@@ -569,13 +570,13 @@ class FocusController:
         
         # Also publish a message for other modules
         message = Message(
-            type=MessageType.ATTENTION_FOCUS,
-            source="attention.focus_controller",
-            recipient=Recipient.BROADCAST,
-            content={
+            message_type=MessageType.ATTENTION_FOCUS,
+            sender="attention.focus_controller",
+            sender_type=ModuleType.ATTENTION,
+            content=TextContent(data=json.dumps({
                 "focus": focus.dict(),
                 "action": "focus_shifted"
-            }
+            }))
         )
         
         self._event_bus.publish("message", {"message": message.dict()})
@@ -593,12 +594,12 @@ class FocusController:
         
         # Also publish a message for other modules
         message = Message(
-            type=MessageType.ATTENTION_FOCUS,
-            source="attention.focus_controller",
-            recipient=Recipient.BROADCAST,
-            content={
+            message_type=MessageType.ATTENTION_FOCUS,
+            sender="attention.focus_controller",
+            sender_type=ModuleType.ATTENTION,
+            content=TextContent(data=json.dumps({
                 "action": "focus_cleared"
-            }
+            }))
         )
         
         self._event_bus.publish("message", {"message": message.dict()})

@@ -72,12 +72,8 @@ class AudioPlayer:
             # Stop any current playback
             self.stop()
             
-            # Check file extension
-            if file_path.suffix.lower() == '.wav':
-                self._play_wav_sync(file_path)
-            else:
-                self._play_generic_sync(file_path)
-                
+            # Use the generic player for all file types for better compatibility
+            self._play_generic_sync(file_path)
             return True
             
         except Exception as e:
@@ -122,11 +118,8 @@ class AudioPlayer:
     def _playback_worker(self, file_path: Path) -> None:
         """Background worker for asynchronous playback."""
         try:
-            # Check file extension
-            if file_path.suffix.lower() == '.wav':
-                self._play_wav_sync(file_path)
-            else:
-                self._play_generic_sync(file_path)
+            # Use the generic player for all file types for better compatibility
+            self._play_generic_sync(file_path)
                 
         except Exception as e:
             logger.error(f"Error in playback worker: {str(e)}")
@@ -139,58 +132,14 @@ class AudioPlayer:
     def _play_wav_sync(self, file_path: Path) -> None:
         """
         Play WAV file using wave module (better for Windows compatibility).
+        This method is kept for backward compatibility but is no longer used.
         
         Parameters:
         file_path: Path to the WAV file
         """
         try:
-            with wave.open(str(file_path), 'rb') as wf:
-                # Get WAV file properties
-                sample_rate = wf.getframerate()
-                n_channels = wf.getnchannels()
-                sample_width = wf.getsampwidth()
-                
-                # Define callback for audio chunks
-                def callback(outdata, frames, time, status):
-                    if status:
-                        logger.warning(f"Audio status: {status}")
-                    if self.stop_requested:
-                        raise sd.CallbackStop
-                    data = wf.readframes(frames)
-                    if len(data) == 0:
-                        raise sd.CallbackStop
-                    # Convert bytes to samples
-                    import numpy as np
-                    if sample_width == 2:
-                        data = np.frombuffer(data, dtype=np.int16)
-                    elif sample_width == 4:
-                        data = np.frombuffer(data, dtype=np.int32)
-                    else:
-                        data = np.frombuffer(data, dtype=np.int8)
-                    
-                    # Reshape for channels
-                    data = data.reshape(-1, n_channels)
-                    if len(data) < len(outdata):
-                        outdata[:len(data)] = data
-                        outdata[len(data):] = 0
-                        raise sd.CallbackStop
-                    else:
-                        outdata[:] = data
-                
-                # Start the stream
-                with sd.OutputStream(
-                    samplerate=sample_rate,
-                    channels=n_channels,
-                    callback=callback,
-                    blocksize=1024
-                ) as stream:
-                    with self.playback_lock:
-                        self.current_stream = stream
-                    
-                    # Wait until the stream is done or stopped
-                    while stream.active and not self.stop_requested:
-                        time.sleep(0.1)
-        
+            # Delegate to the generic player for better format support
+            self._play_generic_sync(file_path)
         except Exception as e:
             logger.error(f"Error playing WAV file: {str(e)}")
 
@@ -204,15 +153,17 @@ class AudioPlayer:
         try:
             # Load the file
             data, sample_rate = sf.read(file_path)
+            logger.info(f"Audio file loaded: {file_path}, sample rate: {sample_rate}")
             
-            # Start the stream
-            with sd.play(data, sample_rate) as stream:
-                with self.playback_lock:
-                    self.current_stream = stream
-                
-                # Wait until playback is finished
-                while stream.active and not self.stop_requested:
-                    time.sleep(0.1)
+            # Start the stream without using context manager
+            stream = sd.play(data, sample_rate)
+            
+            with self.playback_lock:
+                self.current_stream = stream
+            
+            # Wait until playback is finished
+            sd.wait()
+            logger.info("Audio playback completed")
         
         except Exception as e:
             logger.error(f"Error playing audio file: {str(e)}")
@@ -223,7 +174,9 @@ class AudioPlayer:
             self.stop_requested = True
             if self.current_stream is not None:
                 try:
-                    self.current_stream.stop()
+                    # For sounddevice, use sd.stop() instead of stream.stop()
+                    sd.stop()
+                    logger.info("Audio playback stopped")
                 except Exception as e:
                     logger.debug(f"Error stopping stream: {str(e)}")
                 self.current_stream = None
@@ -269,4 +222,37 @@ def play_audio(file_path: Union[str, Path], blocking: bool = False) -> bool:
     True if playback started successfully, False otherwise
     """
     player = get_audio_player()
-    return player.play(file_path, blocking)
+    
+    # Debug information
+    logger.info(f"play_audio called for file: {file_path}, blocking={blocking}")
+    
+    # Make sure file exists
+    if not os.path.exists(file_path):
+        logger.error(f"Audio file does not exist: {file_path}")
+        return False
+    
+    # Try direct playback with soundfile/sounddevice
+    try:
+        # Load audio file directly
+        logger.info(f"Loading audio file with soundfile: {file_path}")
+        data, samplerate = sf.read(file_path)
+        logger.info(f"File loaded: sample rate={samplerate}, shape={data.shape}")
+        
+        # Play the audio
+        logger.info("Starting playback directly with sounddevice")
+        sd.play(data, samplerate)
+        
+        if blocking:
+            logger.info("Blocking until playback completes")
+            sd.wait()
+            logger.info("Playback completed")
+        else:
+            logger.info("Non-blocking playback initiated")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error playing audio directly: {str(e)}", exc_info=True)
+        
+        # Fall back to player implementation
+        logger.info("Falling back to AudioPlayer.play method")
+        return player.play(file_path, blocking)

@@ -84,10 +84,34 @@ def create_mother_input(
     Returns:
         MotherInput object ready to be passed to MotherLLM.respond()
     """
+    # Ensure context is a dictionary
+    if context is None:
+        context = {}
+    
+    # Create a cleaned context with only primitive types (str, float, bool)
+    # as required by MotherInput validation
+    cleaned_context = {}
+    
+    for key, value in context.items():
+        # Skip None values
+        if value is None:
+            continue
+            
+        if isinstance(value, (str, float, bool, int)):
+            # Basic types - keep as is (convert int to float)
+            cleaned_context[key] = float(value) if isinstance(value, int) else value
+        elif isinstance(value, list):
+            # Lists - convert to comma-separated string
+            cleaned_context[key] = ", ".join(str(item) for item in value)
+        else:
+            # Other types - convert to string representation
+            cleaned_context[key] = str(value)
+    
+    # Create the MotherInput with cleaned context
     return MotherInput(
         content=content,
-        age=age,
-        context=context or {}
+        age=float(age),
+        context=cleaned_context
     )
 
 __all__ = [

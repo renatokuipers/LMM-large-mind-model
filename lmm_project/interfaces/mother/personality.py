@@ -1,6 +1,7 @@
 import os
 import logging
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Optional, Union, Tuple, Any
+from enum import Enum
 
 from pydantic import ValidationError
 
@@ -140,9 +141,9 @@ class Personality:
         # Clear preset name as we're now using a custom profile
         self.profile.preset_name = None
     
-    def determine_tone(self, context: Dict[str, Union[str, float, bool]]) -> EmotionalTone:
+    def determine_tone(self, context: Optional[Dict[str, Any]] = None) -> EmotionalTone:
         """
-        Determine the most appropriate emotional tone based on personality and context.
+        Determine the appropriate emotional tone based on context and personality.
         
         Args:
             context: Contextual information about the interaction
@@ -150,37 +151,65 @@ class Personality:
         Returns:
             The selected emotional tone
         """
-        # Get personality traits
-        warmth = self.get_trait(PersonalityDimension.WARMTH)
-        expressiveness = self.get_trait(PersonalityDimension.EXPRESSIVENESS)
+        logger = logging.getLogger(__name__)
+        logger.info(f"determine_tone called with context: {context}")
         
-        # Default weights for different tones based on personality
-        tone_weights = {
-            EmotionalTone.SOOTHING: 0.5 + (0.5 * warmth),
-            EmotionalTone.ENCOURAGING: 0.3 + (0.4 * warmth) + (0.3 * expressiveness),
-            EmotionalTone.PLAYFUL: 0.2 + (0.8 * expressiveness),
-            EmotionalTone.CURIOUS: 0.4 + (0.3 * expressiveness),
-            EmotionalTone.SERIOUS: 0.3 - (0.2 * expressiveness),
-            EmotionalTone.EXCITED: 0.1 + (0.9 * expressiveness),
-            EmotionalTone.CONCERNED: 0.3 + (0.2 * warmth),
-            EmotionalTone.FIRM: 0.2 + (0.3 * self.get_trait(PersonalityDimension.STRUCTURE))
-        }
+        # Default to ENCOURAGING if anything goes wrong
+        default_tone = EmotionalTone.ENCOURAGING
         
-        # Adjust weights based on context
-        if context.get("child_emotional_state") == "distressed":
-            tone_weights[EmotionalTone.SOOTHING] += 0.5
-            tone_weights[EmotionalTone.CONCERNED] += 0.3
+        try:
+            # Get personality traits
+            warmth = self.get_trait(PersonalityDimension.WARMTH)
+            expressiveness = self.get_trait(PersonalityDimension.EXPRESSIVENESS)
+            logger.debug(f"Personality traits - warmth: {warmth}, expressiveness: {expressiveness}")
             
-        if context.get("learning_moment") is True:
-            tone_weights[EmotionalTone.ENCOURAGING] += 0.4
-            tone_weights[EmotionalTone.CURIOUS] += 0.3
+            # Default weights for different tones based on personality
+            # Create dictionary with explicit conversion to dict
+            tone_weights = {
+                EmotionalTone.SOOTHING: 0.5 + (0.5 * warmth),
+                EmotionalTone.ENCOURAGING: 0.3 + (0.4 * warmth) + (0.3 * expressiveness),
+                EmotionalTone.PLAYFUL: 0.2 + (0.8 * expressiveness),
+                EmotionalTone.CURIOUS: 0.4 + (0.3 * expressiveness),
+                EmotionalTone.SERIOUS: 0.3 - (0.2 * expressiveness),
+                EmotionalTone.EXCITED: 0.1 + (0.9 * expressiveness),
+                EmotionalTone.CONCERNED: 0.3 + (0.2 * warmth),
+                EmotionalTone.FIRM: 0.2 + (0.3 * self.get_trait(PersonalityDimension.STRUCTURE))
+            }
+            logger.debug(f"Initial tone weights: {tone_weights}")
             
-        if context.get("playful_context") is True:
-            tone_weights[EmotionalTone.PLAYFUL] += 0.5
-            tone_weights[EmotionalTone.EXCITED] += 0.3
+            # Safely handle context values - only process if context is a valid dict
+            if isinstance(context, dict):
+                # Adjust weights based on context
+                if context.get("child_emotional_state") == "distressed":
+                    tone_weights[EmotionalTone.SOOTHING] += 0.5
+                    tone_weights[EmotionalTone.CONCERNED] += 0.3
+                    
+                if context.get("learning_moment") is True:
+                    tone_weights[EmotionalTone.ENCOURAGING] += 0.4
+                    tone_weights[EmotionalTone.CURIOUS] += 0.3
+                    
+                if context.get("playful_context") is True:
+                    tone_weights[EmotionalTone.PLAYFUL] += 0.5
+                    tone_weights[EmotionalTone.EXCITED] += 0.3
+                    
+                if context.get("disciplinary_moment") is True:
+                    tone_weights[EmotionalTone.FIRM] += 0.6
+            logger.debug(f"Adjusted tone weights: {tone_weights}")
             
-        if context.get("disciplinary_moment") is True:
-            tone_weights[EmotionalTone.FIRM] += 0.6
+            # Find max weight item directly from the dictionary
+            max_weight = -1
+            selected_tone = default_tone
             
-        # Select highest weighted tone
-        return max(tone_weights.items(), key=lambda x: x[1])[0]
+            for tone, weight in tone_weights.items():
+                logger.debug(f"Checking tone {tone} with weight {weight}")
+                if weight > max_weight:
+                    max_weight = weight
+                    selected_tone = tone
+            
+            logger.info(f"Selected tone: {selected_tone} with weight {max_weight}")
+            return selected_tone
+            
+        except Exception as e:
+            # Log detailed error and return default
+            logger.error(f"Error determining emotional tone: {str(e)}", exc_info=True)
+            return default_tone

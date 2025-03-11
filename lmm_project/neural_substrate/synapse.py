@@ -30,7 +30,7 @@ class PlasticityType(Enum):
 
 class SynapseConfig(BaseModel):
     """Configuration for a synapse."""
-    initial_weight: float = Field(default=0.1, ge=0.0)
+    initial_weight: float = Field(default=0.1)
     learning_rate: float = Field(default=0.01, ge=0.0)
     min_weight: float = Field(default=0.0)
     max_weight: float = Field(default=1.0)

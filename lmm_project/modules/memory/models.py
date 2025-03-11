@@ -207,6 +207,7 @@ class MemoryConfig(BaseModel):
     """Configuration for the memory module"""
     # Core capacity settings
     base_working_memory_capacity: int = Field(default=DEFAULT_WORKING_MEMORY_BASE_CAPACITY, ge=1)
+    working_memory_capacity: int = Field(default=DEFAULT_WORKING_MEMORY_BASE_CAPACITY, ge=1)
     max_retrieval_results: int = Field(default=20, ge=1)
     
     # Thresholds and rates

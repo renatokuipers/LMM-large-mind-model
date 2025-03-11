@@ -23,6 +23,12 @@ LOG_LEVELS = {
 # Store configured loggers to avoid duplicate setup
 _configured_loggers: Dict[str, logging.Logger] = {}
 
+# Dictionary to store module-specific log level overrides
+MODULE_LOG_LEVELS: Dict[str, str] = {}
+
+# Global default log level that can be set by the main application
+GLOBAL_LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
+
 
 def get_logger(
     name: str,
@@ -96,7 +102,7 @@ def get_logger(
 
 def setup_system_logging(
     log_dir: Union[str, Path] = "logs",
-    log_level: str = "INFO",
+    log_level: str = "ERROR",
     detailed_format: bool = False
 ) -> logging.Logger:
     """
@@ -110,6 +116,10 @@ def setup_system_logging(
     Returns:
     System logger
     """
+    # Update the global log level
+    global GLOBAL_LOG_LEVEL
+    GLOBAL_LOG_LEVEL = log_level
+    
     # Create logs directory if it doesn't exist
     os.makedirs(log_dir, exist_ok=True)
     
@@ -142,12 +152,37 @@ def get_module_logger(module_name: str, log_level: Optional[str] = None) -> logg
     Returns:
     Module logger
     """
-    # Default to INFO if not specified
+    full_name = f"lmm.{module_name}"
+    
+    # Get the log level with priority:
+    # 1. Explicitly passed log_level parameter
+    # 2. Module-specific override in MODULE_LOG_LEVELS
+    # 3. Environment variable
+    # 4. Global default
     if log_level is None:
-        # Try to get from environment, default to INFO
-        log_level = os.environ.get("LOG_LEVEL", "INFO")
+        log_level = MODULE_LOG_LEVELS.get(module_name, 
+                     os.environ.get(f"{module_name.upper()}_LOG_LEVEL",
+                     GLOBAL_LOG_LEVEL))
     
     # Create logger with standard console output
-    logger = get_logger(f"lmm.{module_name}", log_level=log_level)
+    logger = get_logger(full_name, log_level=log_level)
     
     return logger
+
+
+def set_module_log_level(module_name: str, log_level: str) -> None:
+    """
+    Set the log level for a specific module.
+    
+    Parameters:
+    module_name: Name of the module (without 'lmm.' prefix)
+    log_level: Log level to set
+    """
+    MODULE_LOG_LEVELS[module_name] = log_level
+    
+    # Update existing logger if it's already configured
+    full_name = f"lmm.{module_name}"
+    if full_name in _configured_loggers:
+        logger = _configured_loggers[full_name]
+        level = LOG_LEVELS.get(log_level.upper(), logging.INFO)
+        logger.setLevel(level)

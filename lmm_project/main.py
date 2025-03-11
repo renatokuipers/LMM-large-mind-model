@@ -1,516 +1,591 @@
 """
-Main entry point for the Large Mind Model (LMM) project.
-
-This script initializes and runs the LMM simulation with all implemented modules.
-It provides a "run and watch" experience where the Mother LLM nurtures and teaches
-the developing mind, with no user interaction during the developmental process.
+Main entry point for the LMM system.
+Provides autonomous interaction between Mother and LMM cognitive system.
 """
 import os
-import time
-import logging
-import threading
 import sys
-from datetime import datetime
+import time
+import threading
+import signal
 from pathlib import Path
-import yaml
-import numpy as np
-from typing import Dict, Any, Optional, List
+from typing import Optional
 
-# Core components
-from lmm_project.core.event_bus import get_event_bus, EventBus
-from lmm_project.core.state_manager import StateManager
-from lmm_project.core.mind import Mind
-from lmm_project.core.message import Message, MessageType
-
-# Development components
-from lmm_project.development import DevelopmentManager, create_development_manager
-from lmm_project.development.models import DevelopmentConfig, StageDefinition, StageRange, MilestoneDefinition, CriticalPeriodDefinition, DevelopmentalStage, CriticalPeriodType
-
-# Memory components (now improved)
-from lmm_project.modules.memory import initialize as initialize_memory
-from lmm_project.modules.memory.models import MemoryConfig
-
-# Mother LLM interface
-from lmm_project.interfaces.mother.mother_llm import MotherLLM
-from lmm_project.interfaces.mother.models import TeachingMethod
-
-# Storage and Utilities
-from lmm_project.storage.state_persistence import StatePersistence
+from lmm_project.core.event_bus import get_event_bus
+from lmm_project.core.state_manager import get_state_manager
+from lmm_project.core.mind import get_mind
+from lmm_project.utils.config_manager import get_config
 from lmm_project.utils.logging_utils import setup_system_logging, get_module_logger
-from lmm_project.utils.tts_client import text_to_speech
-from lmm_project.utils.config_manager import load_config, ConfigManager, get_config
+from lmm_project.interfaces.mother import get_mother, create_mother_input
+from lmm_project.modules import memory, perception, attention
+from lmm_project.development import (
+    create_development_manager,
+    get_development_manager,
+    DevelopmentConfig
+)
+from lmm_project.utils.tts_client import text_to_speech, get_output_path
+from lmm_project.utils.audio_extraction import extract_features_from_file
+from lmm_project.storage.experience_logger import ExperienceLogger
+from lmm_project.development.models import (
+    StageDefinition,
+    MilestoneDefinition,
+    CriticalPeriodDefinition,
+    StageRange,
+    DevelopmentalStage,
+    CriticalPeriodType,
+    GrowthRateModel
+)
+from lmm_project.core.message import TextContent, Message
+from lmm_project.core.types import MessageType
+from lmm_project.modules.module_type import ModuleType
 
-# Setup logging
-setup_system_logging()
+# Initialize logger
 logger = get_module_logger("main")
 
-class LMMSimulation:
-    """
-    Main controller for the LMM simulation.
+class LMMSystem:
+    """Main system coordinator for autonomous LMM-Mother interaction."""
     
-    Manages the initialization, running, and coordination of all components
-    of the Large Mind Model simulation.
-    """
-    
-    def __init__(self, config_path: str):
-        """
-        Initialize the LMM simulation.
-        
-        Args:
-            config_path: Path to the configuration file
-        """
-        self.logger = get_module_logger("lmm.main")
-        self.logger.info("Initializing LMM simulation")
-        self.logger.info(f"Using configuration from: {config_path}")
-        
-        # Store config path
-        self.config_path = config_path
-        
-        # Use absolute path for config file
-        if not os.path.isabs(config_path):
-            # Try different locations for the config file
-            possible_paths = [
-                # Current directory
-                config_path,
-                # lmm_project directory
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), config_path),
-                # Parent directory of lmm_project
-                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), config_path),
-                # lmm_project/lmm_project directory
-                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lmm_project", config_path)
-            ]
-            
-            # Find the first path that exists
-            for path in possible_paths:
-                if os.path.exists(path):
-                    config_path = path
-                    break
-            
+    def __init__(self):
+        """Initialize the LMM system components."""
         # Load configuration
-        self.config_manager = ConfigManager(config_path)
-        self.config = self.config_manager.config
+        self.config = get_config()
+        self.config_path = self.config.config_path
         
-        # Initialize core components
-        self.event_bus = get_event_bus()
+        # Initialize core components first
+        self._initialize_core_systems()
         
-        # Setup storage
-        storage_dir = self.config.get("storage_dir", "storage")
-        os.makedirs(storage_dir, exist_ok=True)
+        # Initialize development system
+        self._initialize_development_system()
         
-        # Initialize state manager with storage directory
-        self.state_manager = StateManager(os.path.join(storage_dir, "states"))
-        self.state_persistence = StatePersistence(storage_dir)
+        # Initialize mind after development system
+        self._initialize_mind()
         
-        # Initialize development
-        dev_config = self._create_development_config()
-        self.development_manager = create_development_manager(dev_config, self.event_bus)
+        # Initialize cognitive modules before mother
+        self._initialize_cognitive_modules()
         
-        # Initialize memory with developmental integration
-        memory_config = self._create_memory_config()
-        initialize_memory(
-            event_bus=self.event_bus,
-            config=memory_config,
-            developmental_age=self.development_manager.get_age()
-        )
+        # Initialize mother interface after cognitive modules
+        self._initialize_mother_interface()
         
-        # Initialize mother LLM
-        self.mother = MotherLLM(
-            personality_preset=self.config.get("mother", {}).get("personality", "nurturing"),
-            teaching_preset="scaffolding",
-            use_tts=self.config.get("mother", {}).get("use_tts", True),
-            tts_voice=self.config.get("mother", {}).get("voice", "en-US-JennyNeural")
-        )
+        # Initialize support systems
+        self._initialize_support_systems()
         
-        # Initialize the mind itself
-        self.mind = Mind(
-            config_path=self.config_path,
-            storage_dir=self.config.get("storage", {}).get("directory", "storage")
-        )
-        
-        # Control variables
+        # System state
         self.running = False
-        self.paused = False
-        self.current_step = 0
-        self.last_update_time = time.time()
-        self.last_save_time = time.time()
-        self.last_interaction_time = time.time()
+        self.interaction_count = 0
+        self.development_thread = None
+        self.state_saving_thread = None
+        self.monitoring_thread = None
         
-        # Initialize visualization if enabled
-        self.visualization_enabled = self.config.get("visualization", {}).get("enabled", True)
-        if self.visualization_enabled:
-            self.logger.info("Visualization enabled, initializing dashboard")
-            # Dashboard initialization would go here
-            # initialize_dashboard()
-        else:
-            self.logger.info("Visualization disabled")
-        
-        # Setup event handlers
-        self._register_event_handlers()
-        
-        logger.info("LMM simulation initialized successfully")
+        logger.info("LMM System initialized")
     
-    def _create_development_config(self) -> DevelopmentConfig:
-        """Create development configuration from loaded config."""
-        dev_conf = self.config.get("development", {})
+    def _initialize_core_systems(self) -> None:
+        """Initialize and start core system components."""
+        # Set up event bus first and ensure it's running
+        self.event_bus = get_event_bus()
+        self.event_bus.start()
+        time.sleep(0.1)  # Small delay to ensure event bus is fully started
         
-        # Create default stage definitions
+        # Set up state manager
+        self.state_manager = get_state_manager()
+        
+        logger.info("Core systems initialized and started")
+    
+    def _initialize_development_system(self) -> None:
+        """Initialize the development tracking system."""
+        # Create growth rate model with appropriate scaling
+        growth_rate_model = GrowthRateModel(
+            base_rate=self.config.get_float("development.base_rate", 0.001),  # Slower base rate
+            stage_multipliers={
+                DevelopmentalStage.PRENATAL: 1.0,
+                DevelopmentalStage.INFANT: 1.2,
+                DevelopmentalStage.CHILD: 1.5,
+                DevelopmentalStage.ADOLESCENT: 1.3,
+                DevelopmentalStage.ADULT: 1.0
+            },
+            critical_period_boost=1.5,
+            practice_effect=1.2,
+            plateau_threshold=0.9,
+            plateau_factor=0.5
+        )
+
+        # Define developmental stages with appropriate age ranges
         stage_definitions = [
             StageDefinition(
                 stage=DevelopmentalStage.PRENATAL,
                 range=StageRange(min_age=0.0, max_age=0.1),
-                description="Neural foundation formation stage",
-                learning_rate_multiplier=0.8,
-                key_capabilities=["basic pattern recognition", "sensory processing"]
+                description="Initial formation stage",
+                learning_rate_multiplier=0.5,
+                key_capabilities=["basic_perception", "reflexive_response"],
+                neural_characteristics={"plasticity": 0.9, "connection_density": 0.3}
             ),
             StageDefinition(
                 stage=DevelopmentalStage.INFANT,
                 range=StageRange(min_age=0.1, max_age=1.0),
-                description="Rapid early learning stage",
-                learning_rate_multiplier=1.5,
-                key_capabilities=["object permanence", "basic communication", "motor control"]
+                description="Early learning stage",
+                learning_rate_multiplier=1.0,
+                key_capabilities=["pattern_recognition", "simple_memory"],
+                neural_characteristics={"plasticity": 0.8, "connection_density": 0.4}
             ),
             StageDefinition(
                 stage=DevelopmentalStage.CHILD,
                 range=StageRange(min_age=1.0, max_age=3.0),
-                description="Exploratory learning stage",
-                learning_rate_multiplier=1.2,
-                key_capabilities=["language acquisition", "symbolic thinking", "social interaction"]
+                description="Active learning stage",
+                learning_rate_multiplier=1.5,
+                key_capabilities=["language_processing", "working_memory"],
+                neural_characteristics={"plasticity": 0.7, "connection_density": 0.5}
             ),
             StageDefinition(
                 stage=DevelopmentalStage.ADOLESCENT,
-                range=StageRange(min_age=3.0, max_age=5.0),
-                description="Abstract reasoning development stage",
-                learning_rate_multiplier=1.0,
-                key_capabilities=["abstract reasoning", "complex problem solving", "identity formation"]
+                range=StageRange(min_age=3.0, max_age=6.0),
+                description="Advanced development stage",
+                learning_rate_multiplier=1.2,
+                key_capabilities=["abstract_thinking", "complex_memory"],
+                neural_characteristics={"plasticity": 0.6, "connection_density": 0.6}
             ),
             StageDefinition(
                 stage=DevelopmentalStage.ADULT,
-                range=StageRange(min_age=5.0, max_age=None),
-                description="Mature cognitive stage",
-                learning_rate_multiplier=0.7,
-                key_capabilities=["expertise development", "wisdom", "metacognition"]
+                range=StageRange(min_age=6.0, max_age=None),
+                description="Mature operation stage",
+                learning_rate_multiplier=1.0,
+                key_capabilities=["self_regulation", "meta_learning"],
+                neural_characteristics={"plasticity": 0.5, "connection_density": 0.7}
             )
         ]
-        
-        # Create minimal milestone and critical period definitions
+
+        # Define milestones
         milestone_definitions = [
             MilestoneDefinition(
-                id="first_memory",
-                name="First Memory Formation",
-                description="Formation of the first persistent memory",
-                typical_stage=DevelopmentalStage.INFANT,
-                typical_age=0.2,
+                id="basic_perception",
+                name="Basic Perception",
+                description="Ability to process basic sensory input",
+                typical_stage=DevelopmentalStage.PRENATAL,
+                typical_age=0.05,
+                prerequisite_milestones=[],
+                module_dependencies=["perception"],
                 importance=1.0
-            )
+            ),
+            MilestoneDefinition(
+                id="pattern_recognition",
+                name="Pattern Recognition",
+                description="Recognition of simple patterns in input",
+                typical_stage=DevelopmentalStage.INFANT,
+                typical_age=0.5,
+                prerequisite_milestones=["basic_perception"],
+                module_dependencies=["perception", "attention"],
+                importance=1.2
+            ),
+            # Add more milestones as needed
         ]
-        
+
+        # Define critical periods
         critical_period_definitions = [
+            CriticalPeriodDefinition(
+                id="early_perception",
+                name="Early Perception Development",
+                period_type=CriticalPeriodType.SENSORY,
+                description="Critical period for sensory processing development",
+                begin_age=0.0,
+                end_age=0.5,
+                learning_multiplier=2.0,
+                affected_modules=["perception"],
+                affected_capabilities=["pattern_recognition", "sensory_processing"]
+            ),
             CriticalPeriodDefinition(
                 id="language_acquisition",
                 name="Language Acquisition Period",
                 period_type=CriticalPeriodType.LANGUAGE,
-                description="Critical period for language acquisition",
+                description="Critical period for language learning",
                 begin_age=0.5,
                 end_age=2.0,
-                learning_multiplier=2.0,
-                affected_modules=["language"],
-                affected_capabilities=["vocabulary", "grammar", "syntax"]
-            )
+                learning_multiplier=2.5,
+                affected_modules=["language", "memory"],
+                affected_capabilities=["language_processing", "semantic_memory"]
+            ),
+            # Add more critical periods as needed
         ]
-        
-        return DevelopmentConfig(
-            initial_age=dev_conf.get("initial_age", 0.0),
-            time_acceleration=dev_conf.get("time_acceleration", 1000.0),
+
+        # Create development config with adjusted timing
+        dev_config = DevelopmentConfig(
+            initial_age=self.config.get_float("development.initial_age", 0.0),
+            time_acceleration=self.config.get_float("development.time_acceleration", 1000.0),
             stage_definitions=stage_definitions,
             milestone_definitions=milestone_definitions,
-            critical_period_definitions=critical_period_definitions
+            critical_period_definitions=critical_period_definitions,
+            growth_rate_model=growth_rate_model,
+            enable_variability=self.config.get_boolean("development.enable_variability", True),
+            variability_factor=self.config.get_float("development.variability_factor", 0.2)
         )
-    
-    def _create_memory_config(self) -> MemoryConfig:
-        """Create memory configuration from loaded config."""
-        mem_conf = self.config.get("memory", {})
-        return MemoryConfig(
-            base_working_memory_capacity=mem_conf.get("base_working_memory_capacity", 5),
-            consolidation_threshold=mem_conf.get("consolidation_threshold", 0.6),
-            base_decay_rate=mem_conf.get("base_decay_rate", 0.05),
-            embedding_dimension=mem_conf.get("embedding_dimension", 768),
-            use_neural_networks=mem_conf.get("use_neural_networks", True),
-            vector_store_gpu_enabled=mem_conf.get("vector_store_gpu_enabled", True)
+
+        # Create the development manager instance
+        self.development_manager = create_development_manager(
+            config=dev_config,
+            event_bus=self.event_bus
         )
+
+        logger.info(f"Development system initialized with age {dev_config.initial_age}")
     
-    def _register_event_handlers(self) -> None:
-        """Register handlers for simulation events."""
-        self.event_bus.subscribe("developmental_milestone_reached", self._handle_milestone)
-        self.event_bus.subscribe("message", self._handle_message)
-        self.event_bus.subscribe("critical_period_activated", self._handle_critical_period)
-        self.event_bus.subscribe("stage_transition", self._handle_stage_transition)
-    
-    def _handle_milestone(self, event: Dict[str, Any]) -> None:
-        """Handle developmental milestone events."""
-        milestone_data = event.get("data", {})
-        milestone_id = milestone_data.get("milestone_id")
-        milestone_name = milestone_data.get("name", "Unknown milestone")
+    def _initialize_cognitive_modules(self) -> None:
+        """Initialize cognitive modules in the correct order."""
+        # Get initial developmental age
+        initial_age = self.config.get_float("development.initial_age", 0.0)
         
-        logger.info(f"Milestone reached: {milestone_name}")
-        
-        # Generate mother response to milestone
-        response = self.mother.respond_to_milestone(milestone_id, milestone_data)
-        if response:
-            logger.info(f"Mother's response: {response}")
-            # Speak the response if TTS is enabled
-            if self.config.get("tts", {}).get("enabled", True):
-                self._speak_text(response, "milestone")
-    
-    def _handle_message(self, event: Dict[str, Any]) -> None:
-        """Handle message events."""
-        message_data = event.get("data", {}).get("message", {})
-        if not message_data:
-            return
-            
-        message_type = message_data.get("type")
-        source = message_data.get("source", "")
-        content = message_data.get("content", {})
-        
-        # Only process certain message types
-        if message_type == MessageType.DEVELOPMENT or message_type == MessageType.MEMORY:
-            if "mind" in source:
-                # Process mind messages specially - these might trigger mother interaction
-                self._process_mind_message(content)
-    
-    def _handle_critical_period(self, event: Dict[str, Any]) -> None:
-        """Handle critical period activation."""
-        period_data = event.get("data", {})
-        period_name = period_data.get("period_name", "Unknown period")
-        period_type = period_data.get("period_type", "Unknown type")
-        
-        logger.info(f"Critical period activated: {period_name} ({period_type})")
-        
-        # Have mother respond to the critical period
-        response = self.mother.respond_to_critical_period(period_data)
-        if response:
-            logger.info(f"Mother's response to critical period: {response}")
-            if self.config.get("tts", {}).get("enabled", True):
-                self._speak_text(response, "critical_period")
-    
-    def _handle_stage_transition(self, event: Dict[str, Any]) -> None:
-        """Handle developmental stage transitions."""
-        stage_data = event.get("data", {})
-        new_stage = stage_data.get("new_stage", "Unknown stage")
-        old_stage = stage_data.get("old_stage", "Unknown stage")
-        
-        logger.info(f"Stage transition: {old_stage} -> {new_stage}")
-        
-        # Save state on stage transition
-        self._save_state()
-        
-        # Generate mother response
-        response = self.mother.respond_to_stage_transition(old_stage, new_stage)
-        if response:
-            logger.info(f"Mother's response to stage transition: {response}")
-            if self.config.get("tts", {}).get("enabled", True):
-                self._speak_text(response, "stage_transition")
-    
-    def _process_mind_message(self, content: Dict[str, Any]) -> None:
-        """Process messages from the mind that might trigger mother interaction."""
-        # Check if we should interact based on time since last interaction
-        current_time = time.time()
-        min_interaction_interval = self.config.get("mother", {}).get("min_interaction_interval_sec", 300)
-        
-        if current_time - self.last_interaction_time < min_interaction_interval:
-            return
-            
-        # Decide if the mother should spontaneously interact
-        interaction_probability = self.config.get("mother", {}).get("spontaneous_interaction_probability", 0.1)
-        if np.random.random() < interaction_probability:
-            # Generate mother interaction
-            interaction = self.mother.generate_spontaneous_interaction(self.development_manager.get_age())
-            if interaction:
-                logger.info(f"Mother spontaneous interaction: {interaction}")
-                if self.config.get("tts", {}).get("enabled", True):
-                    self._speak_text(interaction, "spontaneous")
-                
-                self.last_interaction_time = current_time
-    
-    def _speak_text(self, text: str, interaction_type: str) -> None:
-        """Speak text using TTS service."""
-        try:
-            tts_config = self.config.get("tts", {})
-            voice = tts_config.get("voice", "af_nicole")
-            speed = tts_config.get("speed", 1.0)
-            
-            # Different voices/speeds for different types of interactions
-            if interaction_type == "milestone":
-                speed = 0.9  # Slightly slower for important milestones
-            elif interaction_type == "critical_period":
-                voice = tts_config.get("emphasis_voice", voice)
-            
-            # Actually call TTS
-            result = text_to_speech(
-                text=text,
-                voice=voice,
-                speed=speed,
-                auto_play=True
+        # Create initialization message
+        init_message = Message(
+            sender="system",
+            sender_type=ModuleType.EXECUTIVE,
+            message_type=MessageType.SYSTEM_STATUS,
+            content=TextContent(
+                content_type="text",
+                data={
+                    "action": "initialize",
+                    "developmental_age": initial_age,
+                    "config": self.config.config
+                }
             )
-            
-            logger.debug(f"TTS output: {result.get('audio_path', 'No audio path')}")
-        except Exception as e:
-            logger.error(f"Error speaking text: {e}")
+        )
+        
+        # Initialize modules with event bus and developmental age
+        # Ensure event bus is running first
+        if not self.event_bus.running:
+            self.event_bus.start()
+            time.sleep(0.1)  # Small delay to ensure event bus is running
+        
+        # Initialize modules in order
+        perception.initialize(self.event_bus, developmental_age=initial_age)
+        self.event_bus.publish(init_message)
+        time.sleep(0.1)
+        
+        attention.initialize(self.event_bus, developmental_age=initial_age)
+        self.event_bus.publish(init_message)
+        time.sleep(0.1)
+        
+        memory.initialize(self.event_bus, developmental_age=initial_age)
+        self.event_bus.publish(init_message)
+        time.sleep(0.1)
+        
+        logger.info("Cognitive modules initialized")
     
-    def _save_state(self) -> None:
-        """Save the current state of the system."""
-        try:
-            # Get state from components
-            mind_state = self.mind.get_state()
-            developmental_state = self.development_manager.get_state()
-            
-            # Combine states
-            state = {
-                "timestamp": datetime.now().isoformat(),
-                "developmental_age": self.development_manager.get_age(),
-                "mind_state": mind_state,
-                "developmental_state": developmental_state,
-                "simulation_step": self.current_step
-            }
-            
-            # Save to file
-            filename = f"state_{self.current_step}_{self.development_manager.get_age():.2f}.json"
-            self.state_persistence.save_state(state, filename)
-            
-            logger.info(f"State saved to {filename}")
-            self.last_save_time = time.time()
-        except Exception as e:
-            logger.error(f"Error saving state: {e}")
+    def _initialize_mother_interface(self) -> None:
+        """Initialize the mother interface."""
+        self.mother = get_mother(
+            personality_preset=self.config.get_string("interfaces.mother.personality", "nurturing"),
+            teaching_preset=self.config.get_string("interfaces.mother.teaching_preset", "balanced"),
+            use_tts=True,
+            tts_voice=self.config.get_string("interfaces.mother.tts_voice", "af_bella")
+        )
     
-    def _should_save_state(self) -> bool:
-        """Determine if state should be saved based on config and time elapsed."""
-        current_time = time.time()
-        save_interval = self.config.get("system", {}).get("save_state_interval_sec", 300)
-        return (current_time - self.last_save_time) >= save_interval
+    def _initialize_support_systems(self) -> None:
+        """Initialize support systems like logging and monitoring."""
+        # Set up experience logging
+        self.experience_logger = ExperienceLogger()
+        
+        # Initialize state saving and monitoring
+        self._initialize_state_saving()
+        self._monitor_system_status()
+        
+        # Set up signal handlers
+        self._setup_signal_handlers()
     
-    def _update_visualization(self) -> None:
-        """Update visualization dashboard if enabled."""
-        if not self.visualization_enabled:
-            return
-            
-        try:
-            # Gather data for visualization
-            data = {
-                "developmental_age": self.development_manager.get_age(),
-                "current_stage": self.development_manager.get_current_stage(),
-                "active_milestones": self.development_manager.get_active_milestones(),
-                "completed_milestones": self.development_manager.get_completed_milestones(),
-                "mind_state": self.mind.get_state(),
-                "simulation_step": self.current_step,
-                "last_mother_interaction": self.last_interaction_time
-            }
-            
-            # Log visualization data instead of updating dashboard
-            logger.info(f"Visualization data: {data}")
-        except Exception as e:
-            logger.error(f"Error updating visualization: {e}")
-    
-    def start(self) -> None:
-        """Start the LMM simulation."""
-        logger.info("Starting LMM simulation")
+    def run(self) -> None:
+        """Run the autonomous interaction loop."""
         self.running = True
-        self.event_bus.start()
-        
-        # Welcome message from mother
-        welcome = self.mother.generate_welcome()
-        logger.info(f"Mother's welcome: {welcome}")
-        if self.config.get("tts", {}).get("enabled", True):
-            self._speak_text(welcome, "welcome")
+        logger.info("Starting autonomous interaction loop")
         
         try:
-            # Main simulation loop
+            # Start development thread first
+            self.development_thread = threading.Thread(
+                target=self._development_timer,
+                daemon=True,
+                name="DevelopmentThread"
+            )
+            self.development_thread.start()
+            
+            # Small delay to allow development system to initialize
+            time.sleep(0.2)
+            
+            # Initial mother greeting
+            self._process_mother_response(self.mother.generate_welcome())
+            
+            # Main interaction loop
             while self.running:
-                self._run_step()
+                self._interaction_cycle()
+                time.sleep(0.1)  # Prevent tight loop
                 
-                # Check if we should exit based on max age or steps
-                max_age = self.config.get("development", {}).get("max_age", float('inf'))
-                max_steps = self.config.get("system", {}).get("max_steps", float('inf'))
-                
-                if (self.development_manager.get_age() >= max_age or 
-                    self.current_step >= max_steps):
-                    logger.info(f"Simulation complete: Age={self.development_manager.get_age():.2f}, Steps={self.current_step}")
-                    break
-                
-                # Sleep to control simulation speed
-                step_interval = self.config.get("system", {}).get("step_interval_sec", 0.1)
-                time.sleep(step_interval)
-        
         except KeyboardInterrupt:
-            logger.info("Simulation interrupted by user")
+            logger.info("Received shutdown signal")
+        except Exception as e:
+            logger.error(f"Error in main loop: {str(e)}", exc_info=True)
         finally:
             self._cleanup()
     
-    def _run_step(self) -> None:
-        """Run a single simulation step."""
-        if self.paused:
-            return
+    def _interaction_cycle(self) -> None:
+        """Execute one full interaction cycle."""
+        try:
+            # Get current developmental age
+            current_age = self.development_manager.get_age()
             
-        # Update development
-        self.development_manager.update()
-        
-        # Check for time to save state
-        if self._should_save_state():
-            self._save_state()
-        
-        # Update visualization
-        self._update_visualization()
-        
-        # Count step
-        self.current_step += 1
-        
-        # Log occasional status
-        if self.current_step % 100 == 0:
-            logger.info(f"Simulation step {self.current_step}, Age: {self.development_manager.get_age():.2f}")
+            # Get system state
+            system_state = self.mind.get_state()
+            
+            # Create mother input from system state
+            mother_input = create_mother_input(
+                content=str(system_state),
+                age=current_age
+            )
+            
+            # Get mother's response
+            response = self.mother.respond(mother_input)
+            
+            # Process the response
+            self._process_mother_response(response.content)
+            
+            # Update interaction count
+            self.interaction_count += 1
+            
+            # Small delay to prevent overwhelming the system
+            time.sleep(0.1)
+            
+        except Exception as e:
+            logger.error(f"Error in interaction cycle: {str(e)}", exc_info=True)
     
-    def pause(self) -> None:
-        """Pause the simulation."""
-        self.paused = True
-        logger.info("Simulation paused")
-    
-    def resume(self) -> None:
-        """Resume the simulation."""
-        self.paused = False
-        logger.info("Simulation resumed")
+    def _process_mother_response(self, text: str) -> None:
+        """Process mother's text response through TTS and perception."""
+        from lmm_project.core.message import TextContent, Message
+        from lmm_project.core.types import MessageType
+        
+        try:
+            # Print the response
+            print(f"\nMother: {text}\n")
+            
+            # Generate and play audio with blocking
+            audio_result = text_to_speech(
+                text=text,
+                voice=self.config.get_string("interfaces.mother.tts_voice", "af_bella"),
+                auto_play=False  # Don't auto-play, we'll handle playback manually
+            )
+            
+            # Get the audio path
+            audio_path = audio_result.get("file_path")
+            if audio_path:
+                # Play audio and block until complete
+                from lmm_project.utils.audio_player import play_audio
+                logger.info("Playing audio (blocking)...")
+                play_audio(audio_path, blocking=True)  # This will block until playback is complete
+                logger.info("Audio playback completed")
+                
+                # Now that audio is complete, extract features
+                features = extract_features_from_file(
+                    audio_path,
+                    developmental_age=self.development_manager.get_age()
+                )
+                
+                # Create proper message content
+                content = TextContent(
+                    content_type="text",
+                    data={
+                        "text": text,
+                        "audio_features": features,
+                        "audio_path": audio_path,
+                        "is_mother_speech": True
+                    }
+                )
+                
+                # Create and publish perception message
+                perception_message = Message(
+                    sender="mother",
+                    sender_type=ModuleType.SOCIAL,
+                    message_type=MessageType.PERCEPTION_INPUT,
+                    content=content
+                )
+                
+                # Process through perception
+                self.event_bus.publish(perception_message)
+                
+                # Log experience with proper structure
+                self.experience_logger.log_experience(
+                    content={"text": text, "audio_path": audio_path},
+                    experience_type="mother_interaction",
+                    source="mother",
+                    emotional_valence="positive",
+                    embedding_text=text
+                )
+                
+                logger.info("Mother response processing completed")
+                
+        except Exception as e:
+            logger.error(f"Error processing mother response: {str(e)}", exc_info=True)
     
     def _cleanup(self) -> None:
-        """Clean up resources before exiting."""
-        # Save final state
-        self._save_state()
+        """Clean up system resources."""
+        logger.info("Cleaning up system resources")
+        self.running = False
         
         # Stop event bus
         self.event_bus.stop()
         
-        logger.info("Simulation cleaned up and ready to exit")
+        # Wait for development thread to finish
+        if self.development_thread and self.development_thread.is_alive():
+            self.development_thread.join(timeout=2.0)
+        
+        # Save final state
+        self.state_manager.save_state(
+            description=f"Final state at age {self.development_manager.get_age():.2f}"
+        )
+        
+        # Save experience log
+        self.experience_logger.save()
+        
+        logger.info(f"System shutdown complete. Total interactions: {self.interaction_count}")
+
+    def _development_timer(self) -> None:
+        """Update development based on elapsed time."""
+        try:
+            last_update = time.time()
+            update_interval = 0.1  # 100ms update interval
+            
+            while self.running:
+                current_time = time.time()
+                elapsed = current_time - last_update
+                
+                if elapsed >= update_interval:
+                    # Update development age
+                    self.development_manager.update()
+                    
+                    # Get current developmental state
+                    current_age = self.development_manager.get_age()
+                    current_stage = self.development_manager.get_stage()
+                    
+                    # Update cognitive modules with new age
+                    perception.update_age(current_age)
+                    attention.update_age(current_age)
+                    memory.update_age(current_age)
+                    
+                    # Log development progress periodically (every 10 seconds)
+                    if self.interaction_count % 100 == 0:
+                        logger.info(
+                            f"Development Progress - Age: {current_age:.3f}, "
+                            f"Stage: {current_stage.name}"
+                        )
+                    
+                    last_update = current_time
+                
+                # Sleep for a short time to prevent CPU overuse
+                time.sleep(0.01)
+            
+        except Exception as e:
+            logger.error(f"Error in development timer: {str(e)}", exc_info=True)
+            self.running = False  # Signal main loop to stop
+
+    def _initialize_state_saving(self) -> None:
+        """Initialize periodic state saving."""
+        def state_saver():
+            while self.running:
+                try:
+                    # Save state every hour
+                    time.sleep(3600)
+                    if self.running:
+                        self.state_manager.save_state(
+                            description=f"Automatic save at age {self.development_manager.get_age():.2f}"
+                        )
+                except Exception as e:
+                    logger.error(f"Error in state saving: {str(e)}")
+
+        self.state_saving_thread = threading.Thread(
+            target=state_saver,
+            daemon=True
+        )
+        self.state_saving_thread.start()
+
+    def _setup_signal_handlers(self) -> None:
+        """Set up signal handlers for graceful shutdown."""
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}")
+            self.running = False
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+    def _monitor_system_status(self) -> None:
+        """Monitor and log system status periodically."""
+        def status_monitor():
+            while self.running:
+                try:
+                    # Log status every 5 minutes
+                    time.sleep(300)
+                    if self.running:
+                        age = self.development_manager.get_age()
+                        stage = self.development_manager.get_stage()
+                        logger.info(
+                            f"System Status - Age: {age:.2f}, Stage: {stage.name}, "
+                            f"Interactions: {self.interaction_count}"
+                        )
+                except Exception as e:
+                    logger.error(f"Error in status monitoring: {str(e)}")
+
+        self.monitoring_thread = threading.Thread(
+            target=status_monitor,
+            daemon=True
+        )
+        self.monitoring_thread.start()
+
+    def _track_metrics(self) -> None:
+        """Track system metrics for monitoring."""
+        metrics = {
+            "developmental_age": self.development_manager.get_age(),
+            "developmental_stage": self.development_manager.get_stage().name,
+            "interaction_count": self.interaction_count,
+            "memory_usage": memory.get_state(),
+            "attention_state": attention.get_state(),
+            "perception_state": perception.get_state()
+        }
+        
+        self.state_manager.update_state("system_metrics", metrics)
+
+    def _initialize_mind(self) -> None:
+        """Initialize the mind system with proper configuration."""
+        # Get mind configuration from config file
+        mind_config = {
+            "storage_dir": self.config.get_string("storage_dir", "storage"),
+            "vector_dimension": self.config.get_int("vector_dimension", 768),
+            "cuda_enabled": self.config.get_boolean("system.cuda_enabled", True),
+            "cuda_fallback": self.config.get_boolean("system.cuda_fallback", True)
+        }
+
+        # Initialize mind with event bus and development manager
+        self.mind = get_mind(
+            config_path=self.config_path,
+            storage_dir=mind_config["storage_dir"]
+        )
+
+        # Register the mind with the state manager
+        self.state_manager.register_module(
+            module_id="mind",
+            module_state={
+                "config": mind_config,
+                "development_level": self.development_manager.get_age(),
+                "is_active": True
+            }
+        )
+
+        logger.info("Mind system initialized")
+
 
 def main():
-    """Main entry point for the LMM simulation."""
-    print("""
-    ┌─────────────────────────────────────────────┐
-    │                                             │
-    │        Large Mind Model Simulation          │
-    │        -------------------------           │
-    │                                             │
-    │ A developmental cognitive architecture      │
-    │ that learns through nurturing interaction.  │
-    │                                             │
-    │ This is a watch-only experience during      │
-    │ development. Press Ctrl+C to stop.          │
-    │                                             │
-    └─────────────────────────────────────────────┘
-    """)
-    
-    # Check command line arguments
-    config_path = "config.yml"
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    
-    # Create and start simulation
-    simulation = LMMSimulation(config_path)
-    simulation.start()
+    """Main entry point."""
+    try:
+        # Set up system logging
+        setup_system_logging(
+            log_dir="logs",
+            log_level=os.environ.get("LOG_LEVEL", "INFO")
+        )
+        
+        # Create and run system
+        system = LMMSystem()
+        system.run()
+        
+    except Exception as e:
+        logger.critical(f"Fatal error: {str(e)}", exc_info=True)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

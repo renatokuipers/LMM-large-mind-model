@@ -1,6 +1,6 @@
 import logging
-from typing import Dict, List, Optional, Any, Union, Tuple
 import random
+from typing import Dict, List, Optional, Any, Union, Tuple
 
 from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.utils.config_manager import get_config
@@ -194,76 +194,85 @@ class TeachingStrategies:
         Returns:
             The selected teaching method
         """
-        # Get all strategies and their base priorities
-        weighted_strategies = {
-            strategy.method: strategy.priority 
-            for strategy in self.profile.strategies
-        }
-        
-        # Apply developmental adjustments
-        for method, weights in self.DEVELOPMENTAL_WEIGHTS.items():
-            if method in weighted_strategies:
-                # Find the applicable age bracket
-                applicable_ages = sorted(weights.keys())
-                weight_adjustment = 1.0
+        try:
+            # Validate inputs
+            if not isinstance(context, dict):
+                context = {}
                 
-                # Find the closest age brackets and interpolate
-                for i, bracket_age in enumerate(applicable_ages):
-                    if age <= bracket_age:
-                        if i == 0:
-                            weight_adjustment = weights[bracket_age]
-                        else:
-                            # Linear interpolation between brackets
-                            prev_age = applicable_ages[i-1]
-                            prev_weight = weights[prev_age]
-                            curr_weight = weights[bracket_age]
-                            
-                            # Calculate interpolation factor
-                            factor = (age - prev_age) / (bracket_age - prev_age)
-                            weight_adjustment = prev_weight + factor * (curr_weight - prev_weight)
-                        break
-                else:
-                    # If we're beyond the last bracket, use the last weight
-                    weight_adjustment = weights[applicable_ages[-1]]
+            safe_age = float(age) if age is not None else 0.0
+            
+            # Ensure we have strategies to work with
+            if not self.profile or not self.profile.strategies:
+                logger.warning("No teaching strategies found, using default (DIRECT_INSTRUCTION)")
+                return TeachingMethod.DIRECT_INSTRUCTION
+            
+            # Get all strategies and their base priorities
+            weighted_strategies = {
+                strategy.method: strategy.priority 
+                for strategy in self.profile.strategies
+            }
+            
+            # Apply developmental adjustments
+            for method, weights in self.DEVELOPMENTAL_WEIGHTS.items():
+                if method in weighted_strategies:
+                    # Find the applicable age bracket
+                    applicable_ages = sorted(list(weights.keys()))
+                    weight_adjustment = 1.0
+                    
+                    # Find the closest age brackets and interpolate
+                    for i, bracket_age in enumerate(applicable_ages):
+                        if safe_age <= bracket_age or i == len(applicable_ages) - 1:
+                            if i == 0:
+                                # Below first age bracket, use that value
+                                weight_adjustment = weights[applicable_ages[0]]
+                            elif safe_age <= bracket_age:
+                                # Interpolate between this and previous bracket
+                                prev_age = applicable_ages[i-1]
+                                prev_weight = weights[prev_age]
+                                next_weight = weights[bracket_age]
+                                
+                                # Calculate interpolation factor (0-1)
+                                factor = (safe_age - prev_age) / (bracket_age - prev_age)
+                                weight_adjustment = prev_weight + factor * (next_weight - prev_weight)
+                            else:
+                                # Beyond last age bracket, use that value
+                                weight_adjustment = weights[applicable_ages[-1]]
+                            break
+                    
+                    # Apply the adjustment
+                    weighted_strategies[method] *= weight_adjustment
+            
+            # Apply context-based adjustments from strategy applicability
+            for strategy in self.profile.strategies:
+                if strategy.applicability and isinstance(strategy.applicability, dict):
+                    for context_key, factor in strategy.applicability.items():
+                        if context.get(context_key) and strategy.method in weighted_strategies:
+                            weighted_strategies[strategy.method] *= factor
+            
+            # Additional context-based adjustments
+            # For example, if the child is struggling, favor scaffolding
+            if context.get("struggling") is True and TeachingMethod.SCAFFOLDING in weighted_strategies:
+                self._adjust_weight(weighted_strategies, TeachingMethod.SCAFFOLDING, 1.5)
                 
-                # Apply the adjustment
-                weighted_strategies[method] *= weight_adjustment
-        
-        # Context-based adjustments
-        if context.get("attention_span_low", False):
-            # Favor direct and experiential approaches when attention is low
-            self._adjust_weight(weighted_strategies, TeachingMethod.DIRECT_INSTRUCTION, 1.5)
-            self._adjust_weight(weighted_strategies, TeachingMethod.EXPERIENTIAL, 1.7)
-            self._adjust_weight(weighted_strategies, TeachingMethod.SOCRATIC_QUESTIONING, 0.6)
+            if context.get("bored") is True and TeachingMethod.DISCOVERY in weighted_strategies:
+                self._adjust_weight(weighted_strategies, TeachingMethod.DISCOVERY, 1.5)
+                
+            if context.get("curious") is True and TeachingMethod.SOCRATIC_QUESTIONING in weighted_strategies:
+                self._adjust_weight(weighted_strategies, TeachingMethod.SOCRATIC_QUESTIONING, 1.3)
             
-        if context.get("confusion_level", 0) > 0.7:
-            # When confusion is high, use more scaffolding and repetition
-            self._adjust_weight(weighted_strategies, TeachingMethod.SCAFFOLDING, 1.8)
-            self._adjust_weight(weighted_strategies, TeachingMethod.REPETITION, 1.6)
-            self._adjust_weight(weighted_strategies, TeachingMethod.DISCOVERY, 0.5)
-            
-        if context.get("learning_area") == "abstract_concept":
-            # For abstract concepts, favor analogical and socratic approaches
-            self._adjust_weight(weighted_strategies, TeachingMethod.ANALOGICAL, 1.9)
-            self._adjust_weight(weighted_strategies, TeachingMethod.SOCRATIC_QUESTIONING, 1.7)
-        
-        # Select strategy (weighted random selection)
-        total_weight = sum(weighted_strategies.values())
-        if total_weight <= 0:
-            # Fallback if all weights are zero or negative
+            # Select the highest weighted strategy
+            if weighted_strategies:
+                selected_method = max(weighted_strategies.items(), key=lambda x: x[1])[0]
+                return selected_method
+            else:
+                # Fallback if no strategies available
+                return TeachingMethod.DIRECT_INSTRUCTION
+                
+        except Exception as e:
+            # Log error and provide safe fallback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error selecting teaching strategy: {e}")
             return TeachingMethod.DIRECT_INSTRUCTION
-            
-        # Normalize weights to probabilities
-        threshold = random.random() * total_weight
-        current_sum = 0
-        
-        for method, weight in weighted_strategies.items():
-            current_sum += weight
-            if current_sum >= threshold:
-                return method
-                
-        # Fallback in case of rounding errors
-        return list(weighted_strategies.keys())[-1]
     
     def _adjust_weight(self, weights: Dict[TeachingMethod, float], method: TeachingMethod, factor: float) -> None:
         """Helper method to adjust weights for a specific teaching method"""

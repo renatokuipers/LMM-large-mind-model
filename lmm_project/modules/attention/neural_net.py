@@ -5,9 +5,9 @@ from uuid import UUID, uuid4
 
 from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.neural_substrate.neural_network import NeuralNetwork
-from lmm_project.neural_substrate.neural_cluster import NeuralCluster
-from lmm_project.neural_substrate.activation_functions import ActivationFunction
-from lmm_project.core.event_bus import EventBus, Event
+from lmm_project.neural_substrate.neural_cluster import NeuralCluster, ClusterType
+from lmm_project.neural_substrate.activation_functions import ActivationFunction, ActivationType
+from lmm_project.core.event_bus import EventBus
 
 from .models import (
     AttentionMode,
@@ -105,16 +105,17 @@ class AttentionNetwork:
         hidden_size = int(30 * age_factor)  # Size of hidden layer
         output_size = 1  # Salience score
         
-        # Create network with appropriate activation functions
+        # Create the salience detection network
         self._salience_network = NeuralNetwork(
-            name="attention_salience",
-            input_size=input_size,
-            hidden_size=hidden_size,
-            output_size=output_size,
-            activation=ActivationFunction.SIGMOID,
-            learning_rate=0.01,
-            connection_density=0.6,
-            plastic=True
+            network_id="attention_salience",
+            config={
+                "input_size": input_size,
+                "hidden_layers": [hidden_size],
+                "output_size": output_size,
+                "activation_type": ActivationType.SIGMOID,
+                "learning_rate": 0.01,
+                "connection_density": 0.6
+            }
         )
         
         logger.debug(f"Created salience network: {input_size} inputs, {hidden_size} hidden, {output_size} outputs")
@@ -139,7 +140,7 @@ class AttentionNetwork:
             input_size=input_size,
             hidden_size=hidden_size,
             output_size=output_size,
-            activation=ActivationFunction.RELU,
+            activation=ActivationType.RELU,
             learning_rate=0.005,
             connection_density=0.7,
             plastic=True
@@ -167,7 +168,7 @@ class AttentionNetwork:
             input_size=input_size,
             hidden_size=hidden_size,
             output_size=output_size,
-            activation=ActivationFunction.TANH,
+            activation=ActivationType.TANH,
             learning_rate=0.003,
             connection_density=0.5,
             plastic=True
@@ -207,15 +208,17 @@ class AttentionNetwork:
         for cluster_name, size in clusters_to_create:
             if cluster_name not in self._function_clusters:
                 self._function_clusters[cluster_name] = NeuralCluster(
-                    name=f"attention_{cluster_name}",
-                    size=size,
-                    activation=ActivationFunction.SIGMOID,
-                    plastic=True,
-                    inhibitory_ratio=0.3
+                    cluster_id=f"attention_{cluster_name}",
+                    config={
+                        "neuron_count": size,
+                        "cluster_type": ClusterType.RECURRENT,
+                        "activation_type": ActivationType.SIGMOID,
+                        "plasticity_enabled": True
+                    }
                 )
                 logger.debug(f"Created neural cluster: {cluster_name} with {size} neurons")
     
-    def _handle_salience_assessment(self, event: Event) -> None:
+    def _handle_salience_assessment(self, event: Dict[str, Any]) -> None:
         """
         Handle a salience assessment event.
         
@@ -224,7 +227,7 @@ class AttentionNetwork:
         """
         try:
             # Extract assessment data
-            assessment_data = event.data.get("assessment")
+            assessment_data = event.get("assessment")
             if not assessment_data:
                 return  # Silently ignore
                 
@@ -275,16 +278,16 @@ class AttentionNetwork:
         except Exception as e:
             logger.error(f"Error handling salience assessment: {e}")
     
-    def _handle_focus_shift(self, event: Event) -> None:
+    def _handle_focus_shift(self, event: Dict[str, Any]) -> None:
         """
         Handle a focus shift event.
         
         Args:
-            event: The event containing focus shift data
+            event: The focus shift event
         """
         try:
             # Extract focus data
-            focus_data = event.data.get("focus")
+            focus_data = event.get("focus")
             if not focus_data:
                 return  # Silently ignore
                 
@@ -346,34 +349,28 @@ class AttentionNetwork:
         except Exception as e:
             logger.error(f"Error handling focus shift: {e}")
     
-    def _handle_focus_clear(self, event: Event) -> None:
+    def _handle_focus_clear(self, event: Dict[str, Any]) -> None:
         """
         Handle a focus clear event.
         
         Args:
-            event: The event containing focus clear data
+            event: The focus clear event
         """
         try:
-            # Reset activations in focus clusters
-            for cluster_name in ["focus_maintenance", "feature_binding", 
-                               "multi_target_tracking", "attention_switching"]:
-                if cluster_name in self._function_clusters:
-                    self._function_clusters[cluster_name].reset()
-            
-            # Publish deactivation event
-            self._publish_neural_activation_event("focus_network", 0.0)
+            # No specific data needed, just reset the network
+            self._reset_focus_activity()
             
         except Exception as e:
             logger.error(f"Error handling focus clear: {e}")
     
-    def _handle_age_update(self, event: Event) -> None:
+    def _handle_age_update(self, event: Dict[str, Any]) -> None:
         """
         Handle development age update event.
         
         Args:
             event: The event containing the new age
         """
-        new_age = event.data.get("new_age")
+        new_age = event.get("new_age")
         if new_age is not None:
             self.update_developmental_age(new_age)
     
@@ -496,7 +493,7 @@ class AttentionNetwork:
                 
                 # Create cluster input from features
                 # (simplified - just use the intensity)
-                cluster_input = np.ones(cluster.size) * intensity
+                cluster_input = np.ones(cluster.neuron_count) * intensity
                 
                 # Activate cluster
                 activation = cluster.activate(cluster_input)
@@ -514,16 +511,29 @@ class AttentionNetwork:
             network_name: Name of the activated network
             activation_level: Level of activation
         """
-        self._event_bus.publish(
-            "neural_activation",
-            {
-                "module": "attention",
-                "network": network_name,
-                "activation": activation_level,
-                "developmental_age": self._developmental_age,
-                "timestamp": "now"  # In production would use actual timestamp
-            }
-        )
+        try:
+            from lmm_project.core.message import Message, StructuredContent
+            from lmm_project.core.types import ModuleType, MessageType
+            
+            message = Message(
+                sender="attention",
+                sender_type=ModuleType.ATTENTION,
+                message_type=MessageType.ATTENTION_FOCUS,
+                content=StructuredContent(
+                    data={
+                        "module": "attention",
+                        "network": network_name,
+                        "activation": activation_level,
+                        "developmental_age": self._developmental_age,
+                        "timestamp": "now"  # In production would use actual timestamp
+                    }
+                ),
+                priority=3
+            )
+            
+            self._event_bus.publish(message)
+        except Exception as e:
+            logger.error(f"Error publishing neural activation event: {e}")
     
     def get_salience_network(self) -> Optional[NeuralNetwork]:
         """
@@ -569,3 +579,20 @@ class AttentionNetwork:
             Dictionary of recent activations by network type
         """
         return self._recent_activations.copy()
+
+    def _reset_focus_activity(self) -> None:
+        """
+        Reset activations in focus-related clusters and networks.
+        Used when clearing attention focus.
+        """
+        try:
+            # Reset activations in focus clusters
+            for cluster_name in ["focus_maintenance", "feature_binding", 
+                              "multi_target_tracking", "attention_switching"]:
+                if cluster_name in self._function_clusters:
+                    self._function_clusters[cluster_name].reset()
+            
+            # Publish deactivation event
+            self._publish_neural_activation_event("focus_network", 0.0)
+        except Exception as e:
+            logger.error(f"Error resetting focus activity: {e}")

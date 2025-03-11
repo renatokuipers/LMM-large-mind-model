@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.utils.config_manager import get_config
 from lmm_project.utils.vector_store import VectorStore, get_vector_store
-from lmm_project.core.event_bus import EventBus, Event
+from lmm_project.core.event_bus import EventBus
 
 from .models import (
     SensoryModality, 
@@ -87,22 +87,22 @@ class PatternRecognizer:
         self._event_bus.subscribe("sensory_input_processed", self._handle_processed_input)
         self._event_bus.subscribe("development_age_updated", self._handle_age_update)
     
-    def _handle_processed_input(self, event: Event) -> None:
+    def _handle_processed_input(self, event: Dict[str, Any]) -> None:
         """
         Handle a processed input event.
         
         Args:
-            event: The event containing the processed input
+            event: The event containing processed input data
         """
         try:
-            # Extract processed input from event
-            processed_input_data = event.data.get("processed_input")
-            if not processed_input_data:
-                logger.warning("Received event with no processed input data")
+            # Extract processed input data
+            input_data = event.get("processed_input")
+            if not input_data:
+                logger.warning("Received processed input event with no input data")
                 return
             
             # Create processed input model
-            processed_input = ProcessedInput(**processed_input_data)
+            processed_input = ProcessedInput(**input_data)
             
             # Recognize patterns in the input
             patterns = self.recognize_patterns(processed_input)
@@ -116,14 +116,14 @@ class PatternRecognizer:
         except Exception as e:
             logger.error(f"Error recognizing patterns: {e}")
     
-    def _handle_age_update(self, event: Event) -> None:
+    def _handle_age_update(self, event: Dict[str, Any]) -> None:
         """
         Handle a developmental age update event.
         
         Args:
             event: The event containing the new age
         """
-        new_age = event.data.get("age")
+        new_age = event.get("age")
         if new_age is not None and isinstance(new_age, (int, float)):
             self._developmental_age = float(new_age)
             logger.debug(f"Updated developmental age to {self._developmental_age}")

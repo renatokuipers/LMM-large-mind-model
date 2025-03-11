@@ -5,9 +5,9 @@ from uuid import UUID, uuid4
 
 from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.neural_substrate.neural_network import NeuralNetwork
-from lmm_project.neural_substrate.neural_cluster import NeuralCluster
-from lmm_project.neural_substrate.activation_functions import ActivationFunction
-from lmm_project.core.event_bus import EventBus, Event
+from lmm_project.neural_substrate.neural_cluster import NeuralCluster, ClusterType
+from lmm_project.neural_substrate.activation_functions import ActivationFunction, ActivationType
+from lmm_project.core.event_bus import EventBus
 
 from .models import (
     SensoryModality,
@@ -101,13 +101,15 @@ class PerceptionNetwork:
         
         # Create a neural network for this modality
         network = NeuralNetwork(
-            name=f"perception_{modality.value}",
-            input_size=int(10 * age_factor),
-            hidden_size=int(20 * age_factor),
-            output_size=int(10 * age_factor),
-            activation=ActivationFunction.RELU,
-            learning_rate=0.01,
-            batch_size=1
+            network_id=f"perception_{modality.value}",
+            config={
+                "input_size": int(10 * age_factor),
+                "hidden_layers": [int(20 * age_factor)],
+                "output_size": int(10 * age_factor),
+                "activation_type": ActivationType.RELU,
+                "learning_rate": 0.01,
+                "batch_size": 1
+            }
         )
         
         # Store the network
@@ -131,13 +133,15 @@ class PerceptionNetwork:
         
         # Create a neural network for this pattern type
         network = NeuralNetwork(
-            name=f"perception_pattern_{pattern_type.value}",
-            input_size=int(15 * age_factor),
-            hidden_size=int(25 * age_factor),
-            output_size=int(10 * age_factor),
-            activation=ActivationFunction.SIGMOID,
-            learning_rate=0.01,
-            batch_size=1
+            network_id=f"pattern_{pattern_type.value}",
+            config={
+                "input_size": int(15 * age_factor),
+                "hidden_layers": [int(30 * age_factor)],
+                "output_size": int(15 * age_factor),
+                "activation_type": ActivationType.SIGMOID,
+                "learning_rate": 0.01,
+                "batch_size": 1
+            }
         )
         
         # Store the network
@@ -161,14 +165,18 @@ class PerceptionNetwork:
             
         # Configure cluster size based on developmental age
         age_factor = min(1.0, max(0.1, self._developmental_age + 0.1))
-        size = int(5 * age_factor)
+        size = int(10 * age_factor)
         
-        # Create a neural cluster for this feature detector
+        # Create a neural cluster for this feature
         cluster = NeuralCluster(
-            name=f"feature_detector_{feature_key}",
-            size=size,
-            activation=ActivationFunction.SIGMOID,
-            inhibitory_ratio=0.2
+            cluster_id=f"feature_{feature_name}_{modality.value}",
+            config={
+                "neuron_count": int(10 * age_factor),
+                "cluster_type": ClusterType.FEED_FORWARD,
+                "activation_type": ActivationType.SIGMOID,
+                "threshold": 0.3,
+                "decay_rate": 0.1
+            }
         )
         
         # Store the cluster
@@ -176,7 +184,7 @@ class PerceptionNetwork:
         
         logger.debug(f"Created feature detector for {feature_key}")
     
-    def _handle_processed_input(self, event: Event) -> None:
+    def _handle_processed_input(self, event: Dict[str, Any]) -> None:
         """
         Handle a processed input event by activating relevant neural networks.
         
@@ -185,7 +193,7 @@ class PerceptionNetwork:
         """
         try:
             # Extract processed input from event
-            processed_input_data = event.data.get("processed_input")
+            processed_input_data = event.get("processed_input")
             if not processed_input_data:
                 return
                 
@@ -205,7 +213,7 @@ class PerceptionNetwork:
         except Exception as e:
             logger.error(f"Error processing input in neural network: {e}")
     
-    def _handle_recognized_pattern(self, event: Event) -> None:
+    def _handle_recognized_pattern(self, event: Dict[str, Any]) -> None:
         """
         Handle a recognized pattern event by reinforcing neural pathways.
         
@@ -214,7 +222,7 @@ class PerceptionNetwork:
         """
         try:
             # Extract pattern from event
-            pattern_data = event.data.get("pattern")
+            pattern_data = event.get("pattern")
             if not pattern_data:
                 return
                 
@@ -227,14 +235,14 @@ class PerceptionNetwork:
         except Exception as e:
             logger.error(f"Error processing pattern in neural network: {e}")
     
-    def _handle_age_update(self, event: Event) -> None:
+    def _handle_age_update(self, event: Dict[str, Any]) -> None:
         """
         Handle a developmental age update event by updating networks.
         
         Args:
             event: The event containing the new age
         """
-        new_age = event.data.get("age")
+        new_age = event.get("age")
         if new_age is not None and isinstance(new_age, (int, float)):
             old_age = self._developmental_age
             self._developmental_age = float(new_age)
@@ -287,7 +295,7 @@ class PerceptionNetwork:
             
             # Publish neural activation event
             self._publish_neural_activation_event(
-                network_name=network.name,
+                network_name=network.network_id,
                 activation_level=float(np.mean(output))
             )
             
@@ -323,7 +331,7 @@ class PerceptionNetwork:
             
             # Publish neural activation event
             self._publish_neural_activation_event(
-                network_name=network.name,
+                network_name=network.network_id,
                 activation_level=float(np.mean(output))
             )
             
@@ -354,7 +362,7 @@ class PerceptionNetwork:
             
             # Publish neural activation event
             self._publish_neural_activation_event(
-                network_name=detector.name,
+                network_name=detector.cluster_id,
                 activation_level=activation_level
             )
     

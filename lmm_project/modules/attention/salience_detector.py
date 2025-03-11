@@ -6,8 +6,8 @@ import numpy as np
 from collections import defaultdict, deque
 
 from lmm_project.utils.logging_utils import get_module_logger
-from lmm_project.core.event_bus import EventBus, Event
-from lmm_project.core.message import Message, MessageType, Recipient
+from lmm_project.core.event_bus import EventBus
+from lmm_project.core.message import Message, MessageType
 
 from .models import (
     SalienceFeature,
@@ -85,7 +85,7 @@ class SalienceDetector:
         self._event_bus.subscribe("development_age_updated", self._handle_age_update)
         self._event_bus.subscribe("emotional_response", self._handle_emotional_response)
     
-    def _handle_sensory_input(self, event: Event) -> None:
+    def _handle_sensory_input(self, event: Dict[str, Any]) -> None:
         """
         Handle processed sensory input events.
         
@@ -94,7 +94,7 @@ class SalienceDetector:
         """
         try:
             # Extract input data
-            input_data = event.data.get("processed_input")
+            input_data = event.get("processed_input")
             if not input_data:
                 logger.warning("Received sensory input event with no input data")
                 return
@@ -142,7 +142,7 @@ class SalienceDetector:
         except Exception as e:
             logger.error(f"Error handling sensory input: {e}")
     
-    def _handle_pattern_recognition(self, event: Event) -> None:
+    def _handle_pattern_recognition(self, event: Dict[str, Any]) -> None:
         """
         Handle pattern recognition events.
         
@@ -151,7 +151,7 @@ class SalienceDetector:
         """
         try:
             # Extract pattern data
-            pattern_data = event.data.get("pattern")
+            pattern_data = event.get("pattern")
             if not pattern_data:
                 logger.warning("Received pattern event with no pattern data")
                 return
@@ -207,7 +207,7 @@ class SalienceDetector:
         except Exception as e:
             logger.error(f"Error handling pattern recognition: {e}")
     
-    def _handle_emotional_response(self, event: Event) -> None:
+    def _handle_emotional_response(self, event: Dict[str, Any]) -> None:
         """
         Handle emotional response events.
         
@@ -216,7 +216,7 @@ class SalienceDetector:
         """
         try:
             # Extract emotional data
-            emotional_data = event.data.get("emotional_response")
+            emotional_data = event.get("emotional_response")
             if not emotional_data:
                 return  # Silently ignore - not all emotional events need processing
             
@@ -248,14 +248,14 @@ class SalienceDetector:
         except Exception as e:
             logger.error(f"Error handling emotional response: {e}")
     
-    def _handle_age_update(self, event: Event) -> None:
+    def _handle_age_update(self, event: Dict[str, Any]) -> None:
         """
         Handle development age update event.
         
         Args:
             event: The event containing the new age
         """
-        new_age = event.data.get("new_age")
+        new_age = event.get("new_age")
         if new_age is not None:
             self.update_developmental_age(new_age)
     

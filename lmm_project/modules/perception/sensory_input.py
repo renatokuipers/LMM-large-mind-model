@@ -10,8 +10,8 @@ from pydantic import ValidationError
 from lmm_project.utils.logging_utils import get_module_logger
 from lmm_project.utils.config_manager import get_config
 from lmm_project.utils.vector_store import get_embeddings
-from lmm_project.core.message import Message, MessageType, Recipient
-from lmm_project.core.event_bus import EventBus, Event
+from lmm_project.core.event_bus import EventBus
+from lmm_project.core.message import Message, MessageType
 
 from .models import (
     SensoryModality, 
@@ -80,7 +80,7 @@ class SensoryInputProcessor:
         self._event_bus.subscribe("development_age_updated", self._handle_age_update)
         self._event_bus.subscribe("sensory_config_updated", self._handle_config_update)
     
-    def _handle_input_event(self, event: Event) -> None:
+    def _handle_input_event(self, event: Dict[str, Any]) -> None:
         """
         Handle an incoming input event.
         
@@ -89,7 +89,7 @@ class SensoryInputProcessor:
         """
         try:
             # Extract input data from event
-            input_data = event.data.get("input")
+            input_data = event.get("input")
             if not input_data:
                 logger.warning("Received input event with no input data")
                 return
@@ -105,19 +105,19 @@ class SensoryInputProcessor:
         except Exception as e:
             logger.error(f"Error processing input event: {e}")
     
-    def _handle_age_update(self, event: Event) -> None:
+    def _handle_age_update(self, event: Dict[str, Any]) -> None:
         """
         Handle a developmental age update event.
         
         Args:
             event: The event containing the new age
         """
-        new_age = event.data.get("age")
+        new_age = event.get("age")
         if new_age is not None and isinstance(new_age, (int, float)):
             self._developmental_age = float(new_age)
             logger.debug(f"Updated developmental age to {self._developmental_age}")
     
-    def _handle_config_update(self, event: Event) -> None:
+    def _handle_config_update(self, event: Dict[str, Any]) -> None:
         """
         Handle a configuration update event.
         
@@ -125,7 +125,7 @@ class SensoryInputProcessor:
             event: The event containing the new configuration
         """
         try:
-            config_data = event.data.get("config")
+            config_data = event.get("config")
             if config_data:
                 self._config = PerceptionConfig(**config_data)
                 logger.info("Updated sensory input configuration")

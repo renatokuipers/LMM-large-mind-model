@@ -1,0 +1,187 @@
+{
+  "system": {
+    "created_at": 1741667064.721833,
+    "last_updated": 1741667120.751113,
+    "version": "0.1.0",
+    "runtime": 56.029279947280884
+  },
+  "development": {
+    "age": 0.004,
+    "stage": "PRENATAL",
+    "milestones_achieved": []
+  },
+  "modules": {
+    "perception_0": {
+      "development_level": 0.0,
+      "creation_timestamp": 1741667089.4470398,
+      "last_update_time": 1741667089.4470398,
+      "config": {
+        "enabled": true,
+        "development_rate": 1.0,
+        "initial_development_level": 0.0,
+        "learning_rate": 0.01,
+        "update_frequency": 1.0,
+        "critical_period_sensitivity": 1.0
+      },
+      "is_active": true,
+      "message_count": {
+        "PERCEPTION_INPUT": 0,
+        "ATTENTION_FOCUS": 0,
+        "MEMORY_STORAGE": 0,
+        "MEMORY_RETRIEVAL": 0,
+        "EMOTION_UPDATE": 0,
+        "CONSCIOUSNESS_BROADCAST": 0,
+        "LANGUAGE_PROCESSING": 0,
+        "EXECUTIVE_CONTROL": 0,
+        "SOCIAL_INTERACTION": 0,
+        "MOTIVATION_SIGNAL": 0,
+        "TEMPORAL_PROCESSING": 0,
+        "CREATIVITY_OUTPUT": 0,
+        "SELF_REGULATION_SIGNAL": 0,
+        "LEARNING_UPDATE": 0,
+        "IDENTITY_UPDATE": 0,
+        "BELIEF_UPDATE": 0,
+        "DEVELOPMENT_MILESTONE": 0,
+        "SYSTEM_STATUS": 0
+      },
+      "model_state": {},
+      "metrics": {},
+      "perception_state": {
+        "active_modalities": [],
+        "current_salience_threshold": 0.4,
+        "active_inputs": {},
+        "recent_patterns": [],
+        "buffer_capacity": 10,
+        "developmental_age": 0.0
+      },
+      "recent_patterns": [],
+      "recent_text_inputs": [],
+      "pattern_types": {
+        "temporal": true,
+        "spatial": true,
+        "semantic": true,
+        "emotional": true,
+        "causal": true,
+        "associative": true,
+        "categorical": true
+      }
+    },
+    "attention_0": {
+      "development_level": 0.0,
+      "creation_timestamp": 1741667089.4520411,
+      "last_update_time": 1741667089.4520411,
+      "config": {
+        "enabled": true,
+        "development_rate": 1.0,
+        "initial_development_level": 0.0,
+        "learning_rate": 0.01,
+        "update_frequency": 1.0,
+        "critical_period_sensitivity": 1.0
+      },
+      "is_active": true,
+      "message_count": {
+        "PERCEPTION_INPUT": 0,
+        "ATTENTION_FOCUS": 0,
+        "MEMORY_STORAGE": 0,
+        "MEMORY_RETRIEVAL": 0,
+        "EMOTION_UPDATE": 0,
+        "CONSCIOUSNESS_BROADCAST": 0,
+        "LANGUAGE_PROCESSING": 0,
+        "EXECUTIVE_CONTROL": 0,
+        "SOCIAL_INTERACTION": 0,
+        "MOTIVATION_SIGNAL": 0,
+        "TEMPORAL_PROCESSING": 0,
+        "CREATIVITY_OUTPUT": 0,
+        "SELF_REGULATION_SIGNAL": 0,
+        "LEARNING_UPDATE": 0,
+        "IDENTITY_UPDATE": 0,
+        "BELIEF_UPDATE": 0,
+        "DEVELOPMENT_MILESTONE": 0,
+        "SYSTEM_STATUS": 0
+      },
+      "model_state": {},
+      "metrics": {},
+      "attention_state": {
+        "current_mode": "passive",
+        "current_focus": null,
+        "focus_history": [],
+        "active_targets": {},
+        "salience_threshold": 0.5,
+        "distractibility": 1.0,
+        "attention_span_ms": 10000,
+        "developmental_age": 0.0
+      },
+      "current_focus": null,
+      "focus_history": [],
+      "active_targets_count": 0
+    },
+    "memory_0": {
+      "development_level": 0.0,
+      "creation_timestamp": 1741667089.4560409,
+      "last_update_time": 1741667089.4560409,
+      "config": {
+        "enabled": true,
+        "development_rate": 1.0,
+        "initial_development_level": 0.0,
+        "learning_rate": 0.01,
+        "update_frequency": 1.0,
+        "critical_period_sensitivity": 1.0
+      },
+      "is_active": true,
+      "message_count": {
+        "PERCEPTION_INPUT": 0,
+        "ATTENTION_FOCUS": 0,
+        "MEMORY_STORAGE": 0,
+        "MEMORY_RETRIEVAL": 0,
+        "EMOTION_UPDATE": 0,
+        "CONSCIOUSNESS_BROADCAST": 0,
+        "LANGUAGE_PROCESSING": 0,
+        "EXECUTIVE_CONTROL": 0,
+        "SOCIAL_INTERACTION": 0,
+        "MOTIVATION_SIGNAL": 0,
+        "TEMPORAL_PROCESSING": 0,
+        "CREATIVITY_OUTPUT": 0,
+        "SELF_REGULATION_SIGNAL": 0,
+        "LEARNING_UPDATE": 0,
+        "IDENTITY_UPDATE": 0,
+        "BELIEF_UPDATE": 0,
+        "DEVELOPMENT_MILESTONE": 0,
+        "SYSTEM_STATUS": 0
+      },
+      "model_state": {},
+      "metrics": {},
+      "memory_state": {
+        "working_memory_capacity": 5,
+        "working_memory_used": 0,
+        "working_memory_items": {},
+        "episodic_memory_count": 0,
+        "semantic_memory_count": 0,
+        "associative_link_count": 0,
+        "recent_retrievals": [],
+        "developmental_age": 0.0,
+        "active_consolidation_count": 0,
+        "vector_indexes_status": {},
+        "neural_network_activation": {}
+      },
+      "working_memory_count": 0,
+      "working_memory_items": []
+    }
+  },
+  "homeostasis": {
+    "energy": 1.0,
+    "arousal": 0.5,
+    "cognitive_load": 0.0,
+    "coherence": 1.0,
+    "social_need": 0.5
+  },
+  "interfaces": {},
+  "metrics": {
+    "message_count": 0,
+    "learning_events": 0,
+    "errors": 0
+  },
+  "_meta": {
+    "saved_at": 1741667121.763278,
+    "description": "Final state at shutdown"
+  }
+}
