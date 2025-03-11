@@ -13,8 +13,19 @@ from lmm_project.utils.llm_client import LLMClient
 # Initialize logger
 logger = get_module_logger("vector_store")
 
-# Get configuration
-config = get_config()
+# Global variable for configuration
+_config = None
+
+def _get_config():
+    """Get configuration lazily."""
+    global _config
+    if _config is None:
+        try:
+            _config = get_config()
+        except Exception as e:
+            logger.warning(f"Failed to load config: {e}. Using defaults.")
+            _config = {}
+    return _config
 
 
 class VectorStore:
@@ -40,18 +51,18 @@ class VectorStore:
         storage_dir: Directory to store indices
         """
         # Set dimension from config if not provided
-        self.dimension = dimension or config.get_int("storage.vector_dimension", 768)
+        self.dimension = dimension or _get_config().get_int("storage.vector_dimension", 768)
         
         # Set index type from config if not provided
-        self.index_type = index_type or config.get_string("storage.vector_index_type", "Flat")
+        self.index_type = index_type or _get_config().get_string("storage.vector_index_type", "Flat")
         
         # Use GPU based on config if not explicitly set
         if use_gpu is None:
-            use_gpu = config.get_boolean("system.cuda_enabled", True)
+            use_gpu = _get_config().get_boolean("system.cuda_enabled", True)
         self.use_gpu = use_gpu and self._is_gpu_available()
         
         # Set storage directory
-        self.storage_dir = storage_dir or config.get_string("storage_dir", "storage")
+        self.storage_dir = storage_dir or _get_config().get_string("storage_dir", "storage")
         os.makedirs(Path(self.storage_dir) / "vectors", exist_ok=True)
         
         # Initialize index and metadata
@@ -364,7 +375,7 @@ class VectorStore:
         try:
             # Get storage directory from config if not provided
             if storage_dir is None:
-                storage_dir = config.get_string("storage_dir", "storage")
+                storage_dir = _get_config().get_string("storage_dir", "storage")
             
             index_dir = Path(storage_dir) / "vectors"
             
@@ -429,7 +440,7 @@ def get_embeddings(texts: Union[str, List[str]]) -> Union[List[float], List[List
     Embedding vector or list of embedding vectors
     """
     client = LLMClient()
-    embedding_model = config.get_string("DEFAULT_EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5@q4_k_m")
+    embedding_model = _get_config().get_string("DEFAULT_EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5@q4_k_m")
     
     return client.get_embedding(texts, embedding_model)
 
@@ -445,25 +456,35 @@ def get_vector_store(
     storage_dir: Optional[str] = None
 ) -> VectorStore:
     """
-    Get or create a singleton vector store instance.
+    Get a configured vector store instance.
     
-    Parameters:
-    dimension: Vector dimension
-    index_type: Index type
-    use_gpu: Whether to use GPU
-    storage_dir: Storage directory
-    
+    Args:
+        dimension: Vector dimension (default from config)
+        index_type: FAISS index type (default from config)
+        use_gpu: Whether to use GPU acceleration (default from config)
+        storage_dir: Directory for storing vector data (default from config)
+        
     Returns:
-    VectorStore instance
+        Configured VectorStore instance
     """
-    global _vector_store_instance
+    config = _get_config()
     
-    if _vector_store_instance is None:
-        _vector_store_instance = VectorStore(
-            dimension=dimension,
-            index_type=index_type,
-            use_gpu=use_gpu,
-            storage_dir=storage_dir
-        )
+    # Use config values as defaults if parameters not provided
+    if dimension is None:
+        dimension = config.get_int("storage.vector_dimension", 768)
+        
+    if index_type is None:
+        index_type = config.get_string("storage.vector_index_type", "Flat")
+        
+    if use_gpu is None:
+        use_gpu = config.get_boolean("system.cuda_enabled", True)
+        
+    if storage_dir is None:
+        storage_dir = config.get_string("storage.storage_dir", "storage")
     
-    return _vector_store_instance
+    return VectorStore(
+        dimension=dimension,
+        index_type=index_type,
+        use_gpu=use_gpu,
+        storage_dir=storage_dir
+    )

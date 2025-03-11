@@ -11,8 +11,9 @@ from typing import Dict, List, Optional, Tuple, Any, Set
 
 import numpy as np
 
-from lmm_project.core.event_system import EventSystem, Event
-from lmm_project.core.types import StateDict
+from lmm_project.core.event_bus import EventBus, get_event_bus
+from lmm_project.core.message import Message, TextContent
+from lmm_project.core.types import StateDict, ModuleType, MessageType
 from lmm_project.development.models import (
     DevelopmentalStage, 
     StageDefinition,
@@ -34,7 +35,7 @@ class DevelopmentalStages:
     and developmental criteria.
     """
     
-    def __init__(self, config: Optional[DevelopmentConfig] = None):
+    def __init__(self, config: Optional[DevelopmentConfig] = None, event_bus: Optional[EventBus] = None):
         """
         Initialize the developmental stages manager.
         
@@ -42,8 +43,10 @@ class DevelopmentalStages:
         -----------
         config : Optional[DevelopmentConfig]
             Configuration for developmental stages. If None, default settings will be loaded.
+        event_bus : Optional[EventBus]
+            Event bus for publishing events. If None, a new one will be created.
         """
-        self.event_system = EventSystem()
+        self.event_system = event_bus or get_event_bus()
         self._config = config or self._load_default_config()
         
         # Stage definitions indexed by stage enum for faster access
@@ -204,15 +207,23 @@ class DevelopmentalStages:
             self._current_stage = new_stage
             self._stage_history.append((datetime.now(), new_stage, new_age))
             
-            # Emit stage transition event
-            self.event_system.emit(Event(
-                name="developmental_stage_changed",
-                data={
-                    "previous_stage": self._previous_stage,
-                    "new_stage": self._current_stage,
-                    "age": new_age
-                }
-            ))
+            # Emit stage transition event if event bus is running
+            try:
+                self.event_system.publish(Message(
+                    sender="developmental_stages",
+                    sender_type=ModuleType.LEARNING,
+                    message_type=MessageType.DEVELOPMENT_MILESTONE,
+                    content=TextContent(
+                        data=f"Developmental stage changed from {self._previous_stage} to {self._current_stage} at age {new_age:.3f}"
+                    ),
+                    metadata={
+                        "previous_stage": self._previous_stage,
+                        "new_stage": self._current_stage,
+                        "age": new_age
+                    }
+                ))
+            except Exception as e:
+                logger.warning(f"Could not publish stage transition event: {e}")
             
             logger.info(f"Developmental stage transitioned from {self._previous_stage} "
                        f"to {self._current_stage} at age {new_age:.3f}")
@@ -281,9 +292,14 @@ class DevelopmentalStages:
             self._stage_history.append((datetime.now(), new_stage, age))
             
             # Emit stage transition event
-            self.event_system.emit(Event(
-                name="developmental_stage_changed",
-                data={
+            self.event_system.publish(Message(
+                sender="developmental_stages",
+                sender_type=ModuleType.LEARNING,
+                message_type=MessageType.DEVELOPMENT_MILESTONE,
+                content=TextContent(
+                    data=f"Developmental stage changed from {self._previous_stage} to {self._current_stage} at age {age:.3f}"
+                ),
+                metadata={
                     "previous_stage": self._previous_stage,
                     "new_stage": self._current_stage,
                     "age": age

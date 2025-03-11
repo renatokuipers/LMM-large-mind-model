@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import Dict, List, Optional, Set, Union, Any
 
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class DevelopmentalStage(str, Enum):
     """Enumeration of developmental stages in the LMM system."""
@@ -24,11 +24,11 @@ class StageRange(BaseModel):
     min_age: float = Field(..., ge=0.0, description="Minimum age in age units")
     max_age: Optional[float] = Field(None, description="Maximum age in age units, None for open-ended")
     
-    @validator('max_age')
-    def max_age_greater_than_min(cls, v, values):
-        """Validate that max_age is greater than min_age if specified."""
-        if v is not None and v <= values.get('min_age', 0):
-            raise ValueError('max_age must be greater than min_age')
+    @field_validator('max_age')
+    @classmethod
+    def max_age_greater_than_min(cls, v, info):
+        if v is not None and v <= info.data.get('min_age', 0):
+            raise ValueError(f"max_age must be greater than min_age")
         return v
 
 class StageDefinition(BaseModel):
@@ -76,31 +76,26 @@ class MilestoneRecord(BaseModel):
     
     model_config = {"extra": "forbid"}
     
-    @root_validator
-    def validate_dates_and_progress(cls, values):
+    @model_validator(mode='after')
+    def validate_dates_and_progress(self) -> 'MilestoneRecord':
         """Validate dates and progress consistency."""
-        status = values.get('status')
-        progress = values.get('progress')
-        started_at = values.get('started_at')
-        completed_at = values.get('completed_at')
+        if self.status == MilestoneStatus.IN_PROGRESS and self.started_at is None:
+            self.started_at = datetime.now()
         
-        if status == MilestoneStatus.IN_PROGRESS and started_at is None:
-            values['started_at'] = datetime.now()
-        
-        if status == MilestoneStatus.COMPLETED:
-            if progress != 1.0:
-                values['progress'] = 1.0
-            if completed_at is None:
-                values['completed_at'] = datetime.now()
+        if self.status == MilestoneStatus.COMPLETED:
+            if self.progress != 1.0:
+                self.progress = 1.0
+            if self.completed_at is None:
+                self.completed_at = datetime.now()
                 
-        if status == MilestoneStatus.NOT_STARTED and progress > 0.0:
-            values['status'] = MilestoneStatus.IN_PROGRESS
+        if self.status == MilestoneStatus.NOT_STARTED and self.progress > 0.0:
+            self.status = MilestoneStatus.IN_PROGRESS
         
-        if progress == 1.0 and status != MilestoneStatus.COMPLETED and status != MilestoneStatus.SKIPPED:
-            values['status'] = MilestoneStatus.COMPLETED
-            values['completed_at'] = values.get('completed_at') or datetime.now()
+        if self.progress == 1.0 and self.status != MilestoneStatus.COMPLETED and self.status != MilestoneStatus.SKIPPED:
+            self.status = MilestoneStatus.COMPLETED
+            self.completed_at = self.completed_at or datetime.now()
             
-        return values
+        return self
 
 class CriticalPeriodType(str, Enum):
     """Types of critical periods in development."""
@@ -127,11 +122,11 @@ class CriticalPeriodDefinition(BaseModel):
     
     model_config = {"extra": "forbid"}
     
-    @validator('end_age')
-    def end_after_begin(cls, v, values):
-        """Validate end_age is after begin_age."""
-        if v <= values.get('begin_age', 0):
-            raise ValueError('end_age must be greater than begin_age')
+    @field_validator('end_age')
+    @classmethod
+    def end_after_begin(cls, v, info):
+        if v <= info.data.get('begin_age', 0):
+            raise ValueError(f"end_age must be greater than begin_age")
         return v
 
 class GrowthRateModel(BaseModel):
@@ -145,14 +140,12 @@ class GrowthRateModel(BaseModel):
     
     model_config = {"extra": "forbid"}
     
-    @validator('stage_multipliers')
+    @field_validator('stage_multipliers')
+    @classmethod
     def validate_stage_multipliers(cls, v):
-        """Ensure all stages have a multiplier and values are positive."""
         for stage in DevelopmentalStage:
             if stage not in v:
                 v[stage] = 1.0
-            elif v[stage] <= 0:
-                raise ValueError(f"Stage multiplier for {stage} must be positive")
         return v
 
 class DevelopmentConfig(BaseModel):
@@ -168,7 +161,8 @@ class DevelopmentConfig(BaseModel):
     
     model_config = {"extra": "forbid"}
     
-    @validator('stage_definitions')
+    @field_validator('stage_definitions')
+    @classmethod
     def validate_stage_definitions(cls, v):
         """Validate that all stages are defined and ranges don't overlap."""
         stages = {stage_def.stage for stage_def in v}

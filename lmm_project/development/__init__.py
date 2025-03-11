@@ -26,6 +26,7 @@ from lmm_project.development.developmental_stages import DevelopmentalStages
 from lmm_project.development.critical_periods import CriticalPeriods
 from lmm_project.development.growth_rate_controller import GrowthRateController
 from lmm_project.development.milestone_tracker import MilestoneTracker
+from lmm_project.core.event_bus import EventBus, get_event_bus
 
 # Make all imported components available
 __all__ = [
@@ -64,7 +65,7 @@ class DevelopmentManager:
     managing cognitive growth, developmental stages, critical periods, and milestones.
     """
     
-    def __init__(self, config: Optional[DevelopmentConfig] = None):
+    def __init__(self, config: Optional[DevelopmentConfig] = None, event_bus: Optional[EventBus] = None):
         """
         Initialize the development manager.
         
@@ -73,9 +74,14 @@ class DevelopmentManager:
         config : Optional[DevelopmentConfig]
             Configuration for all developmental subsystems.
             If None, default settings will be used.
+        event_bus : Optional[EventBus]
+            Event bus for publishing events. If None, a new one will be created.
         """
+        # Get or create event bus
+        self.event_bus = event_bus or get_event_bus()
+        
         # Create all subsystems
-        self.dev_stages = DevelopmentalStages(config)
+        self.dev_stages = DevelopmentalStages(config, self.event_bus)
         self.critical_periods = CriticalPeriods(self.dev_stages, config)
         self.milestone_tracker = MilestoneTracker(self.dev_stages, config)
         self.growth_controller = GrowthRateController(
@@ -310,7 +316,7 @@ class DevelopmentManager:
         if "growth_controller" in state:
             self.growth_controller.load_state(state["growth_controller"])
 
-def create_development_manager(config: Optional[DevelopmentConfig] = None) -> DevelopmentManager:
+def create_development_manager(config: Optional[DevelopmentConfig] = None, event_bus: Optional[EventBus] = None) -> DevelopmentManager:
     """
     Create the global development manager.
     
@@ -318,6 +324,8 @@ def create_development_manager(config: Optional[DevelopmentConfig] = None) -> De
     -----------
     config : Optional[DevelopmentConfig]
         Configuration for all developmental subsystems
+    event_bus : Optional[EventBus]
+        Event bus for publishing events. If None, a new one will be created.
         
     Returns:
     --------
@@ -329,7 +337,7 @@ def create_development_manager(config: Optional[DevelopmentConfig] = None) -> De
     if _development_manager is not None:
         raise RuntimeError("Development manager has already been created")
         
-    _development_manager = DevelopmentManager(config)
+    _development_manager = DevelopmentManager(config, event_bus)
     return _development_manager
 
 def get_development_manager() -> DevelopmentManager:

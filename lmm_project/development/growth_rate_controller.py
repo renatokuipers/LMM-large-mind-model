@@ -11,7 +11,8 @@ from typing import Dict, List, Optional, Set, Tuple, Any
 
 import numpy as np
 
-from lmm_project.core.event_system import EventSystem, Event
+from lmm_project.core.event_bus import EventBus
+from lmm_project.core.message import Message
 from lmm_project.core.types import StateDict
 from lmm_project.development.models import (
     DevelopmentalStage, 
@@ -52,7 +53,7 @@ class GrowthRateController:
         config : Optional[DevelopmentConfig]
             Configuration containing growth rate model. If None, uses default settings.
         """
-        self.event_system = EventSystem()
+        self.event_system = EventBus()
         self.dev_stages = dev_stages
         self.critical_periods = critical_periods
         self._config = config or self._load_default_config()
@@ -322,7 +323,7 @@ class GrowthRateController:
         
         # Emit event if significant progress made
         if int(new_progress * 100) > int(current_progress * 100):
-            self.event_system.emit(Event(
+            self.event_system.publish(Message(
                 name="capability_progress_updated",
                 data={
                     "module": module_name,
@@ -437,7 +438,7 @@ class GrowthRateController:
         self._growth_progress[module_name][capability] = progress
         
         # Emit event for progress change
-        self.event_system.emit(Event(
+        self.event_system.publish(Message(
             name="capability_progress_set",
             data={
                 "module": module_name,

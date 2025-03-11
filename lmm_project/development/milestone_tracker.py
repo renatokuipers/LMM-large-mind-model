@@ -1,9 +1,8 @@
 """
 Milestone tracking system for the LMM project.
 
-This module implements a system for defining, tracking, and evaluating
-developmental milestones - key capabilities that mark progression 
-through developmental stages.
+This module tracks developmental milestones, their prerequisites,
+and manages the progression through these milestones as the mind develops.
 """
 import time
 from datetime import datetime
@@ -11,13 +10,14 @@ from typing import Dict, List, Optional, Set, Any, Tuple, Callable
 
 import numpy as np
 
-from lmm_project.core.event_system import EventSystem, Event
-from lmm_project.core.types import StateDict
+from lmm_project.core.event_bus import EventBus
+from lmm_project.core.message import Message, TextContent, StructuredContent
+from lmm_project.core.types import StateDict, ModuleType, MessageType
 from lmm_project.development.models import (
+    DevelopmentalStage,
     MilestoneDefinition,
     MilestoneRecord,
     MilestoneStatus,
-    DevelopmentalStage,
     DevelopmentConfig
 )
 from lmm_project.development.developmental_stages import DevelopmentalStages
@@ -50,7 +50,7 @@ class MilestoneTracker:
         config : Optional[DevelopmentConfig]
             Configuration containing milestone definitions. If None, default settings are loaded.
         """
-        self.event_system = EventSystem()
+        self.event_system = EventBus()
         self.dev_stages = dev_stages
         self._config = config or self._load_default_config()
         
@@ -285,14 +285,16 @@ class MilestoneTracker:
                 record.started_at = datetime.now()
                 
                 # Emit event for milestone activation
-                self.event_system.emit(Event(
-                    name="milestone_activated",
-                    data={
+                self.event_system.publish(Message(
+                    sender="milestone_tracker",
+                    sender_type=ModuleType.LEARNING,
+                    message_type=MessageType.TEMPORAL_PROCESSING,
+                    content=StructuredContent(data={
                         "milestone_id": milestone_id,
                         "milestone_name": definition.name,
                         "age": current_age,
                         "stage": current_stage
-                    }
+                    })
                 ))
                 
                 logger.info(f"Milestone activated: {definition.name}")
@@ -305,7 +307,7 @@ class MilestoneTracker:
                     record.notes = "Automatically skipped due to age"
                     
                     # Emit event for milestone skip
-                    self.event_system.emit(Event(
+                    self.event_system.publish(Message(
                         name="milestone_skipped",
                         data={
                             "milestone_id": milestone_id,
@@ -400,7 +402,7 @@ class MilestoneTracker:
                 record.actual_age = self.dev_stages.get_age()
                 
                 # Emit completion event
-                self.event_system.emit(Event(
+                self.event_system.publish(Message(
                     name="milestone_completed",
                     data={
                         "milestone_id": milestone_id,
@@ -414,7 +416,7 @@ class MilestoneTracker:
                 logger.info(f"Milestone completed: {definition.name} at age {record.actual_age:.3f}")
             elif record.status != MilestoneStatus.COMPLETED:
                 # Emit progress event
-                self.event_system.emit(Event(
+                self.event_system.publish(Message(
                     name="milestone_progress",
                     data={
                         "milestone_id": milestone_id,

@@ -189,7 +189,36 @@ def get_config(config_path: Optional[str] = None) -> ConfigManager:
     """
     global _config_instance
     
+    # Try different locations for the config file if not provided
+    if config_path is None:
+        possible_paths = [
+            "config.yml",
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yml"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.yml"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "lmm_project", "config.yml")
+        ]
+        
+        # Find the first path that exists
+        for path in possible_paths:
+            if os.path.exists(path):
+                config_path = path
+                break
+    
     if _config_instance is None:
         _config_instance = ConfigManager(config_path)
-        
+    
     return _config_instance
+
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    """
+    Load configuration from the specified path.
+    
+    Parameters:
+    config_path: Path to the configuration file to load
+    
+    Returns:
+    Dictionary containing the configuration
+    """
+    config_manager = get_config(config_path)
+    return config_manager.config

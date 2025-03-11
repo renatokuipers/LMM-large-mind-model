@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import numpy as np
 import faiss
 import torch
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, model_validator
 
 from lmm_project.utils.vector_store import VectorStore, get_vector_store
 from lmm_project.utils.logging_utils import get_module_logger
@@ -32,13 +32,12 @@ class VectorDBConfig(BaseModel):
     storage_dir: str = Field(default="storage/vectors")
     metadata_filename: str = Field(default="metadata.json")
     
-    @root_validator
-    def validate_storage_dir(cls, values):
+    @model_validator(mode='after')
+    def validate_storage_dir(self) -> 'VectorDBConfig':
         """Ensure storage directory exists."""
-        storage_dir = values.get("storage_dir")
-        if storage_dir:
-            os.makedirs(storage_dir, exist_ok=True)
-        return values
+        if self.storage_dir:
+            os.makedirs(self.storage_dir, exist_ok=True)
+        return self
 
 
 class VectorDB:

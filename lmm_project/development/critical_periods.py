@@ -11,7 +11,8 @@ from typing import Dict, List, Optional, Set, Any, Tuple
 
 import numpy as np
 
-from lmm_project.core.event_system import EventSystem, Event
+from lmm_project.core.event_bus import EventBus
+from lmm_project.core.message import Message
 from lmm_project.core.types import StateDict
 from lmm_project.development.models import (
     CriticalPeriodDefinition,
@@ -47,7 +48,7 @@ class CriticalPeriods:
         config : Optional[DevelopmentConfig]
             Configuration containing critical period definitions. If None, default settings will be loaded.
         """
-        self.event_system = EventSystem()
+        self.event_system = EventBus()
         self.dev_stages = dev_stages
         self._config = config or self._load_default_config()
         
@@ -170,7 +171,7 @@ class CriticalPeriods:
                 self._period_activation_history[period_id].append(activation_record)
                 
                 # Emit event for period activation
-                self.event_system.emit(Event(
+                self.event_system.publish(Message(
                     name="critical_period_activated",
                     data={
                         "period_id": period_id,
@@ -197,7 +198,7 @@ class CriticalPeriods:
                 self._period_activation_history[period_id].append(deactivation_record)
                 
                 # Emit event for period deactivation
-                self.event_system.emit(Event(
+                self.event_system.publish(Message(
                     name="critical_period_deactivated",
                     data={
                         "period_id": period_id,

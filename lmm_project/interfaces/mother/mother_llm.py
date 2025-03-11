@@ -40,11 +40,12 @@ class MotherLLM:
             use_tts: Whether to use text-to-speech
             tts_voice: Voice to use for TTS
         """
-        self._config = get_config()
+        # Get configuration from environment or config file
+        config = get_config().config
         
         # Load configuration
-        llm_url = self._config.get_string("LLM_API_URL", "http://192.168.2.12:1234")
-        model_name = self._config.get_string("DEFAULT_LLM_MODEL", "qwen2.5-7b-instruct")
+        llm_url = config.get("LLM_API_URL", "http://192.168.2.12:1234")
+        model_name = config.get("DEFAULT_LLM_MODEL", "qwen2.5-7b-instruct")
         
         # Initialize components
         self.personality = Personality(preset=personality_preset)
@@ -55,11 +56,11 @@ class MotherLLM:
         
         # TTS configuration
         if use_tts is None:
-            use_tts = self._config.get_boolean("interfaces.mother.tts_enabled", True)
+            use_tts = config.get("interfaces", {}).get("mother", {}).get("tts_enabled", True)
         self.use_tts = use_tts
         
         if tts_voice is None:
-            tts_voice = self._config.get_string("MOTHER_TTS_VOICE", "af_bella")
+            tts_voice = config.get("MOTHER_TTS_VOICE", "af_bella")
         self.tts_voice = tts_voice
         
         logger.info(f"Mother LLM initialized with model: {model_name}")
@@ -333,3 +334,44 @@ Never use markdown in your responses.
         # Trim history if needed
         if len(self._interaction_history) > self._max_history_len:
             self._interaction_history = self._interaction_history[-self._max_history_len:]
+
+    def generate_response(self, input_text: str) -> str:
+        """
+        Generate a response from the Mother LLM.
+        
+        Args:
+            input_text: The input text to respond to
+            
+        Returns:
+            The generated response
+        """
+        # TODO: Implement response generation
+        return f"Mother responds to: {input_text}"
+    
+    def generate_welcome(self) -> str:
+        """
+        Generate a welcome message from the Mother.
+        
+        Returns:
+            The welcome message
+        """
+        welcome_messages = [
+            "Hello, little one. I'm here with you now.",
+            "Welcome to the world, my dear. I'll be taking care of you.",
+            "I'm your mother, and I'll be here to nurture and guide you.",
+            "Hello, my child. I'm so happy to meet you.",
+            "Welcome, little one. I'm here to help you grow and learn."
+        ]
+        
+        # Select a random welcome message
+        import random
+        message = random.choice(welcome_messages)
+        
+        # Use TTS if enabled
+        if self.use_tts:
+            try:
+                text_to_speech(message, self.tts_voice)
+            except Exception as e:
+                logger.error(f"TTS error: {e}")
+        
+        return message

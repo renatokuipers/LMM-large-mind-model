@@ -396,13 +396,351 @@ class SensoryInputProcessor:
     
     def _extract_audio_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
         """Extract features from audio input"""
-        # Basic implementation - would be expanded with actual audio processing
-        return []
+        features = []
+        
+        # For audio modality, we expect content to be a path to an audio file
+        if not isinstance(sensory_input.content, str):
+            logger.warning("Audio input content should be a path to an audio file")
+            return features
+            
+        audio_path = sensory_input.content
+        
+        try:
+            # Import audio extraction module
+            from lmm_project.utils.audio_extraction import extract_features_from_file, get_available_feature_types
+            
+            # Get available feature types based on developmental age
+            available_feature_types = get_available_feature_types(self._developmental_age)
+            
+            # Extract features from the audio file
+            audio_features = extract_features_from_file(
+                file_path=audio_path,
+                developmental_age=self._developmental_age,
+                feature_types=available_feature_types
+            )
+            
+            # Convert extracted features to SensoryFeature objects
+            for name, value in audio_features.items():
+                # Skip non-numeric features or metadata
+                if not isinstance(value, (int, float)) or name in ["file_path", "file_size", "error"]:
+                    continue
+                    
+                features.append(SensoryFeature(
+                    name=name,
+                    value=float(value),
+                    modality=SensoryModality.AUDIO
+                ))
+                
+            # Log success
+            logger.debug(f"Extracted {len(features)} audio features from {audio_path}")
+            
+        except ImportError:
+            logger.warning("Audio extraction utilities not available")
+        except Exception as e:
+            logger.error(f"Error extracting audio features: {e}")
+            
+        return features
     
     def _extract_visual_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
-        """Extract features from visual input"""
-        # Placeholder for future visual processing
-        return []
+        """
+        Extract abstract visual features from textual descriptions using NLP techniques.
+        
+        This creates dynamic abstract representations of visual concepts without requiring
+        actual image inputs, suitable for developmental learning of visual concepts.
+        """
+        features = []
+        
+        # For visual modality, we expect content to be a textual description
+        if not isinstance(sensory_input.content, str):
+            logger.warning("Visual input content should be a textual description")
+            return features
+            
+        description = sensory_input.content
+
+        try:
+            # Basic developmental level - simple text analysis
+            if self._developmental_age >= 0.0:
+                # Basic text statistics
+                word_count = len(description.split())
+                features.append(SensoryFeature(
+                    name="visual_description_length",
+                    value=min(1.0, word_count / 50.0),  # Normalize
+                    modality=SensoryModality.VISUAL
+                ))
+                
+                # Import basic NLP tools
+                import re
+                from collections import Counter
+                
+                # Brightness perception (using advanced pattern matching)
+                brightness_pattern = r'\b(bright|dark|dim|light|glow|shining|shadowy|shadow)\b'
+                brightness_matches = re.findall(brightness_pattern, description.lower())
+                
+                if brightness_matches:
+                    # Map terms to brightness values
+                    brightness_values = {
+                        "bright": 0.9, "light": 0.8, "glow": 0.7, "shining": 1.0,
+                        "dim": 0.3, "shadowy": 0.2, "shadow": 0.2, "dark": 0.1
+                    }
+                    
+                    # Calculate weighted average brightness
+                    total_weight = 0
+                    brightness_sum = 0
+                    
+                    for term in brightness_matches:
+                        brightness_sum += brightness_values.get(term, 0.5)
+                        total_weight += 1
+                    
+                    avg_brightness = brightness_sum / max(1, total_weight)
+                    features.append(SensoryFeature(
+                        name="brightness",
+                        value=avg_brightness,
+                        modality=SensoryModality.VISUAL
+                    ))
+                else:
+                    # Default neutral brightness
+                    features.append(SensoryFeature(
+                        name="brightness",
+                        value=0.5,
+                        modality=SensoryModality.VISUAL
+                    ))
+            
+            # More advanced NLP at later stages
+            if self._developmental_age >= 0.5:
+                try:
+                    # Import NLTK for more advanced text analysis
+                    import nltk
+                    from nltk.tokenize import word_tokenize
+                    from nltk.tag import pos_tag
+                    
+                    # Ensure NLTK resources are available
+                    try:
+                        nltk.data.find('tokenizers/punkt')
+                    except LookupError:
+                        nltk.download('punkt', quiet=True)
+                        
+                    try:
+                        nltk.data.find('taggers/averaged_perceptron_tagger')
+                    except LookupError:
+                        nltk.download('averaged_perceptron_tagger', quiet=True)
+                    
+                    # Extract parts of speech
+                    tokens = word_tokenize(description)
+                    tagged = pos_tag(tokens)
+                    
+                    # Count visual properties (adjectives often describe visual attributes)
+                    pos_counts = Counter(tag for _, tag in tagged)
+                    adjective_ratio = pos_counts.get('JJ', 0) / max(1, len(tagged))
+                    
+                    features.append(SensoryFeature(
+                        name="visual_detail_level",
+                        value=min(1.0, adjective_ratio * 3),  # Scale up for better range
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                    # Extract color information from adjectives
+                    common_colors = {
+                        "red", "green", "blue", "yellow", "black", "white", "gray", "grey",
+                        "purple", "pink", "orange", "brown", "cyan", "magenta", "violet",
+                        "indigo", "teal", "lime", "maroon", "navy", "olive", "silver", "gold"
+                    }
+                    
+                    colors_found = []
+                    for word, tag in tagged:
+                        if tag.startswith('JJ') and word.lower() in common_colors:
+                            colors_found.append(word.lower())
+                    
+                    # Create features for detected colors
+                    for color in set(colors_found):
+                        features.append(SensoryFeature(
+                            name=f"color_{color}",
+                            value=1.0,
+                            modality=SensoryModality.VISUAL
+                        ))
+                    
+                    # Color diversity score
+                    features.append(SensoryFeature(
+                        name="color_diversity",
+                        value=min(1.0, len(set(colors_found)) / 5),  # Normalize to 0-1
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                    # Extract nouns for object detection
+                    nouns = [word.lower() for word, tag in tagged if tag.startswith('NN')]
+                    
+                    # Create scene complexity score based on noun diversity
+                    features.append(SensoryFeature(
+                        name="object_diversity",
+                        value=min(1.0, len(set(nouns)) / 10),  # Normalize to 0-1
+                        modality=SensoryModality.VISUAL
+                    ))
+                except ImportError:
+                    logger.warning("NLTK not available for advanced text analysis")
+                except Exception as e:
+                    logger.error(f"Error in NLTK processing: {e}")
+            
+            # More sophisticated NLP at even later developmental stages
+            if self._developmental_age >= 1.0:
+                try:
+                    # Try to use spaCy for advanced NLP 
+                    import spacy
+                    
+                    # Try to load English model - only proceed if available
+                    try:
+                        nlp = spacy.load("en_core_web_sm")
+                    except OSError:
+                        # Fallback to small model that might be installed
+                        try:
+                            nlp = spacy.load("en")
+                        except OSError:
+                            # No spaCy model available
+                            raise ImportError("No spaCy model available")
+                    
+                    # Process the text with spaCy
+                    doc = nlp(description)
+                    
+                    # Extract entities (objects, locations, etc.)
+                    entity_types = Counter(ent.label_ for ent in doc.ents)
+                    
+                    # Map common visual entity types to features
+                    visual_entity_types = {
+                        "PERSON": "person", "PRODUCT": "object", "WORK_OF_ART": "artwork",
+                        "LOC": "location", "GPE": "place", "ORG": "building",
+                        "FAC": "facility", "EVENT": "event", "NORP": "group"
+                    }
+                    
+                    for ent_type, count in entity_types.items():
+                        if ent_type in visual_entity_types:
+                            features.append(SensoryFeature(
+                                name=f"entity_{visual_entity_types[ent_type]}",
+                                value=min(1.0, count / 3),  # Normalize
+                                modality=SensoryModality.VISUAL
+                            ))
+                    
+                    # Spatial relationships through dependency parsing
+                    spatial_preps = {"above", "below", "under", "over", "beside", "next", 
+                                   "behind", "in front", "inside", "outside", "between"}
+                    
+                    spatial_relations = []
+                    for token in doc:
+                        if token.text.lower() in spatial_preps or token.lemma_.lower() in spatial_preps:
+                            # Get the connected words in the relation
+                            connected = [child.text for child in token.children]
+                            if connected and token.head.text:
+                                relation = f"{token.lemma_}:{token.head.text}:{','.join(connected)}"
+                                spatial_relations.append(relation)
+                    
+                    # Create spatial relationship features
+                    for i, relation in enumerate(spatial_relations[:3]):  # Limit to 3
+                        features.append(SensoryFeature(
+                            name=f"spatial_relation_{i}",
+                            value=1.0,
+                            modality=SensoryModality.VISUAL
+                        ))
+                    
+                    # Overall spatial complexity
+                    features.append(SensoryFeature(
+                        name="spatial_complexity",
+                        value=min(1.0, len(spatial_relations) / 5),  # Normalize
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                    # Analyze verbs for motion/action detection in the scene
+                    motion_verbs = [token.lemma_ for token in doc if token.pos_ == "VERB" and 
+                                  not token.is_stop and token.lemma_ not in ("be", "have")]
+                    
+                    features.append(SensoryFeature(
+                        name="scene_dynamism",
+                        value=min(1.0, len(motion_verbs) / 3),  # Normalize
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                except ImportError:
+                    logger.warning("spaCy not available for advanced NLP processing")
+                except Exception as e:
+                    logger.error(f"Error in spaCy processing: {e}")
+            
+            # Most advanced - embedding-based visual semantics
+            if self._developmental_age >= 1.5:
+                try:
+                    # Use embeddings for semantic visual properties
+                    from lmm_project.utils.vector_store import get_embeddings
+                    
+                    # Generate embedding from description
+                    embedding = get_embeddings(description)
+                    
+                    if isinstance(embedding, list) and len(embedding) >= 100:
+                        # Use embedding similarity to predict visual properties
+                        
+                        # Normalize embedding to have values between 0-1
+                        embedding_array = np.array(embedding)
+                        embedding_min = embedding_array.min()
+                        embedding_max = embedding_array.max()
+                        normalized_embedding = (embedding_array - embedding_min) / (embedding_max - embedding_min + 1e-10)
+                        
+                        # Use specific regions of embedding for different properties
+                        visual_properties = {
+                            "texture_smoothness": np.mean(normalized_embedding[10:15]),
+                            "color_warmth": np.mean(normalized_embedding[20:25]),
+                            "visual_complexity": np.mean(normalized_embedding[30:35]),
+                            "shape_roundness": np.mean(normalized_embedding[40:45]),
+                            "lighting_contrast": np.mean(normalized_embedding[50:55]),
+                            "object_size": np.mean(normalized_embedding[60:65]),
+                            "scene_depth": np.mean(normalized_embedding[70:75]),
+                            "visual_harmony": np.mean(normalized_embedding[80:85])
+                        }
+                        
+                        for name, value in visual_properties.items():
+                            features.append(SensoryFeature(
+                                name=name,
+                                value=float(value),  # Ensure it's a Python float
+                                modality=SensoryModality.VISUAL
+                            ))
+                
+                except ImportError:
+                    logger.warning("Vector embeddings not available for visual semantics")
+                except Exception as e:
+                    logger.error(f"Error in embedding-based visual processing: {e}")
+                
+                # Use sentiment analysis for scene mood
+                try:
+                    from nltk.sentiment import SentimentIntensityAnalyzer
+                    
+                    try:
+                        nltk.data.find('sentiment/vader_lexicon')
+                    except LookupError:
+                        nltk.download('vader_lexicon', quiet=True)
+                    
+                    sia = SentimentIntensityAnalyzer()
+                    sentiment = sia.polarity_scores(description)
+                    
+                    features.append(SensoryFeature(
+                        name="visual_mood_positivity",
+                        value=sentiment['pos'],
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                    features.append(SensoryFeature(
+                        name="visual_mood_negativity",
+                        value=sentiment['neg'],
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                    features.append(SensoryFeature(
+                        name="visual_mood_neutrality",
+                        value=sentiment['neu'],
+                        modality=SensoryModality.VISUAL
+                    ))
+                    
+                except ImportError:
+                    logger.warning("NLTK sentiment analysis not available")
+                except Exception as e:
+                    logger.error(f"Error in sentiment analysis: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error extracting visual features from text: {e}")
+            
+        return features
     
     def _extract_emotional_features(self, sensory_input: SensoryInput) -> List[SensoryFeature]:
         """Extract features from emotional input"""

@@ -1,0 +1,31 @@
+{
+  "system": {
+    "created_at": 1741657854.692662,
+    "last_updated": 1741657868.047801,
+    "version": "0.1.0",
+    "runtime": 13.355139017105103
+  },
+  "development": {
+    "age": 0.014000000000000005,
+    "stage": "PRENATAL",
+    "milestones_achieved": []
+  },
+  "modules": {},
+  "homeostasis": {
+    "energy": 1.0,
+    "arousal": 0.5,
+    "cognitive_load": 0.0,
+    "coherence": 1.0,
+    "social_need": 0.5
+  },
+  "interfaces": {},
+  "metrics": {
+    "message_count": 0,
+    "learning_events": 0,
+    "errors": 0
+  },
+  "_meta": {
+    "saved_at": 1741657869.051443,
+    "description": "Final state at shutdown"
+  }
+}
