@@ -1,0 +1,14 @@
+{
+  "notifications": [
+    {
+      "timestamp": 1741810606.6964622,
+      "message": "Project AgenDev Dashboard loaded with 0 tasks and 0 epics.",
+      "formatted_message": "Information: Project AgenDev Dashboard loaded with 0 tasks and 0 epics.",
+      "type": "info",
+      "priority": "low",
+      "voice": "af_bella",
+      "audio_path": "E:\\pinokio\\api\\Kokoro-TTS-Local-v1.0.git\\cache\\GRADIO_TEMP_DIR\\cd03baa693a479390cb3043e272d9c088b41ec809880aba4ed2dd227e292ea1e\\audio_20250312_211648.wav",
+      "metadata": {}
+    }
+  ]
+}
