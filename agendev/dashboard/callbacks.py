@@ -508,68 +508,91 @@ def register_callbacks(app, agendev):
         """Generate an alternative implementation plan using A* algorithm."""
         if not n_clicks:
             return []
-            
-        # Get the current plan
-        current_plan = agendev.planning_history.get_latest_plan()
-        if not current_plan:
-            return html.Div([
-                html.P("No current plan available. Please generate a plan first.", className="text-warning")
-            ])
-            
-        # Generate alternative plan
-        result = generate_alternative_plan(agendev, optimization_goal)
         
-        if not result.get("success", False):
-            return html.Div([
-                html.P(f"Error generating alternative plan: {result.get('error', 'Unknown error')}", className="text-danger")
-            ])
+        try:
+            # Try to get a plan - first try get_latest_plan, then fallback to get_current_plan
+            current_plan = None
             
-        # Create comparison table
-        comparison = result.get("comparison", {})
-        
-        return html.Div([
-            html.H5(f"Alternative Plan ({optimization_goal.capitalize()})"),
-            html.P(f"Generated a plan with {len(result['task_sequence'])} tasks."),
+            # Now the PlanningHistory class has get_latest_plan implemented
+            if hasattr(agendev.planning_history, 'get_latest_plan'):
+                current_plan = agendev.planning_history.get_latest_plan()
             
-            # Comparison table
-            html.Div([
-                html.H6("Plan Comparison"),
-                dbc.Table([
-                    html.Thead([
-                        html.Tr([
-                            html.Th("Metric"),
-                            html.Th("A* Plan"),
-                            html.Th("MCTS Plan"),
-                            html.Th("Difference")
-                        ])
-                    ]),
-                    html.Tbody([
-                        html.Tr([
-                            html.Td("Task Count"),
-                            html.Td(comparison.get("astar_task_count", "N/A")),
-                            html.Td(comparison.get("mcts_task_count", "N/A")),
-                            html.Td(f"{comparison.get('astar_task_count', 0) - comparison.get('mcts_task_count', 0)}")
-                        ]),
-                        html.Tr([
-                            html.Td("Duration (hours)"),
-                            html.Td(f"{comparison.get('astar_duration', 'N/A'):.1f}" if isinstance(comparison.get('astar_duration'), (int, float)) else "N/A"),
-                            html.Td(f"{comparison.get('mcts_duration', 'N/A'):.1f}" if isinstance(comparison.get('mcts_duration'), (int, float)) else "N/A"),
-                            html.Td(f"{comparison.get('duration_diff_percent', 'N/A'):.1f}%" if isinstance(comparison.get('duration_diff_percent'), (int, float)) else "N/A")
-                        ])
-                    ])
-                ], bordered=True, dark=True, hover=True, responsive=True, size="sm", striped=True)
-            ]),
+            # Fallback to get_current_plan if get_latest_plan fails or returns None
+            if current_plan is None and hasattr(agendev.planning_history, 'get_current_plan'):
+                current_plan = agendev.planning_history.get_current_plan()
             
-            # Task sequence
-            html.Div([
-                html.H6("Task Sequence"),
-                html.Ol([
-                    html.Li(agendev.task_graph.tasks[task_id].title) 
-                    for task_id in [UUID(tid) for tid in result["task_sequence"]]
-                    if task_id in agendev.task_graph.tasks
+            # If we still don't have a plan, show error message
+            if not current_plan:
+                return html.Div([
+                    html.P("No current plan available. Please generate a plan first.", className="text-warning")
                 ])
-            ], className="mt-3")
-        ])
+                
+            # Generate alternative plan
+            result = generate_alternative_plan(agendev, optimization_goal)
+            
+            if not result.get("success", False):
+                return html.Div([
+                    html.P(f"Error generating alternative plan: {result.get('error', 'Unknown error')}", className="text-danger")
+                ])
+                
+            # Create comparison table
+            comparison = result.get("comparison", {})
+            
+            return html.Div([
+                html.H5(f"Alternative Plan ({optimization_goal.capitalize()})"),
+                html.P(f"Generated a plan with {len(result['task_sequence'])} tasks."),
+                
+                # Comparison table
+                html.Div([
+                    html.H6("Plan Comparison"),
+                    dbc.Table([
+                        html.Thead([
+                            html.Tr([
+                                html.Th("Metric"),
+                                html.Th("A* Plan"),
+                                html.Th("MCTS Plan"),
+                                html.Th("Difference")
+                            ])
+                        ]),
+                        html.Tbody([
+                            html.Tr([
+                                html.Td("Task Count"),
+                                html.Td(comparison.get("astar_task_count", "N/A")),
+                                html.Td(comparison.get("mcts_task_count", "N/A")),
+                                html.Td(f"{comparison.get('astar_task_count', 0) - comparison.get('mcts_task_count', 0)}")
+                            ]),
+                            html.Tr([
+                                html.Td("Duration (hours)"),
+                                html.Td(f"{comparison.get('astar_duration', 'N/A'):.1f}" if isinstance(comparison.get('astar_duration'), (int, float)) else "N/A"),
+                                html.Td(f"{comparison.get('mcts_duration', 'N/A'):.1f}" if isinstance(comparison.get('mcts_duration'), (int, float)) else "N/A"),
+                                html.Td(f"{comparison.get('duration_diff_percent', 'N/A'):.1f}%" if isinstance(comparison.get('duration_diff_percent'), (int, float)) else "N/A")
+                            ])
+                        ])
+                    ], bordered=True, dark=True, hover=True, responsive=True, size="sm", striped=True)
+                ]),
+                
+                # Task sequence
+                html.Div([
+                    html.H6("Task Sequence"),
+                    html.Ol([
+                        html.Li(agendev.task_graph.tasks[task_id].title) 
+                        for task_id in [UUID(tid) for tid in result["task_sequence"]]
+                        if task_id in agendev.task_graph.tasks
+                    ])
+                ], className="mt-3")
+            ])
+        except Exception as e:
+            # Log the exception
+            import traceback
+            print(f"Error in generate_alternative_plan_callback: {str(e)}")
+            print(traceback.format_exc())
+            
+            # Return friendly error message
+            return html.Div([
+                html.H5("Error Generating Alternative Plan", className="text-danger"),
+                html.P(f"An error occurred: {str(e)}"),
+                html.Pre(traceback.format_exc(), className="bg-dark p-3 text-white", style={"fontSize": "0.8rem"})
+            ])
     
     @app.callback(
         Output("context-results", "children"),
@@ -626,83 +649,121 @@ def register_callbacks(app, agendev):
         if not n_clicks:
             return []
             
-        # Get the current plan
-        current_plan = agendev.planning_history.get_latest_plan()
-        if not current_plan:
-            return html.Div([
-                html.P("No current plan available. Please generate a plan first.", className="text-warning")
-            ])
+        try:
+            # Try to get a plan - first try get_latest_plan, then fallback to get_current_plan
+            current_plan = None
             
-        # Analyze risk
-        result = analyze_project_risk(agendev, current_plan)
-        
-        # Create risk visualization
-        success_probability = result.get("success_probability", 0.5)
-        risk_hotspots = result.get("risk_hotspots", [])
-        simulation_results = result.get("simulation_results", {})
-        
-        # Create gauge chart for success probability
-        fig = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = success_probability * 100,
-            domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "Success Probability"},
-            gauge = {
-                'axis': {'range': [0, 100]},
-                'bar': {'color': "darkblue"},
-                'steps': [
-                    {'range': [0, 30], 'color': "red"},
-                    {'range': [30, 70], 'color': "orange"},
-                    {'range': [70, 100], 'color': "green"}
-                ],
-                'threshold': {
-                    'line': {'color': "white", 'width': 4},
-                    'thickness': 0.75,
-                    'value': success_probability * 100
+            # Now the PlanningHistory class has get_latest_plan implemented
+            if hasattr(agendev.planning_history, 'get_latest_plan'):
+                current_plan = agendev.planning_history.get_latest_plan()
+            
+            # Fallback to get_current_plan if get_latest_plan fails or returns None
+            if current_plan is None and hasattr(agendev.planning_history, 'get_current_plan'):
+                current_plan = agendev.planning_history.get_current_plan()
+            
+            # If we still don't have a plan, show error message
+            if not current_plan:
+                return html.Div([
+                    html.P("No current plan available. Please generate a plan first.", className="text-warning")
+                ])
+                
+            # Analyze risk
+            result = analyze_project_risk(agendev, current_plan)
+            
+            # Create risk visualization
+            success_probability = result.get("success_probability", 0.5)
+            risk_hotspots = result.get("risk_hotspots", [])
+            simulation_results = result.get("simulation_results", {})
+            
+            # Create gauge chart for success probability
+            fig = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = success_probability * 100,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': "Success Probability"},
+                gauge = {
+                    'axis': {'range': [0, 100]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [0, 30], 'color': "red"},
+                        {'range': [30, 70], 'color': "orange"},
+                        {'range': [70, 100], 'color': "green"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "white", 'width': 4},
+                        'thickness': 0.75,
+                        'value': success_probability * 100
+                    }
                 }
-            }
-        ))
-        
-        fig.update_layout(
-            paper_bgcolor = "rgba(0,0,0,0)",
-            plot_bgcolor = "rgba(0,0,0,0)",
-            font = {'color': "white"},
-            height = 300
-        )
-        
-        return html.Div([
-            html.H5("Project Risk Analysis"),
+            ))
             
-            # Success probability gauge
-            dcc.Graph(figure=fig),
+            fig.update_layout(
+                paper_bgcolor = "rgba(0,0,0,0)",
+                plot_bgcolor = "rgba(0,0,0,0)",
+                font = {'color': "white"},
+                height = 300
+            )
             
-            # Risk hotspots
-            html.Div([
-                html.H6("Risk Hotspots"),
-                html.P("Tasks with highest risk of failure:"),
-                dbc.Table([
-                    html.Thead([
-                        html.Tr([
-                            html.Th("Task"),
-                            html.Th("Failure Probability")
+            # Handle potential format for risk_hotspots
+            formatted_hotspots = []
+            if isinstance(risk_hotspots, list):
+                for item in risk_hotspots:
+                    if isinstance(item, dict) and 'task_id' in item and 'success_probability' in item:
+                        # Case when risk_hotspots is a list of dicts with task_id and success_probability
+                        task_id = UUID(item['task_id']) if isinstance(item['task_id'], str) else item['task_id']
+                        probability = item['success_probability']
+                        formatted_hotspots.append((task_id, probability))
+                    elif isinstance(item, tuple) and len(item) == 2:
+                        # Case when risk_hotspots is a list of tuples (task_id, probability)
+                        formatted_hotspots.append(item)
+            
+            return html.Div([
+                html.H5("Project Risk Analysis"),
+                
+                # Success probability gauge
+                dcc.Graph(figure=fig),
+                
+                # Risk hotspots
+                html.Div([
+                    html.H6("Risk Hotspots"),
+                    html.P("Tasks with highest risk of failure:"),
+                    dbc.Table([
+                        html.Thead([
+                            html.Tr([
+                                html.Th("Task"),
+                                html.Th("Failure Probability")
+                            ])
+                        ]),
+                        html.Tbody([
+                            html.Tr([
+                                html.Td(agendev.task_graph.tasks[task_id].title if task_id in agendev.task_graph.tasks else "Unknown"),
+                                html.Td(f"{(1 - probability) * 100:.1f}%")
+                            ]) for task_id, probability in formatted_hotspots
                         ])
-                    ]),
-                    html.Tbody([
-                        html.Tr([
-                            html.Td(agendev.task_graph.tasks[task_id].title if task_id in agendev.task_graph.tasks else "Unknown"),
-                            html.Td(f"{(1 - probability) * 100:.1f}%")
-                        ]) for task_id, probability in risk_hotspots
-                    ])
-                ], bordered=True, dark=True, hover=True, responsive=True, size="sm", striped=True)
-            ], className="mt-3"),
+                    ], bordered=True, dark=True, hover=True, responsive=True, size="sm", striped=True)
+                ], className="mt-3"),
+                
+                # Simulation results
+                html.Div([
+                    html.H6("Monte Carlo Simulation Results"),
+                    html.P(f"Mean completion time: {simulation_results.get('mean_completion_time', 'N/A'):.1f} hours" 
+                        if isinstance(simulation_results.get('mean_completion_time'), (int, float)) else "Mean completion time: N/A"),
+                    html.P(f"Completion probability: {simulation_results.get('completion_probability', 'N/A') * 100:.1f}%" 
+                        if isinstance(simulation_results.get('completion_probability'), (int, float)) else "Completion probability: N/A")
+                ], className="mt-3")
+            ])
+        except Exception as e:
+            # Log the exception
+            import traceback
+            print(f"Error in analyze_risk_callback: {str(e)}")
+            print(traceback.format_exc())
             
-            # Simulation results
-            html.Div([
-                html.H6("Monte Carlo Simulation Results"),
-                html.P(f"Mean completion time: {simulation_results.get('mean_completion_time', 'N/A'):.1f} hours"),
-                html.P(f"Completion probability: {simulation_results.get('completion_probability', 'N/A') * 100:.1f}%")
-            ], className="mt-3")
-        ])
+            # Return friendly error message
+            return html.Div([
+                html.H5("Error in Risk Analysis", className="text-danger"),
+                html.P(f"An error occurred: {str(e)}"),
+                html.Pre(traceback.format_exc(), className="bg-dark p-3 text-white", style={"fontSize": "0.8rem"})
+            ])
     
     @app.callback(
         Output("snapshots-list", "children"),

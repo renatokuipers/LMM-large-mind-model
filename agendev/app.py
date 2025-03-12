@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 try:
     config = AgenDevConfig(
         project_name="AgenDev Dashboard",
-        llm_base_url="http://192.168.2.12:1234",
+        llm_base_url="http://localhost:1234",  # Changed to localhost from 192.168.2.12
         tts_base_url="http://127.0.0.1:7860",
         notifications_enabled=True
     )

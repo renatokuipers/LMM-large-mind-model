@@ -242,6 +242,14 @@ class PlanningHistory(BaseModel):
                 
         return None
     
+    def get_latest_plan(self) -> Optional[PlanSnapshot]:
+        """Get the most recently added plan snapshot."""
+        if not self.snapshots:
+            return None
+        
+        # Return the most recently created snapshot
+        return sorted(self.snapshots, key=lambda x: x.timestamp, reverse=True)[0]
+    
     def get_plan_evolution(self) -> List[Tuple[datetime, float, float]]:
         """Get the evolution of plan confidence and risk over time."""
         return [
