@@ -46,12 +46,12 @@ def register_callbacks(app, agendev):
 
     @app.callback(
         Output("chat-messages", "children"),
-        Input("interval-component", "n_intervals"),
-        Input("chat-history", "data")
+        [Input("chat-history", "data"),
+         Input("interval-component", "n_intervals")]
     )
-    def update_chat_messages(n_intervals, chat_history):
+    def update_chat_messages(chat_history, n_intervals):
         """Update chat messages with system status and user interactions."""
-        if not chat_history or not chat_history.get("messages"):
+        if not chat_history or "messages" not in chat_history:
             # Initialize with a welcome message
             messages = [
                 create_chat_message(
@@ -69,19 +69,22 @@ def register_callbacks(app, agendev):
 
     @app.callback(
         Output("chat-history", "data"),
-        Input("send-message", "n_clicks"),
-        Input("interval-component", "n_intervals"),
-        State("chat-input", "value"),
-        State("chat-history", "data")
+        [Input("send-message", "n_clicks"),
+         Input("chat-input", "value")],
+        [State("chat-history", "data"),
+         State("chat-input", "value")]
     )
-    def handle_chat_interactions(n_clicks, n_intervals, message, chat_history):
+    def handle_chat_interactions(n_clicks, input_trigger, chat_history, message):
         """Handle user messages and update chat history."""
         ctx = dash.callback_context
         if not ctx.triggered:
             return chat_history
         
+        # Initialize chat history if needed
         if not chat_history:
             chat_history = {"messages": []}
+        elif "messages" not in chat_history:
+            chat_history["messages"] = []
         
         # Handle user sending a message
         if ctx.triggered[0]["prop_id"] == "send-message.n_clicks" and message and n_clicks:
@@ -118,33 +121,24 @@ def register_callbacks(app, agendev):
                     "message": f"I encountered an error while processing your request: {str(e)}",
                     "timestamp": datetime.now().strftime("%H:%M")
                 })
-        
-        # Get the current project status to check for updates
-        project_status = agendev.get_project_status()
-        
-        # Add project status updates periodically (every 30 seconds)
-        if n_intervals % 6 == 0 and n_intervals > 0:
-            progress = project_status.get('progress', {}).get('percentage', 0)
-            completed = project_status.get('tasks', {}).get('by_status', {}).get(TaskStatus.COMPLETED.value, 0)
-            total = project_status.get('tasks', {}).get('total', 0)
             
-            if total > 0:
-                # Only add status if it's different from the last one
-                status_message = f"Project update: {progress:.1f}% complete. {completed}/{total} tasks finished."
-                
-                # Check if this is different from the last status message
-                if (not chat_history["messages"] or 
-                    chat_history["messages"][-1].get("sender") != "AgenDev" or
-                    not chat_history["messages"][-1].get("message").startswith("Project update:")):
-                    
-                    chat_history["messages"].append({
-                        "sender": "AgenDev",
-                        "message": status_message,
-                        "timestamp": datetime.now().strftime("%H:%M"),
-                        "type": "status"
-                    })
+            # Clear the input field
+            return chat_history
         
+        # Return unchanged chat history for other triggers
         return chat_history
+
+    # Additional callback to clear the input field after sending
+    @app.callback(
+        Output("chat-input", "value"),
+        [Input("send-message", "n_clicks")],
+        [State("chat-input", "value")]
+    )
+    def clear_input_after_send(n_clicks, current_value):
+        """Clear the input field after sending a message."""
+        if n_clicks and current_value:
+            return ""
+        return current_value
 
     @app.callback(
         Output("code-viewer", "children"),
@@ -226,6 +220,9 @@ def register_callbacks(app, agendev):
             
             # Add creation message to chat history
             if chat_history:
+                if "messages" not in chat_history:
+                    chat_history["messages"] = []
+                    
                 chat_history["messages"].append({
                     "sender": "AgenDev",
                     "message": f"Project '{project_name}' created successfully with {result['epic_count']} epics and {result['task_count']} tasks. Starting autonomous development!",
@@ -258,6 +255,9 @@ def register_callbacks(app, agendev):
             
             # Add message to chat
             if chat_history and result.get("success", False):
+                if "messages" not in chat_history:
+                    chat_history["messages"] = []
+                    
                 chat_history["messages"].append({
                     "sender": "AgenDev",
                     "message": "Autonomous development process started! I'll implement your project and keep you updated on progress.",
@@ -272,6 +272,9 @@ def register_callbacks(app, agendev):
             
             # Add message to chat
             if chat_history and result.get("success", False):
+                if "messages" not in chat_history:
+                    chat_history["messages"] = []
+                    
                 chat_history["messages"].append({
                     "sender": "AgenDev",
                     "message": "Autonomous development process has been stopped. You can restart it anytime.",
