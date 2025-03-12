@@ -1,0 +1,6 @@
+# Dependencies 
+requests 
+pydantic=2.0.0 
+numpy 
+soundfile 
+sounddevice 
