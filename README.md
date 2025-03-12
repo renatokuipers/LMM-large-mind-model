@@ -344,3 +344,96 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 🌌 **The Large Mind Model project:**  
 _A bold, revolutionary, and deeply human journey towards truly conscious artificial intelligence._ 
+
+# AI Chat with TTS
+
+A modern, sleek chat interface for interacting with AI language models and text-to-speech capabilities. Built with Python and Dash.
+
+## Features
+
+- **Dark Mode Interface**: Modern UI with blue and yellow gradients
+- **Real-time Streaming**: Messages appear as they're generated
+- **Text-to-Speech Integration**: Listen to AI responses with multiple voice options
+- **Multiple Model Support**: Compatible with various LLM models
+- **Customizable Settings**: Adjust model parameters, TTS voices, and more
+- **Markdown Support**: AI responses render with proper markdown formatting
+- **Chat Export/Import**: Save and load conversations
+- **Keyboard Shortcuts**: Efficient interaction with keyboard commands
+- **Semantic Search**: Find messages with embedding-based similarity
+- **Smart Prompt Suggestions**: Get contextual follow-up suggestions
+
+## Installation
+
+1. Clone the repository (or download the files to your desired location)
+
+2. Create a virtual environment (recommended):
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+3. Install the required dependencies:
+```powershell
+pip install -r requirements.txt
+```
+
+## Usage
+
+1. Run the application:
+```powershell
+python chat.py
+```
+
+2. Open a web browser and navigate to:
+```
+http://127.0.0.1:8050/
+```
+
+## Important Notes
+
+The application now uses `dash_extensions` for long callbacks instead of Dash's built-in `DiskcacheLongCallback`. This provides better compatibility with various Dash versions. If you encounter any import errors, make sure you have installed all the required dependencies from the requirements.txt file.
+
+## Configuration
+
+- **LLM Settings**:
+  - Model selection (Qwen, Llama3, Claude, GPT, etc.)
+  - Temperature control
+  - Max tokens limit
+  - System prompt customization
+  - API base URL configuration
+
+- **TTS Settings**:
+  - Voice selection from multiple options
+  - Speech speed adjustment
+  - Enable/disable auto-play
+  - Test voice functionality
+
+## Keyboard Shortcuts
+
+- **Ctrl+Enter**: Send message
+- **Ctrl+,**: Toggle settings panel
+- **Ctrl+S**: Export chat
+- **Ctrl+O**: Import chat
+- **Escape**: Close open panels
+
+## Dependencies
+
+- Dash
+- Dash Bootstrap Components
+- Dash Extensions
+- Diskcache
+- Markdown
+- Soundfile
+- Sounddevice
+- Requests
+- Pydantic
+
+## Requirements
+
+- Python 3.8 or higher
+- Internet connection to access the LLM and TTS APIs
+- Web browser with JavaScript enabled
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 

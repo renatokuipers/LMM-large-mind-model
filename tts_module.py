@@ -25,6 +25,7 @@ class GenerateAudioRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.1, le=2.0)
 
     @field_validator('text')
+    @classmethod
     def validate_text(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Text cannot be empty")
@@ -238,14 +239,14 @@ def get_available_voices() -> List[str]:
     Returns:
     List of voice IDs
     """
-    return ["af_nicole", "af_heart"]
+    return ['af_heart', 'af_bella', 'af_nicole', 'af_aoede', 'af_kore', 'af_sarah', 'af_nova', 'af_sky', 'af_alloy', 'af_jessica', 'af_river', 'am_michael', 'am_fenrir', 'am_puck', 'am_echo', 'am_eric', 'am_liam', 'am_onyx', 'am_santa', 'am_adam', 'bf_emma', 'bf_isabella', 'bf_alice', 'bf_lily', 'bm_george', 'bm_fable', 'bm_lewis', 'bm_daniel', 'pf_dora', 'pm_alex', 'pm_santa']
 
 def tips_for_better_speech():
     """
     Return tips for better speech synthesis
     """
     return """
-    💡 Tips for Better Results
+    Tips for Better Results
     
     Improve Speech Quality:
     - Add punctuation: Proper punctuation helps create natural pauses and intonation

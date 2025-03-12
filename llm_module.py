@@ -109,6 +109,21 @@ class LLMClient:
                 except json.JSONDecodeError:
                     continue
         return accumulated_text
+    
+    def stream_generator(self, response: requests.Response):
+        """Generator that yields each token as it arrives from the stream"""
+        for line in response.iter_lines():
+            if line:
+                try:
+                    line_text = line.decode('utf-8')
+                    if line_text.startswith('data: '):
+                        json_response = json.loads(line_text.replace('data: ', ''))
+                        chunk = json_response.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if chunk:
+                            yield chunk
+                except (json.JSONDecodeError, Exception) as e:
+                    print(f"Error processing stream chunk: {str(e)}")
+                    continue
 
 # -------------------------
 # Usage Example (Embedding)
@@ -146,4 +161,3 @@ if __name__ == "__main__":
     # Embedding usage example:
     embedding_response = client.get_embedding(["I feel happy today!"])
     print("\n\nEmbedding Response:", embedding_response)
-
