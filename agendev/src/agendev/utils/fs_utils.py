@@ -46,20 +46,47 @@ DEFAULT_FILES = {
 def get_workspace_root() -> Path:
     """Get the root path of the workspace."""
     # Try to find the workspace directory by looking for markers
-    current_dir = Path.cwd()
-    
-    # Look for workspace directory up to 3 levels up
-    for _ in range(4):
-        if (current_dir / "workspace").exists():
-            return current_dir / "workspace"
-        if current_dir.parent == current_dir:  # At root directory
-            break
-        current_dir = current_dir.parent
-    
-    # If not found, use a directory within the current working directory
-    workspace_path = Path.cwd() / "workspace"
-    os.makedirs(workspace_path, exist_ok=True)
-    return workspace_path
+    try:
+        # Start with current working directory
+        current_dir = Path.cwd()
+        current_dir = Path(os.path.normpath(str(current_dir)))
+        
+        # Look for workspace directory up to 3 levels up
+        for _ in range(4):
+            # Check if workspace directory exists at this level
+            workspace_path = current_dir / "workspace"
+            if workspace_path.exists() and workspace_path.is_dir():
+                return workspace_path
+                
+            # Check if we're already in a workspace directory
+            if current_dir.name == "workspace":
+                return current_dir
+                
+            # Check if we're at root directory (can't go up further)
+            if current_dir.parent == current_dir:
+                break
+                
+            # Go up one level
+            current_dir = current_dir.parent
+        
+        # If not found, check execution directory
+        app_dir = Path(os.path.abspath(os.path.dirname(__file__))).parent.parent.parent.parent
+        workspace_path = app_dir / "workspace"
+        if workspace_path.exists() and workspace_path.is_dir():
+            return workspace_path
+        
+        # If still not found, create in current working directory
+        workspace_path = Path.cwd() / "workspace"
+        os.makedirs(workspace_path, exist_ok=True)
+        print(f"Created workspace directory at: {workspace_path}")
+        return workspace_path
+        
+    except Exception as e:
+        print(f"Error locating workspace root: {e}")
+        # Fallback to current directory + workspace
+        workspace_path = Path.cwd() / "workspace"
+        os.makedirs(workspace_path, exist_ok=True)
+        return workspace_path
 
 def ensure_workspace_structure() -> Path:
     """Create the workspace directory structure if it doesn't exist."""
@@ -108,22 +135,44 @@ def resolve_path(path: Union[str, Path], create_parents: bool = False) -> Path:
     Returns:
         Absolute Path object
     """
-    path_obj = Path(path)
-    
-    # If path is absolute, use it directly
-    if path_obj.is_absolute():
-        if create_parents:
-            os.makedirs(path_obj.parent, exist_ok=True)
-        return path_obj
-    
-    # Otherwise, make it relative to workspace root
-    workspace_root = get_workspace_root()
-    full_path = workspace_root / path_obj
-    
-    if create_parents:
-        os.makedirs(full_path.parent, exist_ok=True)
+    try:
+        # Convert to Path if it's a string and normalize for Windows
+        path_obj = Path(os.path.normpath(str(path))) if isinstance(path, str) else Path(os.path.normpath(str(path)))
         
-    return full_path
+        # If path is already absolute, use it directly
+        if path_obj.is_absolute():
+            if create_parents and path_obj.parent:
+                os.makedirs(path_obj.parent, exist_ok=True)
+            return path_obj
+        
+        # Otherwise, join with workspace root
+        workspace_root = get_workspace_root()
+        full_path = workspace_root / path_obj
+        
+        # Ensure the path is normalized (especially important for Windows)
+        full_path = Path(os.path.normpath(str(full_path)))
+        
+        if create_parents and full_path.parent:
+            try:
+                os.makedirs(full_path.parent, exist_ok=True)
+                print(f"Created directories for: {full_path.parent}")
+            except Exception as e:
+                print(f"Error creating directories for {full_path.parent}: {e}")
+                
+        return full_path
+        
+    except Exception as e:
+        print(f"Error resolving path {path}: {e}")
+        # Fall back to a safe option
+        workspace_root = get_workspace_root()
+        if isinstance(path, (str, Path)):
+            filename = os.path.basename(str(path))
+            safe_path = workspace_root / filename
+            if create_parents:
+                os.makedirs(safe_path.parent, exist_ok=True)
+            return safe_path
+        else:
+            return workspace_root
 
 def load_json(path: Union[str, Path]) -> Dict:
     """
@@ -177,30 +226,31 @@ def safe_save_json(data: Dict, path: Union[str, Path], pretty: bool = True) -> b
     full_path = resolve_path(path, create_parents=True)
     
     # Create temporary file in the same directory
-    temp_file = None
+    temp_path = None
     try:
         # Create a temporary file in the same directory
         dir_path = full_path.parent
-        fd, temp_path = tempfile.mkstemp(dir=dir_path, suffix=".json.tmp")
-        os.close(fd)  # Close file descriptor
+        os.makedirs(dir_path, exist_ok=True)
         
-        # Write data to temporary file
-        with open(temp_path, 'w') as f:
-            json.dump(data, f, indent=2 if pretty else None, default=str)
+        # Use NamedTemporaryFile which properly handles cleanup
+        with tempfile.NamedTemporaryFile(dir=dir_path, suffix=".json.tmp", delete=False, mode='w') as temp_file:
+            temp_path = temp_file.name
+            # Write data directly to the file object
+            json.dump(data, temp_file, indent=2 if pretty else None, default=str)
+            # Ensure file is flushed to disk
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
         
-        # Ensure the temporary file is fully written
-        os.fsync(os.open(temp_path, os.O_RDONLY))
-        
-        # Replace the original file with the temporary file
+        # Replace the original file with the temporary file (after temp_file is closed)
         shutil.move(temp_path, full_path)
         return True
         
     except Exception as e:
         print(f"Error saving JSON to {full_path}: {e}")
         # Attempt to clean up temporary file if it exists
-        if temp_file and os.path.exists(temp_file):
+        if temp_path and os.path.exists(temp_path):
             try:
-                os.remove(temp_file)
+                os.remove(temp_path)
             except:
                 pass
         return False
@@ -305,12 +355,25 @@ def save_snapshot(content: str, file_path: Union[str, Path],
     if isinstance(file_path, str):
         file_path = Path(file_path)
     
+    # Normalize path for Windows
+    file_path = Path(os.path.normpath(str(file_path)))
+    
     if file_path.is_absolute():
         try:
             workspace_root = get_workspace_root()
-            rel_path = file_path.relative_to(workspace_root)
-        except ValueError:
+            # Handle Windows paths
+            workspace_root_str = str(workspace_root)
+            file_path_str = str(file_path)
+            
+            # Ensure we handle Windows paths correctly
+            if file_path_str.startswith(workspace_root_str):
+                rel_path = Path(file_path_str[len(workspace_root_str):].lstrip('/\\'))
+            else:
+                # If the file is outside the workspace, use the filename only
+                rel_path = Path(file_path.name)
+        except ValueError as e:
             # If the file is outside the workspace, use the filename only
+            print(f"Path resolution error: {e}")
             rel_path = Path(file_path.name)
     else:
         rel_path = file_path
@@ -329,18 +392,36 @@ def save_snapshot(content: str, file_path: Union[str, Path],
         **metadata
     }
     
-    # Determine snapshot path
-    snapshot_dir = resolve_path(f"artifacts/snapshots/{rel_path.parent}", create_parents=True)
-    snapshot_content_path = snapshot_dir / f"{rel_path.stem}_{hash_value[:8]}{rel_path.suffix}"
-    snapshot_metadata_path = snapshot_dir / f"{rel_path.stem}_{hash_value[:8]}.meta.json"
+    # Create parent directories safely by splitting into parts
+    # First create the main snapshot directory
+    snapshot_base = resolve_path("artifacts/snapshots", create_parents=True)
     
-    # Save content and metadata
-    with open(snapshot_content_path, 'w') as f:
-        f.write(content)
+    # Then create the subdirectories based on rel_path.parent
+    rel_parent = rel_path.parent
+    if rel_parent and str(rel_parent) != '.':
+        # Create each part of the directory path separately to avoid issues
+        snapshot_dir = snapshot_base / rel_parent
+        os.makedirs(snapshot_dir, exist_ok=True)
+    else:
+        snapshot_dir = snapshot_base
     
-    save_json(snapshot_metadata, snapshot_metadata_path)
+    # Generate unique filenames for content and metadata
+    snapshot_stem = f"{rel_path.stem}_{hash_value[:8]}"
+    snapshot_content_path = snapshot_dir / f"{snapshot_stem}{rel_path.suffix}"
+    snapshot_metadata_path = snapshot_dir / f"{snapshot_stem}.meta.json"
     
-    return hash_value, snapshot_content_path
+    # Save content and metadata with improved error handling
+    try:
+        with open(snapshot_content_path, 'w') as f:
+            f.write(content)
+        
+        save_json(snapshot_metadata, snapshot_metadata_path)
+        print(f"Successfully saved snapshot to {snapshot_content_path}")
+        return hash_value, snapshot_content_path
+    except Exception as e:
+        print(f"Error saving snapshot: {e}")
+        # Return the hash and an empty path as fallback
+        return hash_value, Path("")
 
 def list_snapshots(file_path: Union[str, Path]) -> List[Dict]:
     """

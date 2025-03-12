@@ -69,7 +69,15 @@ class LLMClient:
         if stream:
             return response
         else:
-            return response.json()["choices"][0]["message"]["content"]
+            content = response.json()["choices"][0]["message"]["content"]
+            # Parse the content as JSON since it should be a valid JSON string
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON response: {e}")
+                print(f"Raw content: {content}")
+                # Return an empty dict as fallback
+                return {}
 
     # -------------------------
     # Embedding Methods

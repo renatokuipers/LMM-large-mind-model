@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .utils.fs_utils import (
     resolve_path, save_snapshot, list_snapshots, get_latest_snapshot,
-    load_json, save_json, content_hash
+    load_json, save_json, safe_save_json, content_hash
 )
 
 class SnapshotMetadata(BaseModel):
@@ -53,6 +53,14 @@ class Branch(BaseModel):
     head_snapshot_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     snapshots: List[str] = Field(default_factory=list)
+    
+    @model_validator(mode='after')
+    def validate_branch(self) -> 'Branch':
+        """Validate branch data and set defaults."""
+        # Ensure created_at is a valid datetime
+        if not self.created_at or isinstance(self.created_at, str) and not self.created_at:
+            self.created_at = datetime.now()
+        return self
 
 class SnapshotEngine:
     """Manages code snapshots and version history."""
@@ -87,7 +95,18 @@ class SnapshotEngine:
             
         branches_data = load_json(self.branches_file)
         for branch_name, branch_data in branches_data.get("branches", {}).items():
-            self.branches[branch_name] = Branch.model_validate(branch_data)
+            # Fix empty created_at
+            if "created_at" in branch_data and (not branch_data["created_at"] or branch_data["created_at"] == ""):
+                branch_data["created_at"] = datetime.now().isoformat()
+            try:
+                self.branches[branch_name] = Branch.model_validate(branch_data)
+            except Exception as e:
+                # If validation fails, create a new branch with default values
+                self.branches[branch_name] = Branch(
+                    name=branch_name,
+                    head_snapshot_id=branch_data.get("head_snapshot_id"),
+                    snapshots=branch_data.get("snapshots", [])
+                )
     
     def _save_branches(self) -> None:
         """Save branch information to disk."""
@@ -96,7 +115,7 @@ class SnapshotEngine:
                 name: branch.model_dump() for name, branch in self.branches.items()
             }
         }
-        save_json(branches_data, self.branches_file)
+        safe_save_json(branches_data, self.branches_file)
     
     def create_snapshot(
         self,
@@ -154,7 +173,7 @@ class SnapshotEngine:
         
         # Save metadata
         metadata_path = self.metadata_dir / f"{metadata.snapshot_id}.json"
-        save_json(metadata.model_dump(), metadata_path)
+        safe_save_json(metadata.model_dump(), metadata_path)
         
         # Update branch
         branch_obj = self.branches[branch]
@@ -226,6 +245,33 @@ class SnapshotEngine:
         except Exception as e:
             print(f"Error reading snapshot {snapshot_id}: {e}")
             return None
+    
+    def get_all_snapshots(self, branch: Optional[str] = None) -> List[SnapshotMetadata]:
+        """
+        Get all snapshots across all files.
+        
+        Args:
+            branch: Optional branch to filter by
+            
+        Returns:
+            List of snapshot metadata
+        """
+        snapshots = []
+        
+        # List all snapshot metadata files
+        for metadata_file in self.metadata_dir.glob("*.json"):
+            try:
+                data = load_json(metadata_file)
+                metadata = SnapshotMetadata.model_validate(data)
+                
+                # Filter by branch if specified
+                if branch is None or metadata.snapshot_id in self.branches.get(branch, Branch(name="")).snapshots:
+                    snapshots.append(metadata)
+            except Exception as e:
+                print(f"Error loading snapshot metadata {metadata_file}: {e}")
+        
+        # Sort by timestamp (newest first)
+        return sorted(snapshots, key=lambda x: x.timestamp, reverse=True)
     
     def compare_snapshots(self, source_id: str, target_id: str) -> Optional[SnapshotDiff]:
         """

@@ -7,6 +7,7 @@ import shutil
 from typing import List, Optional, Dict, Any, Literal, Union
 from pathlib import Path
 from uuid import uuid4
+import threading
 
 import requests
 from pydantic import BaseModel, Field, field_validator
@@ -18,6 +19,9 @@ import sounddevice as sd
 # Output directory for generated audio files
 OUTPUT_DIRECTORY = "generated"
 DEFAULT_FILENAME = "output_voice.wav"
+
+# Global variable to track if audio is playing
+is_audio_playing = False
 
 class GenerateAudioRequest(BaseModel):
     text: str
@@ -176,22 +180,42 @@ def get_output_path(filename: Optional[str] = None) -> str:
 
 def play_audio(file_path: str):
     """
-    Play audio file using sounddevice and soundfile
+    Play audio file using sounddevice and soundfile in a non-blocking way
     
     Parameters:
     file_path: str - Path to the audio file to play
     """
-    try:
-        # Load audio file
-        data, samplerate = sf.read(file_path)
+    global is_audio_playing
+    
+    # If audio is already playing, don't start a new one
+    if is_audio_playing:
+        print("Audio is already playing, not starting a new playback")
+        return
         
-        # Play audio
-        sd.play(data, samplerate)
-        
-        # Wait until file is done playing
-        sd.wait()
-    except Exception as e:
-        print(f"Error playing audio: {e}")
+    def _play_in_background():
+        global is_audio_playing
+        try:
+            # Set flag to indicate audio is playing
+            is_audio_playing = True
+            
+            # Load audio file
+            data, samplerate = sf.read(file_path)
+            
+            # Play audio
+            sd.play(data, samplerate)
+            
+            # Wait until file is done playing
+            sd.wait()
+        except Exception as e:
+            print(f"Error playing audio: {e}")
+        finally:
+            # Reset flag when done
+            is_audio_playing = False
+    
+    # Start audio playback in a separate thread
+    audio_thread = threading.Thread(target=_play_in_background)
+    audio_thread.daemon = True  # Thread will exit when main program exits
+    audio_thread.start()
 
 def text_to_speech(
     text: str, 
@@ -213,6 +237,8 @@ def text_to_speech(
     Returns:
     Dict containing audio_path and phoneme_sequence
     """
+    global is_audio_playing
+    
     client = TTSClient()
     
     if output_path is None:
@@ -227,7 +253,9 @@ def text_to_speech(
     result = client.generate_audio(request, save_to=output_path)
     
     if auto_play and "audio_path" in result and os.path.exists(result["audio_path"]):
-        play_audio(result["audio_path"])
+        # Only play if no audio is currently playing
+        if not is_audio_playing:
+            play_audio(result["audio_path"])
     
     return result
 

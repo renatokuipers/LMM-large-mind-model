@@ -481,65 +481,73 @@ class AgenDev:
             if code_blocks:
                 code = "\n\n".join(code_blocks)
         
-        # Create a snapshot
-        file_path = f"src/{task.title.lower().replace(' ', '_')}.py"
-        snapshot_metadata = self.snapshot_engine.create_snapshot(
-            file_path=file_path,
-            content=code,
-            commit_message=f"Implementation of {task.title}",
-            tags=[task.task_type.value]
-        )
+        # Create safe file name from task title
+        import re
+        safe_filename = re.sub(r'[^\w\-_\.]', '_', task.title.lower().replace(' ', '_'))
+        file_path = f"src/{safe_filename}.py"
         
-        # Update task status
-        old_status = task.status
-        task.status = TaskStatus.COMPLETED
-        task.completion_percentage = 100.0
-        task.actual_duration_hours = task.estimated_duration_hours  # In real system, we'd track actual time
-        task.artifact_paths.append(file_path)
-        
-        # Notify about task completion
-        if self.notification_manager:
-            self.notification_manager.task_status_update(task, old_status)
-        
-        # Index the new file in context manager
-        if self.context_manager:
-            # Save the file to disk
-            resolved_path = resolve_path(file_path, create_parents=True)
-            with open(resolved_path, 'w') as f:
-                f.write(code)
-            # Index it for future context
-            self.context_manager.index_file(resolved_path)
-        
-        # Generate tests
-        test_file = None
         try:
-            if self.test_generator:
-                resolved_path = resolve_path(file_path)
-                suite = self.test_generator.generate_test_suite(resolved_path)
-                test_file = self.test_generator.save_test_suite(suite)
+            # Make sure the src directory exists
+            src_dir = resolve_path("src", create_parents=True)
+            
+            # Create a snapshot
+            snapshot_metadata = self.snapshot_engine.create_snapshot(
+                file_path=file_path,
+                content=code,
+                commit_message=f"Implementation of {task.title}",
+                tags=[task.task_type.value]
+            )
+            
+            # Actually save the implementation file
+            full_path = resolve_path(file_path, create_parents=True)
+            with open(full_path, 'w') as f:
+                f.write(code)
                 
-                if self.notification_manager:
-                    self.notification_manager.info(f"Tests generated for {task.title}.")
-        except Exception as e:
-            logger.error(f"Error generating tests: {e}")
+            # Update task status
+            old_status = task.status
+            task.status = TaskStatus.COMPLETED
+            task.completion_percentage = 100.0
+            task.actual_duration_hours = task.estimated_duration_hours  # In real system, we'd track actual time
+            task.artifact_paths.append(file_path)
+            
+            # Notify about task completion
             if self.notification_manager:
-                self.notification_manager.warning(f"Failed to generate tests: {e}")
-        
-        # Update task graph statistics
-        self.task_graph.calculate_epic_progress()
-        
-        # Auto-save project state
-        self._save_project_state()
-        
-        # Return implementation details
-        return {
-            "task_id": str(task_id),
-            "title": task.title,
-            "status": task.status.value,
-            "implementation_file": file_path,
-            "snapshot_id": snapshot_metadata.snapshot_id if snapshot_metadata else None,
-            "test_file": test_file
-        }
+                self.notification_manager.task_status_update(task, old_status)
+            
+            # Update dependencies
+            self.task_graph.update_task_statuses()
+            
+            # Auto-save if needed
+            self._save_project_state()
+            
+            return {
+                "success": True,
+                "task_id": str(task_id),
+                "implementation": implementation,
+                "file_path": file_path,
+                "snapshot_id": snapshot_metadata.snapshot_id
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to implement task '{task.title}': {str(e)}"
+            print(f"Implementation error: {error_msg}")
+            
+            # Update task status to failed
+            old_status = task.status
+            task.status = TaskStatus.FAILED
+            
+            # Notify about failure
+            if self.notification_manager:
+                self.notification_manager.error(error_msg)
+            
+            # Save state even on failure
+            self._save_project_state()
+            
+            return {
+                "success": False,
+                "task_id": str(task_id),
+                "error": error_msg
+            }
     
     def get_project_status(self) -> Dict[str, Any]:
         """

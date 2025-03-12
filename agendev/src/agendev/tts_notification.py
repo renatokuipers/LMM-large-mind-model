@@ -363,15 +363,15 @@ class NotificationManager:
             metadata=metadata
         )
     
-    def silence(self, enable: bool = True) -> None:
+    def silence(self, enable_silent_mode: bool) -> None:
         """
-        Enable or disable silent mode.
+        Enable or disable silent mode for notifications.
         
         Args:
-            enable: Whether to enable silent mode
+            enable_silent_mode: Whether to enable silent mode
         """
-        self.config.silent_mode = enable
-        logger.info(f"Silent mode {'enabled' if enable else 'disabled'}")
+        logger.info(f"{'Enabling' if enable_silent_mode else 'Disabling'} silent mode")
+        self.config.silent_mode = enable_silent_mode
     
     def get_history(self, limit: int = 10, notification_type: Optional[NotificationType] = None) -> List[Dict[str, Any]]:
         """

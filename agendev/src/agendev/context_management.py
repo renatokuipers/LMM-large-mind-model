@@ -134,7 +134,7 @@ class ContextManager:
         
         for element_id, element in self.elements.items():
             element_path = elements_dir / f"{element_id}.json"
-            save_json(element.model_dump(), element_path)
+            safe_save_json(element.model_dump(), element_path)
     
     def create_element(self, 
                      content: str, 
@@ -320,6 +320,34 @@ class ContextManager:
         for rel_type, rel_ids in element.related_ids.items():
             result[rel_type] = [self.elements.get(rel_id) for rel_id in rel_ids 
                                if rel_id in self.elements]
+        
+        return result
+    
+    def get_top_elements(self, limit: int = 10) -> List[Dict[str, str]]:
+        """
+        Get the most recently added elements in the context manager.
+        
+        Args:
+            limit: Maximum number of elements to return
+            
+        Returns:
+            List of dictionaries with element information
+        """
+        # Sort elements by creation time (newest first)
+        sorted_elements = sorted(
+            self.elements.values(), 
+            key=lambda x: x.created_at if hasattr(x, 'created_at') else datetime.now(),
+            reverse=True
+        )
+        
+        # Return the first 'limit' elements
+        result = []
+        for element in sorted_elements[:limit]:
+            result.append({
+                "type": element.element_type,
+                "name": element.metadata.get("name", "Unnamed") if element.metadata else "Unnamed",
+                "file": element.source_file or "Unknown"
+            })
         
         return result
     

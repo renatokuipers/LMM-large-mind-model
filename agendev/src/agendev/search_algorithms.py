@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from heapq import heappush, heappop
 import numpy as np
+import os
 
 from .models.planning_models import (
     SearchNode, MCTSNode, AStarNode, SimulationConfig, 
@@ -412,6 +413,62 @@ class MCTSPlanner:
             "total_simulations": self.total_simulations
         }
         safe_save_json(sequence_data, sequence_path)
+
+    def save_session(self) -> None:
+        """Save the current session state to disk."""
+        if not self.session_dir.exists():
+            os.makedirs(self.session_dir, exist_ok=True)
+        
+        # Save session metadata
+        session_data = {
+            "id": self.session.id,
+            "timestamp": datetime.now().isoformat(),
+            "statistics": {
+                "total_simulations": self.total_simulations,
+                "successful_simulations": self.successful_simulations
+            },
+            "config": {
+                "max_iterations": self.config.max_iterations,
+                "exploration_weight": self.config.exploration_weight
+            }
+        }
+        
+        # Use safe_save_json instead of save_json
+        safe_save_json(session_data, self.session_dir / "session.json")
+        
+        # Save tree nodes
+        self.save_tree()
+    
+    def save_tree(self) -> None:
+        """Save the current tree state to disk."""
+        if not self.session_dir.exists():
+            os.makedirs(self.session_dir, exist_ok=True)
+        
+        # Serialize the nodes
+        serialized_nodes = {}
+        for node_id, node in self.nodes.items():
+            serialized_nodes[str(node_id)] = {
+                "id": str(node.id),
+                "parent_id": str(node.parent_id) if node.parent_id else None,
+                "state": [str(task_id) for task_id in node.state],
+                "untried_actions": [str(task_id) for task_id in node.untried_actions],
+                "children": [str(child_id) for child_id in node.children],
+                "visits": node.visits,
+                "value": node.value,
+                "heuristic": node.heuristic
+            }
+        
+        # Save nodes
+        safe_save_json(serialized_nodes, self.session_dir / "nodes.json")
+        
+        # Save best sequence if available
+        if self._get_best_sequence():
+            sequence_data = {
+                "sequence": [str(task_id) for task_id in self._get_best_sequence()],
+                "value": self.successful_simulations / max(1, self.total_simulations),
+                "timestamp": datetime.now().isoformat()
+            }
+            safe_save_json(sequence_data, self.session_dir / "best_sequence.json")
 
 class AStarPathfinder:
     """A* search implementation for finding optimal task sequences."""
