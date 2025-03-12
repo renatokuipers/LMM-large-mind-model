@@ -26,7 +26,6 @@ ENV/
 
 # Project specific directories (adjust as needed)
 data/
-models/
 logs/
 checkpoints/
 runs/
