@@ -2,7 +2,7 @@
 pydantic>=2.5.2  # For data validation and settings management
 numpy>=1.24.0    # Numerical operations
 torch>=2.1.0     # Neural network framework
-faiss-cpu>=1.7.4  # Vector similarity search (CPU version)
+faiss-cpu>=1.7.4  # Vector similarity search
 
 # API and communication
 requests>=2.31.0  # HTTP requests for API communication
