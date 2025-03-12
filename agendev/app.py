@@ -4,7 +4,21 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import json
 import time
+import os
+import asyncio
+import uuid
 from datetime import datetime
+from pathlib import Path
+
+# Import agents and necessary modules for agentic functionality
+from agendev.agents.planner_agent import PlannerAgent
+from agendev.agents.code_agent import CodeAgent
+from agendev.agents.integration_agent import IntegrationAgent
+from agendev.agents.deployment_agent import DeploymentAgent
+from agendev.agents.knowledge_agent import KnowledgeAgent
+from agendev.utils.config import load_config
+from agendev.utils.llm import LLMProvider
+from agendev.llm_integration import LLMIntegration, LLMConfig
 
 # Initialize the Dash app with dark theme
 app = dash.Dash(
@@ -18,6 +32,46 @@ app = dash.Dash(
         {"name": "viewport", "content": "width=device-width, initial-scale=1.0"}
     ],
 )
+
+# Load configuration
+config = load_config()
+workspace_path = config.get("workspace_path", os.getcwd())
+
+# Initialize LLM provider and agents
+llm_config = config.get("llm", {})
+llm_provider = LLMProvider(llm_config)
+
+# Initialize LLM integration for agents
+base_url = llm_config.get("endpoint", "http://192.168.2.12:1234")
+model = llm_config.get("model", "qwen2.5-7b-instruct")
+llm_integration_config = LLMConfig(
+    model=model,
+    temperature=0.7, 
+    max_tokens=4000
+)
+llm_integration = LLMIntegration(
+    base_url=base_url,
+    config=llm_integration_config
+)
+
+# Initialize agents
+planner_agent = PlannerAgent()
+planner_agent.initialize(llm_integration)
+
+code_agent = CodeAgent()
+code_agent.initialize(llm_integration)
+
+integration_agent = IntegrationAgent()
+integration_agent.initialize(llm_integration)
+
+deployment_agent = DeploymentAgent()
+deployment_agent.initialize(llm_integration)
+
+knowledge_agent = KnowledgeAgent()
+knowledge_agent.initialize(llm_integration)
+
+# Store for active projects
+active_projects = {}
 
 # Custom CSS for styling to match the screenshots
 app.index_string = '''
@@ -477,7 +531,7 @@ main_view = html.Div(
             className="chat-container",
             id="chat-container",
             children=[
-                # Header with current task
+                # Header with current task (this will be dynamically replaced)
                 html.Div(
                     className="system-message",
                     children=[
@@ -488,60 +542,11 @@ main_view = html.Div(
                                 html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
                             ]
                         ),
-                        html.H3(id="project-title", children="Python Snake Game Development", style={"margin": "0 0 10px 0"})
+                        html.H3(id="project-title", children="", style={"margin": "0 0 10px 0"})
                     ]
                 ),
                 
-                # Example of a task section
-                create_collapsible_section(
-                    "task1",
-                    html.Div([
-                        html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"}),
-                        html.Span("Continue: Create Next.js application for political debate simulation")
-                    ]),
-                    [
-                        html.P("Creating a Next.js application for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_command_element("cd /home/ubuntu && create_nextjs_app zelenskyy_debate_sim"),
-                        html.P("Successfully created Next.js application for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/app/data/scenarios.json")
-                    ]
-                ),
-                
-                # Example of a task section
-                create_collapsible_section(
-                    "task2",
-                    html.Div([
-                        html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"}),
-                        html.Span("Develop dialogue system and political scenario scripts")
-                    ]),
-                    [
-                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Editing", "zelenskyy_debate_sim/src/app/page.tsx"),
-                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/app/simulation/page.tsx"),
-                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Editing", "zelenskyy_debate_sim/src/app/globals.css")
-                    ]
-                ),
-                
-                # Example of a task section
-                create_collapsible_section(
-                    "task3",
-                    html.Div([
-                        html.I(className="fas fa-spinner fa-spin", style={"marginRight": "10px", "color": "#ffc107"}),
-                        html.Span("Design and implement user interface with styling")
-                    ]),
-                    [
-                        html.P("Moving to add additional user interface elements and styling to the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/CharacterPortrait.tsx"),
-                        html.P("Adding user interface components and styling to enhance the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/DialogueBubble.tsx"),
-                        html.P("Adding user interface components and styling to enhance the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/ResponseOption.tsx")
-                    ]
-                ),
-                
-                # Thinking indicator
+                # Initial thinking indicator - will be replaced by agent-generated content
                 html.Div(
                     className="chat-message",
                     children=[
@@ -553,7 +558,7 @@ main_view = html.Div(
                             },
                             children=[
                                 html.I(className="fas fa-circle-notch fa-spin", style={"marginRight": "10px"}),
-                                html.Span("Thinking")
+                                html.Span("Processing your request...")
                             ]
                         )
                     ]
@@ -579,6 +584,7 @@ main_view = html.Div(
                 
                 # View type indicator
                 html.Div(
+                    id="view-type-indicator",
                     style={
                         "padding": "5px 10px",
                         "backgroundColor": "#2d2d2d",
@@ -588,7 +594,7 @@ main_view = html.Div(
                     },
                     children=[
                         html.Span("AgenDev is using", style={"color": "#888", "marginRight": "5px"}),
-                        html.Span("Editor"),
+                        html.Span("Terminal"),
                         html.Div(
                             style={
                                 "marginLeft": "20px",
@@ -598,9 +604,9 @@ main_view = html.Div(
                                 "fontSize": "0.85em"
                             },
                             children=[
-                                html.Span("Creating file"),
+                                html.Span("Initializing"),
                                 html.Code(
-                                    "zelenskyy_debate_sim/src/app/data/scenarios.json",
+                                    "workspace",
                                     style={
                                         "marginLeft": "5px",
                                         "backgroundColor": "transparent",
@@ -617,42 +623,8 @@ main_view = html.Div(
                     className="view-content",
                     id="view-content",
                     children=[
-                        # Default to editor view
-                        create_editor_view(
-                            "scenarios.json",
-                            '''
-{
-  "scenarios": [
-    {
-      "id": 1,
-      "title": "Opening Remarks",
-      "description": "President Trump welcomes you to the White House. The meeting has just begun with initial pleasantries.",
-      "trumpDialogue": "President Trump welcomes you to the White House. We're going to have a great discussion today about ending this terrible war. I hope I'm going to be remembered as a peacemaker.",
-      "vanceDialogue": "",
-      "options": [
-        {
-          "id": "1a",
-          "text": "Thank you, Mr. President. Ukraine is grateful for America's support. We look forward to discussing how we can achieve a just peace that ensures Ukraine's security.",
-          "type": "diplomatic",
-          "trumpReaction": "positive",
-          "vanceReaction": "neutral",
-          "nextScenario": 2
-        },
-        {
-          "id": "1b",
-          "text": "Thank you for meeting with me. I must emphasize that Ukraine needs more than just words - we need continued military support and security guarantees to end this war.",
-          "type": "assertive",
-          "trumpReaction": "neutral",
-          "vanceReaction": "negative",
-          "nextScenario": 2
-        },
-        ...
-      ]
-    }
-  ]
-}''',
-                            "json"
-                        )
+                        # Default to terminal view with initialization message
+                        create_terminal_view("Initializing AgenDev system...\nWaiting for your input...")
                     ]
                 ),
                 
@@ -683,7 +655,7 @@ main_view = html.Div(
                                         id="playback-slider",
                                         min=0,
                                         max=100,
-                                        value=50,
+                                        value=0,
                                         updatemode="drag",
                                         marks=None,
                                         tooltip={"always_visible": False},
@@ -694,15 +666,15 @@ main_view = html.Div(
                             ]
                         ),
                         html.Div(
+                            id="status-indicator",
                             className="status-indicator",
                             children=[
                                 html.Span(
-                                    html.I(className="fas fa-check-circle"),
-                                    className="status-tag success",
+                                    html.I(className="fas fa-circle-notch fa-spin"),
+                                    className="status-tag in-progress",
                                     style={"marginRight": "5px"}
                                 ),
-                                html.Span("Deploy simulation to a public URL for permanent access"),
-                                html.Span("9/9", className="time-indicator")
+                                html.Span("Waiting for input...")
                             ]
                         )
                     ]
@@ -713,83 +685,427 @@ main_view = html.Div(
 )
 
 # Store of playback data with timeline steps
-def create_demo_playback_data():
-    return {
-        "total_steps": 10,
-        "current_step": 0,
-        "is_playing": False,
-        "steps": [
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu && cd /home/ubuntu\nubuntu@sandbox:~ $ create_nextjs_app python_snake_game\nStarting setup...\nCreating Next.js app for development: python_snake_game\nInstalling dependencies...\nInitializing git repository...",
-                "timestamp": "00:00"
-            },
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu && cd /home/ubuntu\nubuntu@sandbox:~ $ create_nextjs_app python_snake_game\nStarting setup...\nCreating Next.js app for development: python_snake_game\nInstalling dependencies...\nInitializing git repository...\nCreated new Next.js app python_snake_game at /home/ubuntu/python_snake_game\n--- Project Structure ---\n|— migrations/\n|   └— 0001_initial.sql      # DB migration script\n|— src/\n|   |— app/                 # Next.js pages\n|   |   └— counter.ts       # Example component\n|   |— components/\n|   |— hooks/\n|   |— lib/\n|   └— wrangler.toml        # Cloudflare config",
-                "timestamp": "00:10"
-            },
-            {
-                "type": "editor",
-                "filename": "game_engine.py",
-                "content": "# game_engine.py\n\nclass SnakeGame:\n    def __init__(self, width, height):\n        self.width = width\n        self.height = height\n        self.snake = [(width // 2, height // 2)]\n        self.direction = 'RIGHT'\n        self.food = None\n        self.score = 0\n        self.game_over = False\n        self._place_food()\n    \n    def _place_food(self):\n        # Logic to place food\n        import random\n        while True:\n            x = random.randint(0, self.width - 1)\n            y = random.randint(0, self.height - 1)\n            if (x, y) not in self.snake:\n                self.food = (x, y)\n                break",
-                "timestamp": "00:30"
-            },
-            {
-                "type": "editor",
-                "filename": "snake_game.py",
-                "content": "# snake_game.py\nimport pygame\nimport sys\nfrom game_engine import SnakeGame\n\nclass SnakeGameUI:\n    def __init__(self, width=20, height=20, cell_size=20):\n        self.width = width\n        self.height = height\n        self.cell_size = cell_size\n        self.game = SnakeGame(width, height)\n        \n        # Initialize pygame\n        pygame.init()\n        self.screen = pygame.display.set_mode(\n            (width * cell_size, height * cell_size)\n        )\n        pygame.display.set_caption('Python Snake Game')\n        \n        # Colors\n        self.colors = {\n            'background': (15, 15, 15),\n            'snake': (0, 255, 0),\n            'food': (255, 0, 0),\n            'text': (255, 255, 255)\n        }\n        \n        # Game clock\n        self.clock = pygame.time.Clock()\n        self.speed = 10  # FPS",
-                "timestamp": "00:45"
-            },
-            {
-                "type": "editor",
-                "filename": "snake_game.py",
-                "content": "# snake_game.py\nimport pygame\nimport sys\nfrom game_engine import SnakeGame\n\nclass SnakeGameUI:\n    def __init__(self, width=20, height=20, cell_size=20):\n        self.width = width\n        self.height = height\n        self.cell_size = cell_size\n        self.game = SnakeGame(width, height)\n        \n        # Initialize pygame\n        pygame.init()\n        self.screen = pygame.display.set_mode(\n            (width * cell_size, height * cell_size)\n        )\n        pygame.display.set_caption('Python Snake Game')\n        \n        # Colors\n        self.colors = {\n            'background': (15, 15, 15),\n            'snake': (0, 255, 0),\n            'food': (255, 0, 0),\n            'text': (255, 255, 255)\n        }\n        \n        # Game clock\n        self.clock = pygame.time.Clock()\n        self.speed = 10  # FPS\n        \n    def draw(self):\n        # Clear screen\n        self.screen.fill(self.colors['background'])\n        \n        # Draw snake\n        for segment in self.game.snake:\n            pygame.draw.rect(\n                self.screen,\n                self.colors['snake'],\n                pygame.Rect(\n                    segment[0] * self.cell_size,\n                    segment[1] * self.cell_size,\n                    self.cell_size,\n                    self.cell_size\n                )\n            )\n        \n        # Draw food\n        pygame.draw.rect(\n            self.screen,\n            self.colors['food'],\n            pygame.Rect(\n                self.game.food[0] * self.cell_size,\n                self.game.food[1] * self.cell_size,\n                self.cell_size,\n                self.cell_size\n            )\n        )\n        \n        # Update display\n        pygame.display.flip()",
-                "timestamp": "01:05"
-            },
-            {
-                "type": "editor",
-                "filename": "main.py",
-                "content": "# main.py\nfrom snake_game import SnakeGameUI\nimport pygame\nimport sys\n\ndef main():\n    # Create game instance\n    game_ui = SnakeGameUI(width=20, height=20, cell_size=30)\n    \n    # Main game loop\n    while not game_ui.game.game_over:\n        # Process events\n        for event in pygame.event.get():\n            if event.type == pygame.QUIT:\n                pygame.quit()\n                sys.exit()\n            elif event.type == pygame.KEYDOWN:\n                if event.key == pygame.K_UP and game_ui.game.direction != 'DOWN':\n                    game_ui.game.direction = 'UP'\n                elif event.key == pygame.K_DOWN and game_ui.game.direction != 'UP':\n                    game_ui.game.direction = 'DOWN'\n                elif event.key == pygame.K_LEFT and game_ui.game.direction != 'RIGHT':\n                    game_ui.game.direction = 'LEFT'\n                elif event.key == pygame.K_RIGHT and game_ui.game.direction != 'LEFT':\n                    game_ui.game.direction = 'RIGHT'\n        \n        # Update game state\n        game_ui.game.update()\n        \n        # Draw game\n        game_ui.draw()\n        \n        # Control game speed\n        game_ui.clock.tick(game_ui.speed)\n    \n    # Game over screen\n    game_ui.show_game_over()\n    \n    # Wait for quit event\n    waiting = True\n    while waiting:\n        for event in pygame.event.get():\n            if event.type == pygame.QUIT:\n                waiting = False\n    \n    pygame.quit()\n\nif __name__ == \"__main__\":\n    main()",
-                "timestamp": "01:30"
-            },
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu/python_snake_game\nubuntu@sandbox:~/python_snake_game $ python main.py\nTraceback (most recent call last):\n  File \"main.py\", line 31, in <module>\n    main()\n  File \"main.py\", line 19, in main\n    game_ui.game.update()\nAttributeError: 'SnakeGame' object has no attribute 'update'\n",
-                "timestamp": "02:00"
-            },
-            {
-                "type": "editor",
-                "filename": "game_engine.py",
-                "content": "# game_engine.py\n\nclass SnakeGame:\n    def __init__(self, width, height):\n        self.width = width\n        self.height = height\n        self.snake = [(width // 2, height // 2)]\n        self.direction = 'RIGHT'\n        self.food = None\n        self.score = 0\n        self.game_over = False\n        self._place_food()\n    \n    def _place_food(self):\n        # Logic to place food\n        import random\n        while True:\n            x = random.randint(0, self.width - 1)\n            y = random.randint(0, self.height - 1)\n            if (x, y) not in self.snake:\n                self.food = (x, y)\n                break\n                \n    def update(self):\n        # Move snake based on current direction\n        head_x, head_y = self.snake[0]\n        \n        if self.direction == 'UP':\n            head_y -= 1\n        elif self.direction == 'DOWN':\n            head_y += 1\n        elif self.direction == 'LEFT':\n            head_x -= 1\n        elif self.direction == 'RIGHT':\n            head_x += 1\n            \n        # Check for game over conditions\n        if (head_x < 0 or head_x >= self.width or\n            head_y < 0 or head_y >= self.height or\n            (head_x, head_y) in self.snake):\n            self.game_over = True\n            return\n            \n        # Check if snake ate food\n        if (head_x, head_y) == self.food:\n            self.score += 1\n            self._place_food()\n        else:\n            # Remove tail if snake didn't eat\n            self.snake.pop()\n            \n        # Add new head\n        self.snake.insert(0, (head_x, head_y))",
-                "timestamp": "02:30"
-            },
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu/python_snake_game\nubuntu@sandbox:~/python_snake_game $ python main.py\n[Game is now running successfully in a pygame window]",
-                "timestamp": "03:00"
-            },
-            {
-                "type": "editor",
-                "filename": "README.md",
-                "content": "# Python Snake Game\n\nA classic snake game implemented in Python using Pygame.\n\n## Features\n\n- Clean, modular code structure with separation of game logic and UI\n- Smooth controls using arrow keys\n- Score tracking\n- Game over detection\n\n## Requirements\n\n- Python 3.6+\n- Pygame\n\n## Installation\n\n```bash\npip install pygame\n```\n\n## How to Run\n\n```bash\npython main.py\n```\n\n## Controls\n\n- Arrow keys to change direction\n- Esc to quit\n\n## Project Structure\n\n- `main.py` - Entry point for the game\n- `game_engine.py` - Core game logic\n- `snake_game.py` - UI and rendering logic\n\n## Future Improvements\n\n- Add pause functionality\n- Add high score tracking\n- Implement difficulty levels\n- Add sound effects",
-                "timestamp": "03:15"
-            }
-        ]
-    }
-
-# Add a Store component to manage playback state
 playback_store = dcc.Store(
     id='playback-data',
-    data=create_demo_playback_data()
+    data={"total_steps": 0, "current_step": 0, "is_playing": False, "steps": []}
 )
 
-# Callback to transition from landing page to main view
+# Add app state store
+app_state_store = dcc.Store(
+    id='app-state',
+    data={"view": "landing", "initial_prompt": "", "project_id": None, "tasks": []}
+)
+
+# Add a Store for action recording
+action_record_store = dcc.Store(
+    id='action-record',
+    data={"actions": [], "current_index": -1, "is_recording": False, "is_playing": False}
+)
+
+# Set the app layout - this is what was missing
+app.layout = html.Div([
+    app_state_store,
+    playback_store,
+    action_record_store,
+    landing_page,
+    main_view
+])
+
+# Utility function to create task elements based on a plan
+def create_task_elements(plan, status="in-progress"):
+    """Create UI elements for task visualization based on the implementation plan."""
+    task_elements = []
+    
+    if not plan or "phases" not in plan:
+        return [html.P("No plan available")]
+    
+    for phase_idx, phase in enumerate(plan.get("phases", [])):
+        phase_elements = []
+        
+        # Add phase description
+        phase_elements.append(html.P(phase.get("description", "")))
+        
+        # Add steps for this phase
+        for step_idx, step in enumerate(phase.get("steps", [])):
+            step_status = "completed" if phase_idx == 0 and step_idx < len(phase.get("steps", [])) // 2 else status
+            
+            # Add commands if available
+            for cmd in step.get("commands", []):
+                phase_elements.append(create_command_element(cmd, status=step_status))
+            
+            # Add file operations if needed (just a placeholder example)
+            if "files" in step:
+                for file_info in step.get("files", []):
+                    file_path = file_info.get("path", "")
+                    operation = file_info.get("operation", "Creating")
+                    phase_elements.append(create_file_operation(operation, file_path, status=step_status))
+            
+            # Add a summary of the step
+            phase_elements.append(html.P(step.get("description", "")))
+        
+        task_elements.extend(phase_elements)
+    
+    return task_elements
+
+# Function to record an action in the timeline
+def record_action(action_type, content, metadata=None):
+    """Record an action for the playback system.
+    
+    Args:
+        action_type (str): Type of action (e.g., 'terminal', 'editor', 'file_operation')
+        content (str): The content to display (terminal output, file content, etc.)
+        metadata (dict, optional): Additional information about the action.
+    
+    Returns:
+        dict: The action record
+    """
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    
+    action = {
+        "id": str(uuid.uuid4()),
+        "type": action_type,
+        "content": content,
+        "metadata": metadata or {},
+        "timestamp": timestamp
+    }
+    
+    return action
+
+# Enhanced process_user_prompt to use all agents properly
+async def process_user_prompt(prompt):
+    """Process the user prompt through our complete agent system and return results with recorded actions."""
+    actions = []
+    try:
+        # Generate a project ID
+        project_id = str(uuid.uuid4())
+        workspace_dir = os.path.join(workspace_path, f"project_{project_id[:8]}")
+        os.makedirs(workspace_dir, exist_ok=True)
+        
+        # Record initial action
+        actions.append(record_action(
+            "system", 
+            f"Received user prompt: {prompt}", 
+            {"status": "started"}
+        ))
+        
+        # Step 1: Analyze requirements with the PlannerAgent
+        actions.append(record_action(
+            "system", 
+            "Analyzing requirements...", 
+            {"status": "in-progress", "agent": "planner"}
+        ))
+        
+        analysis_result = await planner_agent.process({
+            "action": "analyze_requirements",
+            "prompt": prompt,
+            "workspace": workspace_dir
+        })
+        
+        if not analysis_result.get("success", False):
+            actions.append(record_action(
+                "system", 
+                f"Failed to analyze requirements: {analysis_result.get('error', 'Unknown error')}", 
+                {"status": "error", "agent": "planner"}
+            ))
+            return {
+                "success": False,
+                "error": analysis_result.get("error", "Failed to analyze requirements"),
+                "project_id": project_id,
+                "actions": actions
+            }
+        
+        # Record successful requirements analysis
+        requirements_content = json.dumps(analysis_result.get("requirements", []), indent=2)
+        actions.append(record_action(
+            "terminal", 
+            f"✅ Requirements Analysis Complete\n\n{requirements_content}", 
+            {"status": "completed", "agent": "planner"}
+        ))
+        
+        # Step 2: Generate an implementation plan
+        actions.append(record_action(
+            "system", 
+            "Creating implementation plan...", 
+            {"status": "in-progress", "agent": "planner"}
+        ))
+        
+        plan_result = await planner_agent.process({
+            "action": "create_plan",
+            "requirements": analysis_result.get("requirements", []),
+            "workspace": workspace_dir
+        })
+        
+        if not plan_result.get("success", False):
+            actions.append(record_action(
+                "system", 
+                f"Failed to create implementation plan: {plan_result.get('error', 'Unknown error')}", 
+                {"status": "error", "agent": "planner"}
+            ))
+            return {
+                "success": False,
+                "error": plan_result.get("error", "Failed to create implementation plan"),
+                "project_id": project_id,
+                "actions": actions
+            }
+        
+        # Record successful plan creation
+        plan_content = json.dumps(plan_result.get("plan", {}), indent=2)
+        actions.append(record_action(
+            "editor", 
+            f"# Implementation Plan\n\n```json\n{plan_content}\n```", 
+            {"status": "completed", "agent": "planner", "filename": "implementation_plan.md"}
+        ))
+        
+        # Store project information
+        project_info = {
+            "project_id": project_id,
+            "project_name": plan_result.get("plan", {}).get("project_name", "New Project"),
+            "description": prompt,
+            "requirements": analysis_result.get("requirements", []),
+            "technologies": analysis_result.get("technologies", []),
+            "plan": plan_result.get("plan", {}),
+            "workspace": workspace_dir,
+            "tasks": []
+        }
+        
+        # Create task breakdown and execute tasks
+        tasks = []
+        phases = project_info["plan"].get("phases", [])
+        
+        for phase_idx, phase in enumerate(phases):
+            phase_name = phase.get("name", f"Phase {phase_idx+1}")
+            phase_desc = phase.get("description", "")
+            
+            # Record phase processing
+            actions.append(record_action(
+                "system", 
+                f"Processing phase: {phase_name}", 
+                {"status": "in-progress", "phase": phase_idx}
+            ))
+            
+            # Define task status based on position
+            task_status = "completed" if phase_idx == 0 else "in-progress" if phase_idx == 1 else "pending"
+            
+            # Create task object
+            task = {
+                "id": f"task{phase_idx+1}",
+                "name": phase_name,
+                "description": phase_desc,
+                "status": task_status,
+                "elements": create_task_elements({"phases": [phase]}, status=task_status)
+            }
+            tasks.append(task)
+            
+            # Execute completed and in-progress tasks
+            if task_status in ["completed", "in-progress"]:
+                # Execute task according to phase type
+                if "setup" in phase_name.lower() or "environment" in phase_name.lower():
+                    # Environment setup with CodeAgent
+                    actions.append(record_action(
+                        "system", 
+                        f"Setting up environment for: {phase_name}", 
+                        {"status": "in-progress", "agent": "code", "phase": phase_idx}
+                    ))
+                    
+                    # Execute using CodeAgent
+                    setup_result = await code_agent.process({
+                        "action": "initialize_context",
+                        "project_name": project_info["project_name"],
+                        "technologies": project_info.get("technologies", []),
+                        "workspace_path": workspace_dir
+                    })
+                    
+                    if setup_result.get("success", False):
+                        # Record setup commands
+                        setup_commands = setup_result.get("commands", [])
+                        if setup_commands:
+                            cmd_output = "\n".join([f"$ {cmd}" for cmd in setup_commands])
+                            actions.append(record_action(
+                                "terminal", 
+                                f"Setting up environment:\n{cmd_output}", 
+                                {"status": "completed", "agent": "code", "phase": phase_idx}
+                            ))
+                
+                elif "implementation" in phase_name.lower() or "code" in phase_name.lower():
+                    # Implementation with CodeAgent
+                    actions.append(record_action(
+                        "system", 
+                        f"Implementing code for: {phase_name}", 
+                        {"status": "in-progress", "agent": "code", "phase": phase_idx}
+                    ))
+                    
+                    # Execute implementation for each step in the phase
+                    for step_idx, step in enumerate(phase.get("steps", [])):
+                        step_name = step.get("name", f"Step {step_idx+1}")
+                        
+                        # Only process a subset of steps for in-progress tasks
+                        if task_status == "in-progress" and step_idx > len(phase.get("steps", [])) // 2:
+                            continue
+                        
+                        # Use CodeAgent to implement this step
+                        implement_result = await code_agent.process({
+                            "action": "implement_task",
+                            "task_name": step_name,
+                            "task_description": step.get("description", ""),
+                            "workspace_path": workspace_dir
+                        })
+                        
+                        if implement_result.get("success", False):
+                            # Record file operations from the implementation
+                            for file_op in implement_result.get("file_operations", []):
+                                file_path = file_op.get("file_path", "")
+                                content = file_op.get("content", "")
+                                operation = file_op.get("operation", "create")
+                                
+                                if file_path and content:
+                                    actions.append(record_action(
+                                        "editor", 
+                                        content, 
+                                        {
+                                            "status": "completed", 
+                                            "agent": "code", 
+                                            "filename": os.path.basename(file_path),
+                                            "filepath": file_path,
+                                            "operation": operation,
+                                            "phase": phase_idx
+                                        }
+                                    ))
+                
+                elif "integration" in phase_name.lower():
+                    # Integration with IntegrationAgent
+                    actions.append(record_action(
+                        "system", 
+                        f"Integrating components for: {phase_name}", 
+                        {"status": "in-progress", "agent": "integration", "phase": phase_idx}
+                    ))
+                    
+                    # Use IntegrationAgent to handle integration
+                    integration_result = await integration_agent.process({
+                        "action": "integrate_task",
+                        "project_name": project_info["project_name"],
+                        "workspace_path": workspace_dir
+                    })
+                    
+                    if integration_result.get("success", False):
+                        # Record integration points
+                        for point in integration_result.get("integration_points", []):
+                            source = point.get("source_file", "")
+                            target = point.get("target_file", "")
+                            description = point.get("description", "")
+                            
+                            actions.append(record_action(
+                                "editor", 
+                                f"# Integration: {source} → {target}\n\n{description}", 
+                                {
+                                    "status": "completed",
+                                    "agent": "integration", 
+                                    "filename": f"integration_{os.path.basename(source)}_{os.path.basename(target)}.md",
+                                    "phase": phase_idx
+                                }
+                            ))
+                
+                elif "test" in phase_name.lower():
+                    # Testing with CodeAgent
+                    actions.append(record_action(
+                        "system", 
+                        f"Running tests for: {phase_name}", 
+                        {"status": "in-progress", "agent": "code", "phase": phase_idx}
+                    ))
+                    
+                    # Use CodeAgent to run tests
+                    test_result = await code_agent.process({
+                        "action": "run_tests",
+                        "workspace_path": workspace_dir
+                    })
+                    
+                    if test_result.get("success", False):
+                        # Record test results
+                        test_output = test_result.get("output", "No test output available")
+                        actions.append(record_action(
+                            "terminal", 
+                            f"Test Results:\n{test_output}", 
+                            {"status": "completed", "agent": "code", "phase": phase_idx}
+                        ))
+                
+                elif "deploy" in phase_name.lower():
+                    # Deployment with DeploymentAgent
+                    actions.append(record_action(
+                        "system", 
+                        f"Deploying project: {phase_name}", 
+                        {"status": "in-progress", "agent": "deployment", "phase": phase_idx}
+                    ))
+                    
+                    # Use DeploymentAgent to handle deployment
+                    deploy_result = await deployment_agent.process({
+                        "action": "deploy_project",
+                        "project_name": project_info["project_name"],
+                        "workspace_path": workspace_dir,
+                        "platform": "local"  # Default to local for now
+                    })
+                    
+                    if deploy_result.get("success", False):
+                        # Record deployment results
+                        deploy_output = deploy_result.get("output", "Deployment completed")
+                        actions.append(record_action(
+                            "terminal", 
+                            f"Deployment Output:\n{deploy_output}", 
+                            {"status": "completed", "agent": "deployment", "phase": phase_idx}
+                        ))
+                
+                # Mark as completed if we're processing a completed task
+                if task_status == "completed":
+                    actions.append(record_action(
+                        "system", 
+                        f"Completed: {phase_name}", 
+                        {"status": "completed", "phase": phase_idx}
+                    ))
+        
+        # Store tasks in project info
+        project_info["tasks"] = tasks
+        active_projects[project_id] = project_info
+        
+        # Add final summary action
+        actions.append(record_action(
+            "system", 
+            f"Project setup complete: {project_info['project_name']}", 
+            {"status": "completed"}
+        ))
+        
+        return {
+            "success": True,
+            "project_id": project_id,
+            "project_name": project_info["project_name"],
+            "tasks": tasks,
+            "actions": actions
+        }
+    
+    except Exception as e:
+        import traceback
+        error_message = f"Error processing prompt: {e}\n{traceback.format_exc()}"
+        print(error_message)
+        
+        # Record error action
+        actions.append(record_action(
+            "system", 
+            error_message, 
+            {"status": "error"}
+        ))
+        
+        return {
+            "success": False,
+            "error": str(e),
+            "project_id": None,
+            "actions": actions
+        }
+
+# Enhanced callback to transition from landing page and initialize action recording
 @app.callback(
     [Output("app-state", "data"),
      Output("landing-page", "style"),
      Output("main-container", "style"),
-     Output("project-title", "children")],
+     Output("project-title", "children"),
+     Output("chat-container", "children"),
+     Output("action-record", "data")],
     [Input("submit-button", "n_clicks")],
     [State("initial-prompt", "value"),
      State("app-state", "data")],
@@ -799,45 +1115,381 @@ def transition_to_main_view(n_clicks, prompt_value, current_state):
     if not n_clicks:
         raise PreventUpdate
     
+    if not prompt_value:
+        raise PreventUpdate
+    
     # Update state
     current_state["view"] = "main"
     current_state["initial_prompt"] = prompt_value
     
-    # Generate a title based on the prompt
-    title = "New Project"
-    if prompt_value:
-        # Simple algorithm to extract a title
-        if "create" in prompt_value.lower() and "snake" in prompt_value.lower() and "python" in prompt_value.lower():
-            title = "Python Snake Game Development"
-        elif "todo" in prompt_value.lower() or "task" in prompt_value.lower() or "list" in prompt_value.lower():
-            title = "Todo List Application"
-        elif "dashboard" in prompt_value.lower() or "data" in prompt_value.lower() or "visualization" in prompt_value.lower():
-            title = "Data Visualization Dashboard"
-        elif "web" in prompt_value.lower() or "site" in prompt_value.lower() or "app" in prompt_value.lower():
-            title = "Web Application Development"
-        elif "game" in prompt_value.lower():
-            title = "Game Development Project"
-        elif "api" in prompt_value.lower() or "backend" in prompt_value.lower() or "server" in prompt_value.lower():
-            title = "API Development Project"
-        else:
-            # Extract key words for a generic title
-            words = prompt_value.split()
-            if len(words) > 3:
-                # Take a few significant words from the middle of the prompt
-                middle_index = len(words) // 2
-                title_words = words[max(0, middle_index-1):min(len(words), middle_index+2)]
-                title = " ".join(word.capitalize() for word in title_words) + " Project"
-            else:
-                # For short prompts, use the whole thing
-                title = prompt_value.capitalize()
+    # Process the prompt through the agent system
+    # Note: We need to run the async function in a synchronous callback
+    import nest_asyncio
+    nest_asyncio.apply()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    result = loop.run_until_complete(process_user_prompt(prompt_value))
+    
+    # Update the app state with project info
+    current_state["project_id"] = result.get("project_id")
+    
+    # Initialize the action record data
+    action_record_data = {
+        "actions": result.get("actions", []),
+        "current_index": 0,  # Start at first action
+        "is_recording": False,
+        "is_playing": False,
+        "playback_speed": 1.0
+    }
     
     # Hide landing page, show main container
     landing_style = {"display": "none"}
     main_style = {"display": "flex"}
     
-    return current_state, landing_style, main_style, title
+    # Set the project title
+    project_name = result.get("project_name", "New Project")
+    
+    # Create chat container children with system message and tasks
+    chat_children = [
+        # System message with project title
+        html.Div(
+            className="system-message",
+            children=[
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "marginBottom": "15px"},
+                    children=[
+                        html.I(className="fas fa-robot", style={"fontSize": "24px", "marginRight": "10px", "color": "#61dafb"}),
+                        html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
+                    ]
+                ),
+                html.H3(id="project-title", children=project_name, style={"margin": "0 0 10px 0"})
+            ]
+        )
+    ]
+    
+    # Add task sections based on the plan
+    if result.get("success", False) and result.get("tasks"):
+        for i, task in enumerate(result.get("tasks", [])):
+            # Create status icon based on task status
+            if task["status"] == "completed":
+                status_icon = html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"})
+            elif task["status"] == "in-progress":
+                status_icon = html.I(className="fas fa-spinner fa-spin", style={"marginRight": "10px", "color": "#ffc107"})
+            else:
+                status_icon = html.I(className="fas fa-circle", style={"marginRight": "10px", "color": "#6c757d"})
+            
+            # Create collapsible section for this task
+            task_section = create_collapsible_section(
+                f"task{i+1}",
+                html.Div([
+                    status_icon,
+                    html.Span(task["name"])
+                ]),
+                task["elements"],
+                is_open=(i == 0)  # First task is open by default
+            )
+            
+            chat_children.append(task_section)
+    else:
+        # If no tasks are available, show an error message
+        error_message = result.get("error", "Failed to process your request. Please try again.")
+        chat_children.append(
+            html.Div(
+                className="system-message",
+                style={"backgroundColor": "#dc3545", "color": "white"},
+                children=[
+                    html.P(error_message)
+                ]
+            )
+        )
+    
+    # Add thinking indicator
+    chat_children.append(
+        html.Div(
+            className="chat-message",
+            children=[
+                html.Div(
+                    style={
+                        "display": "flex",
+                        "alignItems": "center",
+                        "color": "#888"
+                    },
+                    children=[
+                        html.I(className="fas fa-circle-notch fa-spin", style={"marginRight": "10px"}),
+                        html.Span("Thinking")
+                    ]
+                )
+            ]
+        )
+    )
+    
+    return current_state, landing_style, main_style, project_name, chat_children, action_record_data
 
-# Callback for task1 collapsible section
+# Enhanced handle_playback_controls function to better work with action types
+@app.callback(
+    [Output("view-content", "children"),
+     Output("view-type-indicator", "children"),
+     Output("status-indicator", "children"),
+     Output("playback-slider", "value"),
+     Output("action-record", "data", allow_duplicate=True)],
+    [Input("playback-backward", "n_clicks"),
+     Input("playback-play", "n_clicks"),
+     Input("playback-forward", "n_clicks"),
+     Input("playback-slider", "value")],
+    [State("action-record", "data"),
+     State("app-state", "data")],
+    prevent_initial_call=True
+)
+def handle_playback_controls(backward_clicks, play_clicks, forward_clicks, slider_value, action_record, app_state):
+    """Handle playback control interactions."""
+    triggered_id = ctx.triggered_id if ctx.triggered_id is not None else 'No clicks yet'
+    
+    # Make a copy of the action record to modify
+    action_record = action_record.copy()
+    actions = action_record.get("actions", [])
+    current_index = action_record.get("current_index", 0)
+    is_playing = action_record.get("is_playing", False)
+    
+    if not actions:
+        # No actions to play back
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    
+    # Calculate max slider value
+    max_index = len(actions) - 1
+    if max_index < 0:
+        max_index = 0
+    
+    # Handle different control clicks
+    if triggered_id == "playback-backward" and current_index > 0:
+        # Step backward
+        current_index -= 1
+        is_playing = False
+    elif triggered_id == "playback-forward" and current_index < max_index:
+        # Step forward
+        current_index += 1
+        is_playing = False
+    elif triggered_id == "playback-play":
+        # Toggle play/pause
+        is_playing = not is_playing
+    elif triggered_id == "playback-slider":
+        # Slider moved directly
+        # Convert slider percentage to index
+        if max_index > 0:
+            current_index = round(slider_value / 100 * max_index)
+        else:
+            current_index = 0
+        is_playing = False
+    
+    # Update action record
+    action_record["current_index"] = current_index
+    action_record["is_playing"] = is_playing
+    
+    # Get current action
+    current_action = actions[current_index] if actions and 0 <= current_index < len(actions) else None
+    
+    if not current_action:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, action_record
+    
+    # Calculate slider value (percentage)
+    slider_percentage = (current_index / max_index * 100) if max_index > 0 else 0
+    
+    # Prepare view content based on action type
+    action_type = current_action.get("type", "system")
+    content = current_action.get("content", "")
+    metadata = current_action.get("metadata", {})
+    
+    if action_type == "terminal":
+        view_content = create_terminal_view(content)
+        view_type = [
+            html.Span("AgenDev is using", style={"color": "#888", "marginRight": "5px"}),
+            html.Span("Terminal"),
+            html.Div(
+                style={
+                    "marginLeft": "20px",
+                    "display": "flex",
+                    "alignItems": "center",
+                    "color": "#888",
+                    "fontSize": "0.85em"
+                },
+                children=[
+                    html.Span("Executing commands"),
+                    html.Code(
+                        metadata.get("agent", "system"),
+                        style={
+                            "marginLeft": "5px",
+                            "backgroundColor": "transparent",
+                            "padding": "0"
+                        }
+                    )
+                ]
+            )
+        ]
+    elif action_type == "editor":
+        filename = metadata.get("filename", "file.txt")
+        view_content = create_editor_view(
+            filename,
+            content,
+            "python" if filename.endswith(".py") else "json" if filename.endswith(".json") else "text"
+        )
+        
+        operation = metadata.get("operation", "creating")
+        if operation == "modify":
+            operation_text = "Editing"
+        elif operation == "delete":
+            operation_text = "Deleting"
+        else:
+            operation_text = "Creating"
+        
+        view_type = [
+            html.Span("AgenDev is using", style={"color": "#888", "marginRight": "5px"}),
+            html.Span("Editor"),
+            html.Div(
+                style={
+                    "marginLeft": "20px",
+                    "display": "flex",
+                    "alignItems": "center",
+                    "color": "#888",
+                    "fontSize": "0.85em"
+                },
+                children=[
+                    html.Span(f"{operation_text} file"),
+                    html.Code(
+                        filename,
+                        style={
+                            "marginLeft": "5px",
+                            "backgroundColor": "transparent",
+                            "padding": "0"
+                        }
+                    )
+                ]
+            )
+        ]
+    else:  # system or other types
+        # For system messages, show clear indication of which agent is working
+        agent = metadata.get("agent", "system")
+        agent_message = f"[{agent.upper()}] " if agent != "system" else ""
+        
+        view_content = create_terminal_view(f"{agent_message}{content}")
+        view_type = [
+            html.Span("AgenDev is using", style={"color": "#888", "marginRight": "5px"}),
+            html.Span("System"),
+            html.Div(
+                style={
+                    "marginLeft": "20px",
+                    "display": "flex",
+                    "alignItems": "center",
+                    "color": "#888",
+                    "fontSize": "0.85em"
+                },
+                children=[
+                    html.Span("Processing"),
+                    html.Code(
+                        agent,
+                        style={
+                            "marginLeft": "5px",
+                            "backgroundColor": "transparent",
+                            "padding": "0"
+                        }
+                    )
+                ]
+            )
+        ]
+    
+    # Update status indicator
+    status = metadata.get("status", "pending")
+    phase = metadata.get("phase", None)
+    
+    # Build status text with phase info if available
+    status_text = f"Action {current_index+1}/{len(actions)}"
+    if phase is not None:
+        status_text += f" (Phase {phase+1})"
+    
+    if status == "completed":
+        status_indicator = [
+            html.Span(
+                html.I(className="fas fa-check-circle"),
+                className="status-tag success",
+                style={"marginRight": "5px"}
+            ),
+            html.Span(status_text),
+            html.Span(current_action.get("timestamp", ""), className="time-indicator")
+        ]
+    elif status == "in-progress":
+        status_indicator = [
+            html.Span(
+                html.I(className="fas fa-spinner fa-spin"),
+                className="status-tag in-progress",
+                style={"marginRight": "5px"}
+            ),
+            html.Span(status_text),
+            html.Span(current_action.get("timestamp", ""), className="time-indicator")
+        ]
+    elif status == "error":
+        status_indicator = [
+            html.Span(
+                html.I(className="fas fa-times-circle"),
+                className="status-tag error",
+                style={"marginRight": "5px"}
+            ),
+            html.Span(status_text),
+            html.Span(current_action.get("timestamp", ""), className="time-indicator")
+        ]
+    else:
+        status_indicator = [
+            html.Span(
+                html.I(className="fas fa-circle"),
+                className="status-tag",
+                style={"marginRight": "5px"}
+            ),
+            html.Span(status_text),
+            html.Span(current_action.get("timestamp", ""), className="time-indicator")
+        ]
+    
+    return view_content, view_type, status_indicator, slider_percentage, action_record
+
+# Auto playback interval 
+@app.callback(
+    Output("action-record", "data", allow_duplicate=True),
+    Input("interval-component", "n_intervals"),
+    State("action-record", "data"),
+    prevent_initial_call=True
+)
+def update_playback_automatically(n_intervals, action_record):
+    """Automatically advance playback when in play mode."""
+    if not action_record.get("is_playing", False):
+        return dash.no_update
+    
+    actions = action_record.get("actions", [])
+    current_index = action_record.get("current_index", 0)
+    max_index = len(actions) - 1
+    
+    if current_index < max_index:
+        action_record["current_index"] = current_index + 1
+        return action_record
+    else:
+        # Stop playing when we reach the end
+        action_record["is_playing"] = False
+        return action_record
+
+# Add an interval component for auto playback
+interval = dcc.Interval(
+    id='interval-component',
+    interval=1000,  # 1 second
+    n_intervals=0,
+    disabled=False
+)
+
+# Add the interval component to the layout
+app.layout = html.Div([
+    app_state_store,
+    playback_store,
+    action_record_store,
+    interval,
+    landing_page,
+    main_view
+])
+
+# Restore the task collapsible section callbacks
 @app.callback(
     Output("task1-content", "style"),
     Input("task1-header", "n_clicks"),
@@ -884,4 +1536,12 @@ def toggle_section_task3(n_clicks, current_style):
 
 # Run the server
 if __name__ == "__main__":
+    # Make sure to install required packages
+    try:
+        import nest_asyncio
+    except ImportError:
+        import pip
+        pip.main(['install', 'nest_asyncio'])
+        import nest_asyncio
+    
     app.run_server(debug=True)
