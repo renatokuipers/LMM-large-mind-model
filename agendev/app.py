@@ -41,6 +41,12 @@ except Exception as e:
     config = AgenDevConfig(project_name="AgenDev Dashboard")
     agendev = AgenDev(config)
 
+if agendev and agendev.llm:
+    agendev.llm.set_system_message(
+        "You are an AI assistant for the AgenDev system. "
+        "You can help with project tasks, code generation, and answering questions about software development."
+    )
+
 # Initialize the Dash app with dark theme
 app = dash.Dash(
     __name__,
