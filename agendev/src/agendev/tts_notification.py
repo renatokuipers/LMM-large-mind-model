@@ -8,6 +8,7 @@ import os
 import time
 import logging
 from pydantic import BaseModel, Field
+import json
 
 from .tts_module import TTSClient, GenerateAudioRequest, play_audio, get_output_path
 from .models.task_models import Task, TaskStatus, TaskPriority, Epic
@@ -127,9 +128,16 @@ class NotificationManager:
     def _save_history(self) -> None:
         """Save notification history to file."""
         if self.config.history_enabled:
-            history_path = resolve_path(self.config.history_file, create_parents=True)
             try:
-                safe_save_json(self.history.model_dump(), history_path)
+                # Use direct file writing instead of safe_save_json
+                history_path = resolve_path(self.config.history_file, create_parents=True)
+                
+                # Convert to dictionary first
+                history_data = self.history.model_dump()
+                
+                # Write directly to file
+                with open(history_path, 'w') as f:
+                    json.dump(history_data, f, indent=2, default=str)
             except Exception as e:
                 logger.error(f"Error saving notification history: {e}")
     

@@ -56,17 +56,22 @@ styles = {
 
 # Custom card component for consistent UI
 def create_card(title, content, id=None):
-    return dbc.Card(
-        [
+    card_props = {
+        "children": [
             dbc.CardHeader(
                 html.H5(title, className="mb-0"),
                 className="bg-transparent border-bottom border-dark"
             ),
             dbc.CardBody(content)
         ],
-        id=id,
-        className="shadow-sm mb-4"
-    )
+        "className": "shadow-sm mb-4"
+    }
+    
+    # Only add id if it's not None
+    if id is not None:
+        card_props["id"] = id
+        
+    return dbc.Card(**card_props)
 
 # Sidebar for navigation
 sidebar = html.Div(
