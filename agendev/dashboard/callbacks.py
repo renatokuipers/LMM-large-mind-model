@@ -25,6 +25,7 @@ from autonomous import (
     generate_tests_for_task
 )
 from .components import create_chat_message
+from agendev.llm_module import LLMClient
 
 def register_callbacks(app, agendev):
     """Register all callbacks for the dashboard."""
@@ -91,18 +92,37 @@ def register_callbacks(app, agendev):
                 "timestamp": datetime.now().strftime("%H:%M")
             })
             
-            # Add system response
-            chat_history["messages"].append({
-                "sender": "AgenDev",
-                "message": "I've received your message. I'll process this request and update you soon.",
-                "timestamp": datetime.now().strftime("%H:%M")
-            })
+            # Process the message through AgenDev LLM
+            try:
+                # Create a prompt for the LLM
+                system_message = "You are an AI assistant for the AgenDev system. Answer questions about the current project or general programming inquiries."
+                
+                # Process through LLM integration
+                llm_response = agendev.llm.query(
+                    prompt=message,
+                    config=None,  # Use default config
+                    clear_context=False,
+                    save_to_context=True
+                )
+                
+                # Add AI response
+                chat_history["messages"].append({
+                    "sender": "AgenDev",
+                    "message": llm_response,
+                    "timestamp": datetime.now().strftime("%H:%M")
+                })
+            except Exception as e:
+                # Add error response in case of failure
+                chat_history["messages"].append({
+                    "sender": "AgenDev",
+                    "message": f"I encountered an error while processing your request: {str(e)}",
+                    "timestamp": datetime.now().strftime("%H:%M")
+                })
         
         # Get the current project status to check for updates
         project_status = agendev.get_project_status()
         
         # Add project status updates periodically (every 30 seconds)
-        # This is a simple approach - in a real system, you'd track specific events
         if n_intervals % 6 == 0 and n_intervals > 0:
             progress = project_status.get('progress', {}).get('percentage', 0)
             completed = project_status.get('tasks', {}).get('by_status', {}).get(TaskStatus.COMPLETED.value, 0)
