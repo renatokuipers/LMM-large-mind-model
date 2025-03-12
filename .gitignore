@@ -98,6 +98,3 @@ config_local.py
 secrets.json
 .env
 .secrets
-
-# Debug dumps
-core.* 
