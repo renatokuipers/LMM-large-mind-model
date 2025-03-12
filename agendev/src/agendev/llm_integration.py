@@ -23,7 +23,7 @@ class LLMConfig(BaseModel):
     temperature: float = Field(0.7, ge=0.0, le=1.0)
     max_tokens: int = Field(2000, ge=0)
     stream: bool = False
-    context_window_size: int = Field(8000, ge=0)
+    context_window_size: int = Field(16384, ge=0)
     
     # Retry configuration
     max_retries: int = 3
@@ -37,7 +37,7 @@ class ContextWindow(BaseModel):
     """Manages conversation history and context."""
     system_message: Optional[str] = None
     messages: List[Dict[str, str]] = Field(default_factory=list)
-    max_messages: int = 10
+    max_messages: int = 20
     
     def add_message(self, role: str, content: str) -> None:
         """Add a message to the context window."""
