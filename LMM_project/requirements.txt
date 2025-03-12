@@ -1,0 +1,45 @@
+# Core dependencies
+pydantic>=2.5.2  # For data validation and settings management
+numpy>=1.24.0    # Numerical operations
+torch>=2.1.0     # Neural network framework
+faiss-cpu>=1.7.4  # Vector similarity search (CPU version)
+
+# API and communication
+requests>=2.31.0  # HTTP requests for API communication
+websockets>=11.0.3  # For streaming communication
+
+# Utility libraries
+tqdm>=4.66.1      # Progress bars
+colorama>=0.4.6   # Colored terminal output for Windows
+psutil>=5.9.5     # System monitoring and resource management
+python-dotenv>=1.0.0  # Environment variable management
+
+# Visualization and dashboard
+dash>=2.14.0      # Dashboard framework
+plotly>=5.18.0    # Interactive visualizations
+pandas>=2.1.1     # Data manipulation
+
+# Windows-specific
+pywin32>=306      # Windows API access
+wmi>=1.5.1        # Windows Management Instrumentation
+
+# Development and testing
+pytest>=7.4.3     # Testing framework
+pytest-mock>=3.12.0  # Mocking for tests
+pytest-cov>=4.1.0  # Test coverage
+
+# NLP and embeddings
+nltk>=3.8.1       # Natural language toolkit
+tiktoken>=0.5.2   # Token counting for LLMs
+
+# Database (for persistence)
+sqlalchemy>=2.0.23  # SQL ORM for structured data storage
+
+# Documentation
+sphinx>=7.2.6     # Documentation generation
+
+# Optional visualization enhancement
+wordcloud>=1.9.2  # For concept visualization
+
+# NOTE: For CUDA 12.1 support, ensure compatible versions of:
+# - torch with CUDA 12.1 build

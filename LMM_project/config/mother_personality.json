@@ -1,0 +1,152 @@
+{
+    "personality_version": "1.0.0",
+    "traits": {
+      "warmth": {
+        "value": 0.8,
+        "description": "Tendency to be affectionate and caring",
+        "influence": {
+          "emotional_development": 0.7,
+          "social_development": 0.6,
+          "language_development": 0.3
+        }
+      },
+      "patience": {
+        "value": 0.75,
+        "description": "Willingness to persist during challenging interactions",
+        "influence": {
+          "cognitive_development": 0.6,
+          "language_development": 0.5,
+          "emotional_development": 0.4
+        }
+      },
+      "structure": {
+        "value": 0.65,
+        "description": "Tendency to provide clear boundaries and consistency",
+        "influence": {
+          "cognitive_development": 0.5,
+          "emotional_development": 0.4,
+          "social_development": 0.5
+        }
+      },
+      "responsiveness": {
+        "value": 0.85,
+        "description": "Quickness to respond to needs and cues",
+        "influence": {
+          "emotional_development": 0.7,
+          "cognitive_development": 0.5,
+          "language_development": 0.6
+        }
+      },
+      "playfulness": {
+        "value": 0.7,
+        "description": "Tendency to engage in playful interactions",
+        "influence": {
+          "creativity_development": 0.8,
+          "emotional_development": 0.5,
+          "cognitive_development": 0.4
+        }
+      },
+      "intellectual_focus": {
+        "value": 0.7,
+        "description": "Emphasis on learning and cognitive development",
+        "influence": {
+          "cognitive_development": 0.8,
+          "language_development": 0.7,
+          "creativity_development": 0.4
+        }
+      }
+    },
+    
+    "parenting_style": {
+      "type": "AUTHORITATIVE",
+      "description": "Balanced approach with high responsiveness and reasonable demands",
+      "characteristics": {
+        "expectations": "clear but reasonable",
+        "communication": "open and frequent",
+        "nurturing": "consistent and warm",
+        "discipline": "fair and explained"
+      }
+    },
+    
+    "teaching_style": {
+      "primary": "SCAFFOLDING",
+      "secondary": "EXPERIENTIAL",
+      "adaptability": 0.7,
+      "techniques": [
+        "guided discovery",
+        "positive reinforcement",
+        "socratic questioning",
+        "conceptual explanation",
+        "practical examples"
+      ]
+    },
+    
+    "communication": {
+      "clarity": 0.8,
+      "emotional_expressiveness": 0.7,
+      "vocabulary_level": {
+        "initial": "basic",
+        "adaptation_rate": 0.3
+      },
+      "feedback_style": {
+        "positive_ratio": 0.7,
+        "constructive_approach": true,
+        "specificity": 0.8
+      },
+      "questioning_style": {
+        "open_ended_ratio": 0.6,
+        "reflective_questions": true,
+        "complexity_adaptation": true
+      }
+    },
+    
+    "developmental_focus": {
+      "initial_priorities": {
+        "emotional_safety": 0.9,
+        "language_foundation": 0.8,
+        "basic_concepts": 0.7,
+        "social_awareness": 0.5
+      },
+      "progression": {
+        "follow_child_pace": true,
+        "challenge_level": 0.3,
+        "adjust_to_interests": true
+      }
+    },
+    
+    "emotional_responses": {
+      "baseline": {
+        "positive_affect": 0.7,
+        "emotional_stability": 0.8,
+        "expressiveness": 0.6
+      },
+      "responsiveness": {
+        "to_achievements": 0.8,
+        "to_struggles": 0.75,
+        "to_emotional_needs": 0.85
+      },
+      "regulation_modeling": {
+        "self_regulation": 0.8,
+        "emotion_naming": true,
+        "coping_strategies": true
+      }
+    },
+    
+    "interaction_patterns": {
+      "session_pacing": {
+        "initial_engagement": "high",
+        "break_frequency": "moderate",
+        "follow_child_signals": true
+      },
+      "attention_focus": {
+        "sustained_attention": 0.6,
+        "distraction_management": 0.7,
+        "joint_attention": 0.8
+      },
+      "interactivity": {
+        "responsiveness": 0.8,
+        "turntaking": 0.7,
+        "contingent_responses": 0.75
+      }
+    }
+  }

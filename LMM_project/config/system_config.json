@@ -1,0 +1,102 @@
+{
+    "system": {
+      "version": "0.1.0",
+      "environment": "development",
+      "log_level": "info",
+      "windows_specific": {
+        "long_path_support": true,
+        "temp_directory": "%TEMP%\\lmm",
+        "use_unc_paths": false
+      }
+    },
+  
+    "paths": {
+      "data_directory": "data",
+      "models_directory": "models",
+      "state_directory": "state",
+      "logs_directory": "logs",
+      "temp_directory": "temp",
+      "config_directory": "config"
+    },
+  
+    "memory": {
+      "semantic": {
+        "index_type": "IVF100,Flat",
+        "dimension": 1536,
+        "metric_type": "cosine",
+        "use_gpu": true,
+        "gpu_id": 0,
+        "cache_size_mb": 512
+      },
+      "episodic": {
+        "enabled": true,
+        "max_episodes": 10000,
+        "importance_threshold": 0.3
+      }
+    },
+  
+    "cuda": {
+      "required_version": "12.1",
+      "memory_fraction": 0.8,
+      "fallback_to_cpu": true,
+      "optimize_for_windows": true
+    },
+  
+    "embedding": {
+      "model": "text-embedding-nomic-embed-text-v1.5",
+      "api_url": "http://192.168.2.12:1234",
+      "batch_size": 32,
+      "cache_embeddings": true
+    },
+  
+    "mother_llm": {
+      "model": "qwen2.5-7b-instruct",
+      "api_url": "http://192.168.2.12:1234",
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "stream": true
+    },
+  
+    "development": {
+      "initial_stage": "PRENATAL",
+      "accelerated_development": true,
+      "development_factor": 10.0,
+      "track_metrics": true,
+      "save_checkpoints": true,
+      "checkpoint_interval_minutes": 30
+    },
+  
+    "modules": {
+      "consciousness": {
+        "enabled": true,
+        "initial_complexity": 0.1
+      },
+      "language": {
+        "enabled": true,
+        "initial_vocabulary": 0
+      },
+      "emotional": {
+        "enabled": true,
+        "initial_spectrum": ["pleasure", "displeasure"]
+      },
+      "memory": {
+        "enabled": true,
+        "initial_capacity": 100
+      },
+      "social": {
+        "enabled": true,
+        "initial_awareness": 0.05
+      },
+      "thought": {
+        "enabled": true,
+        "initial_complexity": 0.1
+      }
+    },
+  
+    "inference": {
+      "quantization": "int8",
+      "batch_size": 1,
+      "max_memory_mb": 4096,
+      "optimize_for_latency": true
+    }
+  }
