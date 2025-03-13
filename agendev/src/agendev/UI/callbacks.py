@@ -12,11 +12,16 @@ import json
 import time
 from datetime import datetime
 import uuid
+import logging
 from pydantic import BaseModel, Field
 
 from .chat_components import render_markdown, create_command_element, create_file_operation
 from .view_components import create_terminal_view, create_editor_view
 from .core_integration import CoreIntegration
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize core integration
 core_integration = CoreIntegration(
@@ -229,6 +234,9 @@ def register_callbacks(app) -> None:
             elif task.get("status") == "in-progress":
                 icon_class = "fas fa-spinner fa-spin"
                 icon_style = {"marginRight": "10px", "color": "#ffc107"}
+            elif task.get("status") == "failed":
+                icon_class = "fas fa-times-circle"
+                icon_style = {"marginRight": "10px", "color": "#dc3545"}
             else:
                 icon_class = "fas fa-circle"
                 icon_style = {"marginRight": "10px", "color": "#888"}
@@ -255,7 +263,7 @@ def register_callbacks(app) -> None:
                 html.Div(
                     id={"type": "task-content", "index": task["id"]},
                     className="collapsible-content",
-                    style={"display": "block" if task.get("status") == "in-progress" else "none"},
+                    style={"display": "block" if task.get("status") in ["in-progress", "failed"] else "none"},
                     children=content
                 )
             ])
@@ -552,7 +560,26 @@ def register_callbacks(app) -> None:
         if not n_clicks or not task_id:
             raise PreventUpdate
             
-        print(f"Starting task execution with task_id: {task_id}")
+        logger.info(f"Starting task execution with task_id: {task_id}")
+        
+        # Update task status to in-progress before starting execution
+        updated_tasks = []
+        for task in task_data.get("tasks", []):
+            if task["id"] == task_id:
+                # Update task to show it's in progress
+                task["status"] = "in-progress"
+                task["content"] = [
+                    html.P(task.get("description", "Executing task...")),
+                    html.Div([
+                        html.I(className="fas fa-spinner fa-spin", 
+                              style={"marginRight": "10px", "color": "#ffc107"}),
+                        html.Span("Task execution in progress...")
+                    ]),
+                    create_command_element(f"cd task/{task['id']}", "in-progress")
+                ]
+            updated_tasks.append(task)
+            
+        task_data["tasks"] = updated_tasks
         
         # Add a global timeout for the entire task execution
         import threading
@@ -570,9 +597,9 @@ def register_callbacks(app) -> None:
                 # Execute the task using core integration
                 result = core_integration.execute_task(task_id)
                 execution_result = result
-                print(f"Task execution completed with result: {result}")
+                logger.info(f"Task execution completed with result: {result}")
             except Exception as e:
-                print(f"Error during task execution: {e}")
+                logger.error(f"Error during task execution: {e}")
                 import traceback
                 traceback.print_exc()
                 execution_result = {
@@ -594,28 +621,56 @@ def register_callbacks(app) -> None:
             time.sleep(0.1)
             
         if not execution_completed:
-            print(f"WARNING: Task execution timed out after {timeout} seconds")
+            logger.warning(f"Task execution timed out after {timeout} seconds")
             execution_result = {
                 "success": False,
-                "error": f"Task execution timed out after {timeout} seconds"
+                "error": f"Task execution timed out after {timeout} seconds",
+                "error_category": "timeout"
             }
         
         # Handle failed task execution gracefully in the UI
         if not execution_result.get("success", False):
             error_message = execution_result.get("error", "Unknown error during task execution")
-            print(f"Task execution failed: {error_message}")
+            error_category = execution_result.get("error_category", "unknown")
+            logger.error(f"Task execution failed: {error_message}")
             
-            # Find the task that failed
+            # Update task to show error
             updated_tasks = []
             for task in task_data.get("tasks", []):
                 if task["id"] == task_id:
-                    # Update task to show error
                     task["status"] = "failed"
-                    task["content"] = [
+                    
+                    # Create content with appropriate error information
+                    error_content = [
                         html.P(task.get("description", "Task failed.")),
-                        html.P(f"Error: {error_message}", style={"color": "red"}),
+                        html.Div([
+                            html.I(className="fas fa-times-circle", 
+                                style={"marginRight": "10px", "color": "#dc3545"}),
+                            html.Span(f"Task execution failed", 
+                                    style={"fontWeight": "bold", "color": "#dc3545"})
+                        ]),
+                        html.P(f"Error: {error_message}", style={"color": "#dc3545"}),
+                        html.P(f"Category: {error_category}", style={"color": "#dc3545", "fontSize": "0.9em"}),
                         create_command_element(f"cd task/{task['id']}", "failed")
                     ]
+                    
+                    # Add retry button for recovery
+                    retry_button = html.Button(
+                        "Retry Task", 
+                        id={"type": "retry-task-button", "index": task_id},
+                        style={
+                            "marginTop": "10px",
+                            "padding": "5px 10px",
+                            "backgroundColor": "#61dafb",
+                            "color": "black",
+                            "border": "none",
+                            "borderRadius": "4px",
+                            "cursor": "pointer"
+                        }
+                    )
+                    
+                    error_content.append(retry_button)
+                    task["content"] = error_content
                 
                 updated_tasks.append(task)
                 
@@ -624,7 +679,7 @@ def register_callbacks(app) -> None:
             # Generate playback steps for the failed task
             new_steps = [{
                 "type": "terminal",
-                "content": f"$ echo 'Task execution failed'\nError: {error_message}",
+                "content": f"$ echo 'Task execution failed'\nError: {error_message}\nCategory: {error_category}",
                 "operation_type": "Error",
                 "file_path": "Task execution"
             }]
@@ -634,6 +689,13 @@ def register_callbacks(app) -> None:
             playback_data["steps"] = current_steps + new_steps
             playback_data["total_steps"] = len(playback_data["steps"])
             playback_data["current_step"] = len(playback_data["steps"]) - 1  # Point to error step
+            
+            # Update todo.md to reflect task status
+            tasks = core_integration.get_tasks()  # Get fresh task data
+            todo_data["content"] = core_integration.generate_todo_markdown(
+                app_state.get("project_name", "Project"),
+                tasks
+            )
             
             return task_data, todo_data, playback_data
             
@@ -649,6 +711,11 @@ def register_callbacks(app) -> None:
                 file_path = execution_result.get("file_path", "")
                 task["content"] = [
                     html.P(task.get("description", "Task completed successfully.")),
+                    html.Div([
+                        html.I(className="fas fa-check-circle", 
+                              style={"marginRight": "10px", "color": "#00ff00"}),
+                        html.Span("Task completed successfully!")
+                    ]),
                     create_command_element(f"cd task/{task['id']}", "completed"),
                     create_file_operation("Created", file_path, "completed")
                 ]
@@ -683,6 +750,99 @@ def register_callbacks(app) -> None:
         return result.task_data, result.todo_data, result.playback_data
     
     @app.callback(
+        [Output("task-data", "data", allow_duplicate=True),
+         Output("todo-data", "data", allow_duplicate=True),
+         Output("playback-data", "data", allow_duplicate=True)],
+        [Input({"type": "retry-task-button", "index": ALL}, "n_clicks")],
+        [State({"type": "retry-task-button", "index": ALL}, "id"),
+         State("app-state", "data"),
+         State("todo-data", "data"),
+         State("task-data", "data"),
+         State("playback-data", "data")],
+        prevent_initial_call=True
+    )
+    def retry_failed_task(
+        n_clicks_list: List[int],
+        button_ids: List[Dict[str, Any]],
+        app_state: Dict[str, Any],
+        todo_data: Dict[str, Any],
+        task_data: Dict[str, Any],
+        playback_data: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """
+        Retry a failed task when the retry button is clicked.
+        
+        Args:
+            n_clicks_list: List of button click counts
+            button_ids: List of button IDs
+            app_state: Current application state
+            todo_data: Current todo data
+            task_data: Current task data
+            playback_data: Current playback data
+            
+        Returns:
+            Updated task data, todo data, and playback data
+        """
+        ctx = callback_context
+        if not ctx.triggered:
+            raise PreventUpdate
+        
+        # Find which button was clicked
+        triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+        if not triggered_id:
+            raise PreventUpdate
+        
+        # Extract the task ID from the button ID
+        try:
+            button_id = json.loads(triggered_id)
+            task_id = button_id["index"]
+        except:
+            raise PreventUpdate
+        
+        logger.info(f"Retrying failed task with task_id: {task_id}")
+        
+        # Reset task status to planned for retry
+        updated_tasks = []
+        for task in task_data.get("tasks", []):
+            if task["id"] == task_id:
+                task["status"] = "planned"
+                task["content"] = [
+                    html.P(task.get("description", "Task ready for retry.")),
+                    html.Div([
+                        html.I(className="fas fa-redo", 
+                            style={"marginRight": "10px", "color": "#61dafb"}),
+                        html.Span("Task reset for retry")
+                    ]),
+                    create_command_element(f"cd task/{task['id']}", "planned")
+                ]
+            updated_tasks.append(task)
+        
+        task_data["tasks"] = updated_tasks
+        
+        # Update todo.md to reflect task status
+        tasks = core_integration.get_tasks()  # Get fresh task data
+        todo_data["content"] = core_integration.generate_todo_markdown(
+            app_state.get("project_name", "Project"),
+            tasks
+        )
+        
+        # Add task reset step to playback data
+        new_step = {
+            "type": "terminal",
+            "content": f"$ echo 'Resetting task for retry'\nTask {task_id} reset to planned status for retry.",
+            "operation_type": "Retry Preparation",
+            "file_path": "Task management"
+        }
+        
+        # Append new step to existing playback data
+        current_steps = playback_data.get("steps", [])
+        playback_data["steps"] = current_steps + [new_step]
+        playback_data["total_steps"] = len(playback_data["steps"])
+        playback_data["current_step"] = len(playback_data["steps"]) - 1  # Point to latest step
+        
+        return task_data, todo_data, playback_data
+
+    @app.callback(
         [Output("task-selector", "options"),
          Output("task-selector", "value")],
         [Input("task-data", "data")],
@@ -702,7 +862,7 @@ def register_callbacks(app) -> None:
         default_value = ""
         
         for task in task_data.get("tasks", []):
-            if task.get("status") != "completed":
+            if task.get("status") not in ["completed", "failed"]:
                 options.append({
                     "label": task.get("title", "Unnamed Task"),
                     "value": task.get("id", str(uuid.uuid4()))
@@ -758,14 +918,55 @@ def register_callbacks(app) -> None:
             
             # Add commands and file operations based on status
             if task.get("status") == "completed":
+                task_content.append(
+                    html.Div([
+                        html.I(className="fas fa-check-circle", 
+                            style={"marginRight": "10px", "color": "#00ff00"}),
+                        html.Span("Task completed successfully!")
+                    ])
+                )
                 task_content.append(create_command_element(f"cd task/{task['id']}", "completed"))
                 
                 # Add file operations if available
                 for file_path in task.get("artifact_paths", []):
                     task_content.append(create_file_operation("Created", file_path, "completed"))
+            elif task.get("status") == "failed":
+                task_content.append(
+                    html.Div([
+                        html.I(className="fas fa-times-circle", 
+                            style={"marginRight": "10px", "color": "#dc3545"}),
+                        html.Span("Task execution failed", 
+                                style={"fontWeight": "bold", "color": "#dc3545"})
+                    ])
+                )
+                task_content.append(create_command_element(f"cd task/{task['id']}", "failed"))
+                
+                # Add retry button for recovery
+                retry_button = html.Button(
+                    "Retry Task", 
+                    id={"type": "retry-task-button", "index": task['id']},
+                    style={
+                        "marginTop": "10px",
+                        "padding": "5px 10px",
+                        "backgroundColor": "#61dafb",
+                        "color": "black",
+                        "border": "none",
+                        "borderRadius": "4px",
+                        "cursor": "pointer"
+                    }
+                )
+                task_content.append(retry_button)
+            elif task.get("status") == "in_progress":
+                task_content.append(
+                    html.Div([
+                        html.I(className="fas fa-spinner fa-spin", 
+                            style={"marginRight": "10px", "color": "#ffc107"}),
+                        html.Span("Task execution in progress...")
+                    ])
+                )
+                task_content.append(create_command_element(f"cd task/{task['id']}", "in-progress"))
             else:
-                task_content.append(create_command_element(f"cd task/{task['id']}", 
-                                                         "in-progress" if task.get("status") == "in_progress" else "completed"))
+                task_content.append(create_command_element(f"cd task/{task['id']}", "planned"))
             
             updated_task_data["tasks"].append({
                 "id": task["id"],
@@ -782,3 +983,63 @@ def register_callbacks(app) -> None:
         )
         
         return updated_task_data, updated_todo_data
+        
+    @app.callback(
+        [Output("task-status-tag", "className"),
+         Output("task-status-icon", "className"),
+         Output("current-task-text", "children")],
+        [Input("task-data", "data")],
+        prevent_initial_call=True
+    )
+    def update_task_status_indicators(task_data: Dict[str, Any]) -> Tuple[str, str, str]:
+        """
+        Update task status indicators in the UI based on task status.
+        
+        Args:
+            task_data: Current task data
+            
+        Returns:
+            Updated status tag class, status icon class, and status text
+        """
+        # Default values
+        status_class = "status-tag in-progress"
+        icon_class = "fas fa-spinner fa-spin"
+        status_text = "Working on tasks..."
+        
+        # Count tasks by status
+        status_counts = {}
+        for task in task_data.get("tasks", []):
+            status = task.get("status", "planned")
+            status_counts[status] = status_counts.get(status, 0) + 1
+        
+        # Calculate total and completed tasks
+        total_tasks = len(task_data.get("tasks", []))
+        completed_tasks = status_counts.get("completed", 0)
+        
+        # Check for in-progress tasks
+        in_progress_tasks = [task for task in task_data.get("tasks", []) 
+                            if task.get("status") == "in-progress"]
+        if in_progress_tasks:
+            # Show the first in-progress task
+            current_task = in_progress_tasks[0]
+            status_class = "status-tag in-progress"
+            icon_class = "fas fa-spinner fa-spin"
+            status_text = f"Executing: {current_task.get('title', 'Current task')}"
+        elif status_counts.get("failed", 0) > 0:
+            # Show failed status if any tasks failed
+            status_class = "status-tag error"
+            icon_class = "fas fa-times-circle"
+            status_text = f"{status_counts.get('failed', 0)} task(s) failed"
+        elif completed_tasks == total_tasks and total_tasks > 0:
+            # All tasks completed
+            status_class = "status-tag success"
+            icon_class = "fas fa-check-circle"
+            status_text = "All tasks completed successfully"
+        else:
+            # Default status
+            remaining = total_tasks - completed_tasks
+            status_class = "status-tag in-progress"
+            icon_class = "fas fa-tasks"
+            status_text = f"{remaining} task(s) remaining"
+        
+        return status_class, icon_class, status_text
