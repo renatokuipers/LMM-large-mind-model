@@ -26,6 +26,18 @@ class LLMClient:
         stream: bool = False
     ) -> Union[str, requests.Response]:
         endpoint = f"{self.base_url}/v1/chat/completions"
+        
+        # Debug print
+        print(f"Sending chat completion request to {endpoint}")
+        print(f"Number of messages: {len(messages)}")
+        if len(messages) > 0:
+            print(f"First message: {messages[0].role} - length {len(messages[0].content)}")
+        
+        # Validate messages to ensure we have at least one
+        if not messages:
+            print("WARNING: Empty messages array. Adding a default system message.")
+            messages = [Message(role="system", content="You are a helpful AI assistant.")]
+        
         payload = {
             "model": model,
             "messages": [{"role": msg.role, "content": msg.content} for msg in messages],
@@ -33,12 +45,53 @@ class LLMClient:
             "max_tokens": max_tokens,
             "stream": stream
         }
-        response = requests.post(endpoint, headers=self.headers, json=payload)
-        response.raise_for_status()
-
-        if stream:
-            return response
-        return response.json()["choices"][0]["message"]["content"]
+        
+        try:
+            print(f"Sending request with temperature={temperature}, max_tokens={max_tokens}")
+            response = requests.post(endpoint, headers=self.headers, json=payload)
+            print(f"Response status code: {response.status_code}")
+            
+            # Check for specific error status codes
+            if response.status_code == 400:
+                print(f"Bad request error: {response.text}")
+                print("This might indicate an issue with the messages format.")
+                raise ValueError(f"LLM API returned 400 error: {response.text}")
+            
+            # Raise for other HTTP errors
+            response.raise_for_status()
+            
+            if stream:
+                return response
+                
+            # Parse the response
+            response_json = response.json()
+            
+            # Check for empty or malformed response
+            if "choices" not in response_json or not response_json["choices"]:
+                print(f"Unexpected response format: {response_json}")
+                raise ValueError("Response missing 'choices' field or empty choices")
+                
+            if "message" not in response_json["choices"][0]:
+                print(f"Unexpected response format: {response_json}")
+                raise ValueError("Response missing 'message' field in choices")
+                
+            if "content" not in response_json["choices"][0]["message"]:
+                print(f"Unexpected response format: {response_json}")
+                raise ValueError("Response missing 'content' field in message")
+            
+            content = response_json["choices"][0]["message"]["content"]
+            print(f"Successfully received response of length {len(content)}")
+            return content
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Request error: {e}")
+            raise
+        except json.JSONDecodeError:
+            print(f"JSON decode error with response text: {response.text}")
+            raise ValueError(f"Failed to parse JSON response: {response.text}")
+        except Exception as e:
+            print(f"Unexpected error during chat completion: {e}")
+            raise
 
     # -------------------------
     # Structured JSON Completion
@@ -53,6 +106,18 @@ class LLMClient:
         stream: bool = False
     ) -> Union[Dict, requests.Response]:
         endpoint = f"{self.base_url}/v1/chat/completions"
+        
+        # Debug print
+        print(f"Sending structured completion request to {endpoint}")
+        print(f"Number of messages: {len(messages)}")
+        if len(messages) > 0:
+            print(f"First message: {messages[0].role} - length {len(messages[0].content)}")
+        
+        # Validate messages to ensure we have at least one
+        if not messages:
+            print("WARNING: Empty messages array. Adding a default system message.")
+            messages = [Message(role="system", content="You are a helpful AI assistant.")]
+        
         payload = {
             "model": model,
             "messages": [{"role": msg.role, "content": msg.content} for msg in messages],
@@ -64,20 +129,62 @@ class LLMClient:
             },
             "stream": stream
         }
-        response = requests.post(endpoint, headers=self.headers, json=payload)
-        response.raise_for_status()
-        if stream:
-            return response
-        else:
-            content = response.json()["choices"][0]["message"]["content"]
-            # Parse the content as JSON since it should be a valid JSON string
+        
+        try:
+            print(f"Sending structured request with temperature={temperature}, max_tokens={max_tokens}")
+            response = requests.post(endpoint, headers=self.headers, json=payload)
+            print(f"Response status code: {response.status_code}")
+            
+            # Check for specific error status codes
+            if response.status_code == 400:
+                print(f"Bad request error: {response.text}")
+                print("This might indicate an issue with the messages format or JSON schema.")
+                raise ValueError(f"LLM API returned 400 error: {response.text}")
+            
+            # Raise for other HTTP errors
+            response.raise_for_status()
+            
+            if stream:
+                return response
+                
+            # Parse the response
+            response_json = response.json()
+            
+            # Check for empty or malformed response
+            if "choices" not in response_json or not response_json["choices"]:
+                print(f"Unexpected response format: {response_json}")
+                raise ValueError("Response missing 'choices' field or empty choices")
+                
+            if "message" not in response_json["choices"][0]:
+                print(f"Unexpected response format: {response_json}")
+                raise ValueError("Response missing 'message' field in choices")
+                
+            if "content" not in response_json["choices"][0]["message"]:
+                print(f"Unexpected response format: {response_json}")
+                raise ValueError("Response missing 'content' field in message")
+            
+            content = response_json["choices"][0]["message"]["content"]
+            print(f"Successfully received JSON response of length {len(content)}")
+            
+            # Parse the content as JSON
             try:
-                return json.loads(content)
+                json_response = json.loads(content)
+                print(f"Successfully parsed JSON response with keys: {json_response.keys() if isinstance(json_response, dict) else 'non-dict'}")
+                return json_response
             except json.JSONDecodeError as e:
                 print(f"Error parsing JSON response: {e}")
                 print(f"Raw content: {content}")
-                # Return an empty dict as fallback
-                return {}
+                raise ValueError(f"Failed to parse structured JSON response: {e}")
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Request error: {e}")
+            raise
+        except json.JSONDecodeError:
+            print(f"JSON decode error with response text: {response.text}")
+            raise ValueError(f"Failed to parse JSON response: {response.text}")
+        except Exception as e:
+            print(f"Unexpected error during structured completion: {e}")
+            raise
 
     # -------------------------
     # Embedding Methods

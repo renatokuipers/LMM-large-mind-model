@@ -468,63 +468,146 @@ class AgenDev:
         if self.notification_manager:
             self.notification_manager.info(f"Implementing task: {task.title}")
         
-        # Get optimal parameters for this task
-        llm_config = self.parameter_controller.get_llm_config(task)
-        
-        # Generate implementation context
-        if self.context_manager:
-            context = self.context_manager.generate_context_for_task(task.description, top_k=5)
-            context_str = "\n\n".join(
-                f"File: {elem['source_file']}\n```\n{elem['content']}\n```"
-                for elem in context.get("elements", [])
-            )
-        else:
-            context_str = ""
-        
-        # Generate implementation
-        prompt = f"""
-        Task: {task.title}
-        Description: {task.description}
-        
-        {context_str}
-        
-        Implement this task according to the description. 
-        Generate clean, well-structured, production-ready code.
-        Include detailed comments explaining the code.
-        """
-        
-        # Use LLM to generate implementation
-        implementation = self.llm.query(prompt, config=llm_config)
-        
-        # Extract code from implementation (removing any markdown formatting)
-        code = implementation
-        if "```" in implementation:
-            import re
-            code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", implementation, re.DOTALL)
-            if code_blocks:
-                code = "\n\n".join(code_blocks)
-        
-        # Create safe file name from task title
-        import re
-        safe_filename = re.sub(r'[^\w\-_\.]', '_', task.title.lower().replace(' ', '_'))
-        file_path = f"src/{safe_filename}.py"
-        
+        # Wrap everything in try/except for detailed error logging
         try:
+            print(f"Starting implementation of task: {task.title} ({task_id})")
+            
+            # Get optimal parameters for this task
+            llm_config = self.parameter_controller.get_llm_config(task)
+            print(f"Using LLM config: temperature={llm_config.temperature}, max_tokens={llm_config.max_tokens}")
+            
+            # Generate implementation context
+            print("Generating context for task...")
+            context_str = ""
+            if self.context_manager:
+                try:
+                    context = self.context_manager.generate_context_for_task(task.description, top_k=5)
+                    context_str = "\n\n".join(
+                        f"File: {elem['source_file']}\n```\n{elem['content']}\n```"
+                        for elem in context.get("elements", [])
+                    )
+                    print(f"Generated context with {len(context.get('elements', []))} elements")
+                except Exception as context_error:
+                    print(f"Error generating context: {context_error}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue without context
+            
+            # Generate implementation
+            prompt = f"""
+            Task: {task.title}
+            Description: {task.description}
+            
+            {context_str}
+            
+            Implement this task according to the description. 
+            Generate clean, well-structured, production-ready code.
+            Include detailed comments explaining the code.
+            """
+            
+            print("Sending prompt to LLM for implementation...")
+            
+            # Use LLM to generate implementation with explicit error handling
+            try:
+                # Make sure not to clear context in case that's causing issues
+                implementation = self.llm.query(
+                    prompt=prompt, 
+                    config=llm_config,
+                    clear_context=False,
+                    save_to_context=True
+                )
+                print(f"Received implementation response of length {len(implementation)}")
+            except Exception as llm_error:
+                print(f"LLM error during implementation: {llm_error}")
+                import traceback
+                traceback.print_exc()
+                raise Exception(f"Failed to generate implementation: {llm_error}")
+            
+            # Extract code from implementation (removing any markdown formatting)
+            code = implementation
+            if "```" in implementation:
+                import re
+                code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", implementation, re.DOTALL)
+                if code_blocks:
+                    code = "\n\n".join(code_blocks)
+                    print(f"Extracted {len(code_blocks)} code blocks")
+            
+            # Create safe file name from task title
+            import re
+            safe_filename = re.sub(r'[^\w\-_\.]', '_', task.title.lower().replace(' ', '_'))
+            file_path = f"src/{safe_filename}.py"
+            print(f"Will save implementation to {file_path}")
+            
             # Make sure the src directory exists
             src_dir = resolve_path("src", create_parents=True)
             
-            # Create a snapshot
-            snapshot_metadata = self.snapshot_engine.create_snapshot(
-                file_path=file_path,
-                content=code,
-                commit_message=f"Implementation of {task.title}",
-                tags=[task.task_type.value]
-            )
+            # Create a snapshot with timeout
+            import threading
+            import time
             
-            # Actually save the implementation file
-            full_path = resolve_path(file_path, create_parents=True)
-            with open(full_path, 'w') as f:
-                f.write(code)
+            snapshot_completed = False
+            snapshot_exception = None
+            snapshot_metadata = None
+            
+            def create_snapshot_with_timeout():
+                nonlocal snapshot_completed, snapshot_exception, snapshot_metadata
+                try:
+                    snapshot_metadata = self.snapshot_engine.create_snapshot(
+                        file_path=file_path,
+                        content=code,
+                        commit_message=f"Implementation of {task.title}",
+                        tags=[task.task_type.value]
+                    )
+                    snapshot_completed = True
+                except Exception as e:
+                    snapshot_exception = e
+                    
+            # Start snapshot creation in a separate thread
+            snapshot_thread = threading.Thread(target=create_snapshot_with_timeout)
+            snapshot_thread.daemon = True
+            snapshot_thread.start()
+            
+            # Wait for completion with timeout (10 seconds)
+            timeout = 10  # seconds
+            start_time = time.time()
+            while not snapshot_completed and time.time() - start_time < timeout:
+                time.sleep(0.1)
+                
+            if not snapshot_completed:
+                print(f"WARNING: Snapshot creation timed out after {timeout} seconds, continuing without snapshot")
+                if snapshot_exception:
+                    print(f"Snapshot exception: {snapshot_exception}")
+            
+            # Actually save the implementation file with timeout
+            file_saved = False
+            file_exception = None
+            
+            def save_file_with_timeout():
+                nonlocal file_saved, file_exception
+                try:
+                    full_path = resolve_path(file_path, create_parents=True)
+                    with open(full_path, 'w') as f:
+                        f.write(code)
+                    file_saved = True
+                except Exception as e:
+                    file_exception = e
+            
+            # Start file saving in a separate thread
+            file_thread = threading.Thread(target=save_file_with_timeout)
+            file_thread.daemon = True
+            file_thread.start()
+            
+            # Wait for completion with timeout (5 seconds)
+            timeout = 5  # seconds
+            start_time = time.time()
+            while not file_saved and time.time() - start_time < timeout:
+                time.sleep(0.1)
+                
+            if not file_saved:
+                print(f"WARNING: File saving timed out after {timeout} seconds")
+                if file_exception:
+                    print(f"File exception: {file_exception}")
+                raise TimeoutError(f"File saving operation timed out after {timeout} seconds")
                 
             # Update task status
             old_status = task.status
@@ -537,23 +620,63 @@ class AgenDev:
             if self.notification_manager:
                 self.notification_manager.task_status_update(task, old_status)
             
-            # Update dependencies
-            self.task_graph.update_task_statuses()
+            # Update dependencies with timeout
+            deps_completed = False
             
-            # Auto-save if needed
-            self._save_project_state()
+            def update_deps_with_timeout():
+                nonlocal deps_completed
+                self.task_graph.update_task_statuses()
+                deps_completed = True
+            
+            # Start dependency update in a separate thread
+            deps_thread = threading.Thread(target=update_deps_with_timeout)
+            deps_thread.daemon = True
+            deps_thread.start()
+            
+            # Wait for completion with timeout (5 seconds)
+            timeout = 5  # seconds
+            start_time = time.time()
+            while not deps_completed and time.time() - start_time < timeout:
+                time.sleep(0.1)
+                
+            if not deps_completed:
+                print(f"WARNING: Dependencies update timed out after {timeout} seconds, continuing anyway")
+            
+            # Auto-save with timeout
+            save_completed = False
+            
+            def save_project_with_timeout():
+                nonlocal save_completed
+                self._save_project_state()
+                save_completed = True
+            
+            # Start project saving in a separate thread
+            save_thread = threading.Thread(target=save_project_with_timeout)
+            save_thread.daemon = True
+            save_thread.start()
+            
+            # Wait for completion with timeout (5 seconds)
+            timeout = 5  # seconds
+            start_time = time.time()
+            while not save_completed and time.time() - start_time < timeout:
+                time.sleep(0.1)
+                
+            if not save_completed:
+                print(f"WARNING: Project state saving timed out after {timeout} seconds, continuing anyway")
             
             return {
                 "success": True,
                 "task_id": str(task_id),
                 "implementation": implementation,
                 "file_path": file_path,
-                "snapshot_id": snapshot_metadata.snapshot_id
+                "snapshot_id": snapshot_metadata.snapshot_id if snapshot_metadata else None
             }
             
         except Exception as e:
             error_msg = f"Failed to implement task '{task.title}': {str(e)}"
             print(f"Implementation error: {error_msg}")
+            import traceback
+            traceback.print_exc()
             
             # Update task status to failed
             old_status = task.status

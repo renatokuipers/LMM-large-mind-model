@@ -552,13 +552,92 @@ def register_callbacks(app) -> None:
         if not n_clicks or not task_id:
             raise PreventUpdate
             
-        # Execute the task using core integration
-        execution_result = core_integration.execute_task(task_id)
+        print(f"Starting task execution with task_id: {task_id}")
         
+        # Add a global timeout for the entire task execution
+        import threading
+        import time
+        
+        execution_result = {
+            "success": False,
+            "error": "Task execution timed out"
+        }
+        execution_completed = False
+        
+        def execute_task_with_timeout():
+            nonlocal execution_result, execution_completed
+            try:
+                # Execute the task using core integration
+                result = core_integration.execute_task(task_id)
+                execution_result = result
+                print(f"Task execution completed with result: {result}")
+            except Exception as e:
+                print(f"Error during task execution: {e}")
+                import traceback
+                traceback.print_exc()
+                execution_result = {
+                    "success": False,
+                    "error": f"Task execution failed: {str(e)}"
+                }
+            finally:
+                execution_completed = True
+        
+        # Start task execution in a separate thread
+        execution_thread = threading.Thread(target=execute_task_with_timeout)
+        execution_thread.daemon = True
+        execution_thread.start()
+        
+        # Wait for completion with timeout (60 seconds)
+        timeout = 60  # seconds
+        start_time = time.time()
+        while not execution_completed and time.time() - start_time < timeout:
+            time.sleep(0.1)
+            
+        if not execution_completed:
+            print(f"WARNING: Task execution timed out after {timeout} seconds")
+            execution_result = {
+                "success": False,
+                "error": f"Task execution timed out after {timeout} seconds"
+            }
+        
+        # Handle failed task execution gracefully in the UI
         if not execution_result.get("success", False):
-            # If execution failed, don't update anything
+            error_message = execution_result.get("error", "Unknown error during task execution")
+            print(f"Task execution failed: {error_message}")
+            
+            # Find the task that failed
+            updated_tasks = []
+            for task in task_data.get("tasks", []):
+                if task["id"] == task_id:
+                    # Update task to show error
+                    task["status"] = "failed"
+                    task["content"] = [
+                        html.P(task.get("description", "Task failed.")),
+                        html.P(f"Error: {error_message}", style={"color": "red"}),
+                        create_command_element(f"git checkout -b task/{task['id']}", "failed")
+                    ]
+                
+                updated_tasks.append(task)
+                
+            task_data["tasks"] = updated_tasks
+            
+            # Generate playback steps for the failed task
+            new_steps = [{
+                "type": "terminal",
+                "content": f"$ echo 'Task execution failed'\nError: {error_message}",
+                "operation_type": "Error",
+                "file_path": "Task execution"
+            }]
+            
+            # Append error step to existing playback data
+            current_steps = playback_data.get("steps", [])
+            playback_data["steps"] = current_steps + new_steps
+            playback_data["total_steps"] = len(playback_data["steps"])
+            playback_data["current_step"] = len(playback_data["steps"]) - 1  # Point to error step
+            
             return task_data, todo_data, playback_data
             
+        # If execution was successful, continue with normal flow
         # Update task status in task data
         updated_tasks = []
         for task in task_data.get("tasks", []):

@@ -272,12 +272,13 @@ class TaskProbabilityModel:
                 }
             }
             
+            # IMPORTANT FIX: Don't clear the context, as this may cause empty messages in some scenarios
             # Get structured response from LLM
             response = self.llm_integration.structured_query(
                 prompt=prompt,
                 json_schema=json_schema,
-                clear_context=True,
-                save_to_context=False
+                clear_context=False,  # Changed from True to False
+                save_to_context=True  # Changed from False to True
             )
             
             # Extract values

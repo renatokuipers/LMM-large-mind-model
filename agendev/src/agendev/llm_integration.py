@@ -8,6 +8,7 @@ import time
 import json
 import logging
 from pathlib import Path
+import threading
 
 from .llm_module import LLMClient, Message
 from .models.task_models import Task, TaskType
@@ -62,8 +63,24 @@ class ContextWindow(BaseModel):
             self.messages = []
     
     def as_message_list(self) -> List[Message]:
-        """Convert to a list of Message objects for LLMClient."""
-        return [Message(role=msg["role"], content=msg["content"]) for msg in self.messages]
+        """
+        Convert to a list of Message objects for LLMClient.
+        
+        Returns:
+            List of Message objects, never empty
+        """
+        # Create message objects from internal messages
+        message_list = [Message(role=msg["role"], content=msg["content"]) for msg in self.messages]
+        
+        # If messages list is empty, add a default system message
+        if not message_list:
+            default_message = Message(
+                role="system", 
+                content="You are a helpful AI assistant. Please provide a useful response."
+            )
+            message_list.append(default_message)
+            
+        return message_list
 
 class LLMIntegration:
     """Enhanced LLM client for diverse query types and context management."""
@@ -119,21 +136,22 @@ class LLMIntegration:
         prompt: str,
         config: Optional[LLMConfig] = None,
         clear_context: bool = False,
-        save_to_context: bool = True
+        save_to_context: bool = True,
+        timeout: float = 30.0
     ) -> str:
         """
-        Send a query to the LLM and optionally update context.
+        Send a query to the LLM and return the response.
         
         Args:
-            prompt: The prompt to send
-            config: Optional configuration override
-            clear_context: Whether to clear context before sending
-            save_to_context: Whether to save the interaction to context
+            prompt: The prompt to send to the LLM
+            config: LLM configuration options
+            clear_context: Whether to clear the context before adding the prompt
+            save_to_context: Whether to save the prompt and response to the context
+            timeout: Maximum time in seconds to wait for LLM response
             
         Returns:
             Response from the LLM
         """
-        # Use provided config or default
         cfg = config or self.config
         
         # Optionally clear context
@@ -147,27 +165,68 @@ class LLMIntegration:
         # Prepare message list
         messages = self.context.as_message_list() if cfg.include_history else [Message(role="user", content=prompt)]
         
-        # Add system message if not present
-        if not messages or messages[0].role != "system":
-            if self.context.system_message:
-                messages.insert(0, Message(role="system", content=self.context.system_message))
+        # Add timeout handling
+        completion_result = None
+        completion_exception = None
+        completion_completed = False
         
-        # Execute with retry logic
-        response = self._execute_with_retry(
-            lambda: self.llm_client.chat_completion(
-                messages=messages,
-                model=cfg.model,
-                temperature=cfg.temperature,
-                max_tokens=cfg.max_tokens,
-                stream=cfg.stream
-            )
-        )
+        def run_completion_with_timeout():
+            nonlocal completion_result, completion_exception, completion_completed
+            try:
+                # Execute chat completion with retry
+                for attempt in range(1, cfg.max_retries + 1):
+                    try:
+                        completion_result = self.llm_client.chat_completion(
+                            messages=messages,
+                            model=cfg.model,
+                            temperature=cfg.temperature,
+                            max_tokens=cfg.max_tokens
+                        )
+                        break
+                    except Exception as e:
+                        if attempt < cfg.max_retries:
+                            backoff = 2 ** (attempt - 1)
+                            logger.warning(f"Attempt {attempt} failed: {e}. Retrying in {backoff}s...")
+                            time.sleep(backoff)
+                        else:
+                            logger.error(f"All {cfg.max_retries} attempts failed.")
+                            raise
+                
+                completion_completed = True
+            except Exception as e:
+                completion_exception = e
         
-        # Save response to context if requested
+        # Start completion in a separate thread
+        completion_thread = threading.Thread(target=run_completion_with_timeout)
+        completion_thread.daemon = True
+        completion_thread.start()
+        
+        # Wait for completion with timeout
+        start_time = time.time()
+        while not completion_completed and time.time() - start_time < timeout:
+            time.sleep(0.1)
+        
+        if not completion_completed:
+            error_msg = f"LLM query timed out after {timeout} seconds"
+            logger.error(error_msg)
+            if completion_exception:
+                logger.error(f"Exception in LLM thread: {completion_exception}")
+            
+            # Add system message to context indicating timeout
+            if save_to_context:
+                self.context.add_message("system", f"Error: LLM query timed out after {timeout} seconds")
+            
+            # Return a fallback response
+            return f"I apologize, but I'm having trouble generating a response within the time limit. Please try again or simplify your request."
+        
+        if completion_exception:
+            raise completion_exception
+        
+        # Add assistant message to context if requested
         if save_to_context:
-            self.context.add_message("assistant", response)
+            self.context.add_message("assistant", completion_result)
         
-        return response
+        return completion_result
     
     def structured_query(
         self,
@@ -208,6 +267,12 @@ class LLMIntegration:
         if not messages or messages[0].role != "system":
             if self.context.system_message:
                 messages.insert(0, Message(role="system", content=self.context.system_message))
+        
+        # FIX: Ensure messages are not empty
+        if not messages:
+            # If somehow there are no messages, add the prompt as a user message
+            messages = [Message(role="user", content=prompt)]
+            logger.warning("No messages in context, adding prompt as user message")
         
         # Execute with retry logic
         response = self._execute_with_retry(
