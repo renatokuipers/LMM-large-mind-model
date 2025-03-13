@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import logging
 import threading
 import time
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -273,6 +274,13 @@ class LLMClient:
             logger.debug("Adding system message hint for structured output")
             schema_hint = f"You must respond with JSON that matches this schema: {json.dumps(json_schema)}"
             messages.insert(0, Message(role="system", content=schema_hint))
+        else:
+            # Enhance existing system message with schema information
+            for i, msg in enumerate(messages):
+                if msg.role == "system":
+                    enhanced_content = f"{msg.content}\n\nImportant: Your response must be valid JSON that follows this schema: {json.dumps(json_schema)}"
+                    messages[i] = Message(role="system", content=enhanced_content)
+                    break
         
         # Prepare payload
         payload = {
@@ -281,7 +289,7 @@ class LLMClient:
             "temperature": temperature,
             "response_format": {
                 "type": "json_schema",
-                "schema": json_schema
+                "json_schema": json_schema
             },
             "stream": stream
         }
@@ -347,12 +355,46 @@ class LLMClient:
             
             # Parse the content as JSON
             try:
-                json_response = json.loads(content)
-                logger.debug(f"Successfully parsed JSON response")
+                # Handle both direct JSON and string-encoded JSON
+                if isinstance(content, dict):
+                    # Some APIs return JSON directly
+                    json_response = content
+                    logger.debug("Received direct JSON object response")
+                elif isinstance(content, str):
+                    # Parse string-encoded JSON
+                    content = content.strip()
+                    # Handle cases where the API returns markdown-formatted JSON
+                    if content.startswith("```json") and content.endswith("```"):
+                        content = content[7:-3].strip()
+                    elif content.startswith("```") and content.endswith("```"):
+                        content = content[3:-3].strip()
+                    
+                    json_response = json.loads(content)
+                    logger.debug("Successfully parsed JSON from string response")
+                else:
+                    logger.error(f"Unexpected content type: {type(content)}")
+                    raise ValueError(f"Unexpected content type: {type(content)}")
+                
                 return json_response
+                
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing JSON response: {e}")
                 logger.error(f"Raw content: {content}")
+                
+                # Attempt to extract JSON from text in case it's embedded in other text
+                try:
+                    # Try to find JSON-like patterns
+                    json_pattern = r'(\{.*\})'
+                    matches = re.search(json_pattern, content, re.DOTALL)
+                    if matches:
+                        potential_json = matches.group(1)
+                        logger.info("Found potential JSON pattern, attempting to parse")
+                        json_response = json.loads(potential_json)
+                        logger.info("Successfully extracted and parsed JSON")
+                        return json_response
+                except Exception as extraction_error:
+                    logger.error(f"JSON extraction attempt failed: {extraction_error}")
+                
                 raise ValueError(f"Failed to parse structured JSON response: {e}")
             
         except requests.exceptions.Timeout:

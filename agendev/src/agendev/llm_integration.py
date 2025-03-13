@@ -450,11 +450,12 @@ class LLMIntegration:
             response = self._execute_with_retry(
                 lambda: self.llm_client.structured_completion(
                     messages=messages,
-                    json_schema=json_schema,
+                    json_schema=json_schema,  # Still pass for the system message enhancement
                     model=cfg.model,
                     temperature=cfg.temperature,
                     max_tokens=cfg.max_tokens,
-                    stream=cfg.stream
+                    stream=cfg.stream,
+                    timeout=timeout
                 ),
                 max_retries=cfg.max_retries,
                 base_delay=cfg.retry_delay_seconds,
