@@ -8,6 +8,8 @@ from pathlib import Path
 import os
 import time
 import logging
+import re
+import traceback
 from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
@@ -45,6 +47,40 @@ class ProjectState(str, Enum):
     TESTING = "testing"
     COMPLETED = "completed"
 
+class ErrorCategory(str, Enum):
+    """Categories of errors that can occur during task execution."""
+    LLM_SERVICE = "llm_service"  # Issues with the LLM service (network, timeout)
+    LLM_RESPONSE = "llm_response"  # Issues with the LLM response (malformed, incomplete)
+    CODE_QUALITY = "code_quality"  # Issues with the generated code (syntax errors, bugs)
+    FILESYSTEM = "filesystem"  # Issues with file operations
+    DEPENDENCY = "dependency"  # Issues with task dependencies
+    RESOURCE = "resource"  # Resource constraints (memory, CPU)
+    UNKNOWN = "unknown"  # Unclassified errors
+
+class RetryStrategy(str, Enum):
+    """Strategies for retrying failed tasks."""
+    NONE = "none"  # No retry
+    SIMPLE = "simple"  # Simple retry with same parameters
+    ADJUST_PARAMETERS = "adjust_parameters"  # Retry with adjusted parameters
+    SIMPLIFY_CONTEXT = "simplify_context"  # Retry with simplified context
+    DECOMPOSE_TASK = "decompose_task"  # Break task into smaller subtasks
+    CHANGE_APPROACH = "change_approach"  # Use a completely different approach
+
+class ExecutionResult(BaseModel):
+    """Result of a task execution attempt."""
+    success: bool = False
+    task_id: UUID
+    implementation: str = ""
+    file_path: str = ""
+    error: Optional[str] = None
+    error_category: Optional[ErrorCategory] = None
+    snapshot_id: Optional[str] = None
+    retry_strategy: RetryStrategy = RetryStrategy.NONE
+    retry_count: int = 0
+    parameter_adjustments: Dict[str, Any] = Field(default_factory=dict)
+    execution_time: float = 0.0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class AgenDevConfig(BaseModel):
     """Configuration for the AgenDev system."""
     project_name: str
@@ -57,11 +93,20 @@ class AgenDevConfig(BaseModel):
     auto_save: bool = True
     auto_save_interval_minutes: float = 5.0
     
+    # Task execution configuration
+    max_retry_attempts: int = 3
+    execution_timeout: float = 60.0  # Seconds
+    preserve_work_on_failure: bool = True
+    
     @model_validator(mode='after')
     def validate_config(self) -> 'AgenDevConfig':
         """Ensure configuration values are valid."""
         if self.auto_save_interval_minutes <= 0:
             self.auto_save_interval_minutes = 5.0
+        if self.max_retry_attempts < 0:
+            self.max_retry_attempts = 3
+        if self.execution_timeout <= 0:
+            self.execution_timeout = 60.0
         return self
 
 class AgenDev:
@@ -446,9 +491,102 @@ class AgenDev:
         
         return path
     
+    def _classify_error(self, error: Exception, context: str) -> Tuple[ErrorCategory, str, RetryStrategy]:
+        """
+        Classify an error to determine its category and appropriate retry strategy.
+        
+        Args:
+            error: The exception that occurred
+            context: The context in which the error occurred
+            
+        Returns:
+            Tuple of (error_category, error_message, retry_strategy)
+        """
+        error_msg = str(error)
+        error_type = type(error).__name__
+        
+        # Determine error category
+        if error_type == "TimeoutError" or "timeout" in error_msg.lower():
+            category = ErrorCategory.LLM_SERVICE
+            retry_strategy = RetryStrategy.SIMPLE
+        elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+            category = ErrorCategory.LLM_SERVICE
+            retry_strategy = RetryStrategy.SIMPLE
+        elif "response" in error_msg.lower() or "parse" in error_msg.lower() or "json" in error_msg.lower():
+            category = ErrorCategory.LLM_RESPONSE
+            retry_strategy = RetryStrategy.ADJUST_PARAMETERS
+        elif "syntax error" in error_msg.lower() or "invalid syntax" in error_msg.lower():
+            category = ErrorCategory.CODE_QUALITY
+            retry_strategy = RetryStrategy.ADJUST_PARAMETERS
+        elif "file" in error_msg.lower() or "permission" in error_msg.lower() or "directory" in error_msg.lower():
+            category = ErrorCategory.FILESYSTEM
+            retry_strategy = RetryStrategy.SIMPLE
+        elif "memory" in error_msg.lower() or "resource" in error_msg.lower():
+            category = ErrorCategory.RESOURCE
+            retry_strategy = RetryStrategy.SIMPLIFY_CONTEXT
+        elif "dependency" in error_msg.lower() or "import" in error_msg.lower():
+            category = ErrorCategory.DEPENDENCY
+            retry_strategy = RetryStrategy.ADJUST_PARAMETERS
+        else:
+            category = ErrorCategory.UNKNOWN
+            retry_strategy = RetryStrategy.ADJUST_PARAMETERS
+        
+        # Format detailed error message
+        detail_msg = f"{error_type} in {context}: {error_msg}"
+        
+        return category, detail_msg, retry_strategy
+    
+    def _adjust_parameters_for_retry(
+        self, 
+        task: Task, 
+        error_category: ErrorCategory, 
+        attempt: int
+    ) -> LLMConfig:
+        """
+        Adjust LLM parameters based on error type and retry attempt.
+        
+        Args:
+            task: The task being executed
+            error_category: Category of the error
+            attempt: The current retry attempt number
+            
+        Returns:
+            Adjusted LLM configuration
+        """
+        # Get base configuration
+        base_config = self.parameter_controller.get_llm_config(task)
+        
+        # Make adjustments based on error category
+        if error_category == ErrorCategory.CODE_QUALITY:
+            # Reduce temperature for more precise code generation
+            temperature = max(0.1, base_config.temperature * (0.8 ** attempt))
+            # Increase max_tokens for more complete responses
+            max_tokens = min(4000, int(base_config.max_tokens * 1.2))
+        elif error_category == ErrorCategory.LLM_RESPONSE:
+            # Reduce temperature for more deterministic responses
+            temperature = max(0.1, base_config.temperature * (0.7 ** attempt))
+            # Slightly increase max_tokens
+            max_tokens = min(4000, int(base_config.max_tokens * 1.1))
+        elif error_category == ErrorCategory.RESOURCE:
+            # Reduce max_tokens to conserve resources
+            max_tokens = max(500, int(base_config.max_tokens * (0.8 ** attempt)))
+            # Keep temperature the same
+            temperature = base_config.temperature
+        else:
+            # Default adjustment: slight reduction in temperature
+            temperature = max(0.1, base_config.temperature * (0.9 ** attempt))
+            max_tokens = base_config.max_tokens
+        
+        # Create new config with adjusted parameters
+        return LLMConfig(
+            model=base_config.model,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
     def implement_task(self, task_id: UUID) -> Dict[str, Any]:
         """
-        Implement a task using LLM.
+        Implement a task using LLM with enhanced error handling and retries.
         
         Args:
             task_id: ID of the task to implement
@@ -460,97 +598,147 @@ class AgenDev:
             error_msg = f"Task not found: {task_id}"
             if self.notification_manager:
                 self.notification_manager.error(error_msg)
-            return {"error": error_msg}
+            return {"success": False, "error": error_msg}
         
         task = self.task_graph.tasks[task_id]
+        
+        # Initialize execution result
+        result = ExecutionResult(
+            success=False,
+            task_id=task_id
+        )
         
         # Notify about implementation start
         if self.notification_manager:
             self.notification_manager.info(f"Implementing task: {task.title}")
         
-        # Wrap everything in try/except for detailed error logging
-        try:
-            print(f"Starting implementation of task: {task.title} ({task_id})")
-            
-            # Get optimal parameters for this task
-            llm_config = self.parameter_controller.get_llm_config(task)
-            print(f"Using LLM config: temperature={llm_config.temperature}, max_tokens={llm_config.max_tokens}")
-            
-            # Generate implementation context
-            print("Generating context for task...")
-            context_str = ""
-            if self.context_manager:
-                try:
-                    context = self.context_manager.generate_context_for_task(task.description, top_k=5)
-                    context_str = "\n\n".join(
-                        f"File: {elem['source_file']}\n```\n{elem['content']}\n```"
-                        for elem in context.get("elements", [])
-                    )
-                    print(f"Generated context with {len(context.get('elements', []))} elements")
-                except Exception as context_error:
-                    print(f"Error generating context: {context_error}")
-                    import traceback
-                    traceback.print_exc()
-                    # Continue without context
-            
-            # Generate implementation
-            prompt = f"""
-            Task: {task.title}
-            Description: {task.description}
-            
-            {context_str}
-            
-            Implement this task according to the description. 
-            Generate clean, well-structured, production-ready code.
-            Include detailed comments explaining the code.
-            """
-            
-            print("Sending prompt to LLM for implementation...")
-            
-            # Use LLM to generate implementation with explicit error handling
+        # Record execution start time
+        start_time = time.time()
+        
+        # Initialize retry counter
+        retry_count = 0
+        max_retries = self.config.max_retry_attempts
+        
+        # Keep track of the latest snapshot ID for recovery
+        latest_snapshot_id = None
+        
+        # Main implementation loop with retries
+        while retry_count <= max_retries:
             try:
-                # Make sure not to clear context in case that's causing issues
-                implementation = self.llm.query(
-                    prompt=prompt, 
-                    config=llm_config,
-                    clear_context=False,
-                    save_to_context=True
-                )
-                print(f"Received implementation response of length {len(implementation)}")
-            except Exception as llm_error:
-                print(f"LLM error during implementation: {llm_error}")
-                import traceback
-                traceback.print_exc()
-                raise Exception(f"Failed to generate implementation: {llm_error}")
-            
-            # Extract code from implementation (removing any markdown formatting)
-            code = implementation
-            if "```" in implementation:
+                # If this is a retry, log and notify
+                if retry_count > 0:
+                    retry_msg = f"Retry attempt {retry_count}/{max_retries} for task: {task.title}"
+                    logger.info(retry_msg)
+                    if self.notification_manager:
+                        self.notification_manager.info(retry_msg)
+                
+                # Get optimal parameters for this task, adjusted for retries if needed
+                if retry_count > 0 and result.error_category:
+                    llm_config = self._adjust_parameters_for_retry(
+                        task, 
+                        result.error_category, 
+                        retry_count
+                    )
+                    result.parameter_adjustments = {
+                        "temperature": llm_config.temperature,
+                        "max_tokens": llm_config.max_tokens
+                    }
+                else:
+                    llm_config = self.parameter_controller.get_llm_config(task)
+                
+                logger.info(f"Using LLM config: temperature={llm_config.temperature}, max_tokens={llm_config.max_tokens}")
+                
+                # Generate implementation context
+                logger.info("Generating context for task...")
+                context_str = ""
+                if self.context_manager:
+                    try:
+                        context = self.context_manager.generate_context_for_task(task.description, top_k=5)
+                        context_str = "\n\n".join(
+                            f"File: {elem['source_file']}\n```\n{elem['content']}\n```"
+                            for elem in context.get("elements", [])
+                        )
+                        logger.info(f"Generated context with {len(context.get('elements', []))} elements")
+                    except Exception as context_error:
+                        logger.warning(f"Error generating context: {context_error}")
+                        # Continue without context
+                
+                # Generate implementation
+                prompt = f"""
+                Task: {task.title}
+                Description: {task.description}
+                
+                {context_str}
+                
+                Implement this task according to the description. 
+                Generate clean, well-structured, production-ready code.
+                Include detailed comments explaining the code.
+                """
+                
+                logger.info("Sending prompt to LLM for implementation...")
+                
+                # Take snapshot of current state before LLM query (for work preservation)
+                if self.config.preserve_work_on_failure and retry_count > 0 and result.implementation:
+                    try:
+                        # Only take a snapshot if we have an implementation from a previous attempt
+                        recovery_snapshot_id = self.snapshot_engine.create_snapshot(
+                            file_path=f"recovery/{task_id}.py",
+                            content=result.implementation,
+                            message=f"Recovery snapshot before retry {retry_count} for {task.title}",
+                            tags=["recovery", task.task_type.value]
+                        ).snapshot_id
+                        logger.info(f"Created recovery snapshot {recovery_snapshot_id} before retry")
+                    except Exception as snapshot_error:
+                        logger.warning(f"Error creating recovery snapshot: {snapshot_error}")
+                
+                # Use LLM to generate implementation with explicit error handling
+                try:
+                    implementation = self.llm.query(
+                        prompt=prompt, 
+                        config=llm_config,
+                        clear_context=False,
+                        save_to_context=True
+                    )
+                    logger.info(f"Received implementation response of length {len(implementation)}")
+                except Exception as llm_error:
+                    logger.error(f"LLM error during implementation: {llm_error}")
+                    error_category, error_detail, retry_strategy = self._classify_error(
+                        llm_error, "LLM generation"
+                    )
+                    
+                    # Update result with error information
+                    result.error = error_detail
+                    result.error_category = error_category
+                    result.retry_strategy = retry_strategy
+                    result.retry_count = retry_count
+                    
+                    # If we should retry, continue to next attempt
+                    if retry_count < max_retries and retry_strategy != RetryStrategy.NONE:
+                        retry_count += 1
+                        continue
+                    else:
+                        # If we're out of retries or shouldn't retry, return error
+                        raise Exception(f"Failed to generate implementation: {error_detail}")
+                
+                # Extract code from implementation (removing any markdown formatting)
+                code = implementation
+                if "```" in implementation:
+                    import re
+                    code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", implementation, re.DOTALL)
+                    if code_blocks:
+                        code = "\n\n".join(code_blocks)
+                        logger.info(f"Extracted {len(code_blocks)} code blocks")
+                
+                # Create safe file name from task title
                 import re
-                code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", implementation, re.DOTALL)
-                if code_blocks:
-                    code = "\n\n".join(code_blocks)
-                    print(f"Extracted {len(code_blocks)} code blocks")
-            
-            # Create safe file name from task title
-            import re
-            safe_filename = re.sub(r'[^\w\-_\.]', '_', task.title.lower().replace(' ', '_'))
-            file_path = f"src/{safe_filename}.py"
-            print(f"Will save implementation to {file_path}")
-            
-            # Make sure the src directory exists
-            src_dir = resolve_path("src", create_parents=True)
-            
-            # Create a snapshot with timeout
-            import threading
-            import time
-            
-            snapshot_completed = False
-            snapshot_exception = None
-            snapshot_metadata = None
-            
-            def create_snapshot_with_timeout():
-                nonlocal snapshot_completed, snapshot_exception, snapshot_metadata
+                safe_filename = re.sub(r'[^\w\-_\.]', '_', task.title.lower().replace(' ', '_'))
+                file_path = f"src/{safe_filename}.py"
+                logger.info(f"Will save implementation to {file_path}")
+                
+                # Make sure the src directory exists
+                src_dir = resolve_path("src", create_parents=True)
+                
+                # Create a snapshot
                 try:
                     snapshot_metadata = self.snapshot_engine.create_snapshot(
                         file_path=file_path,
@@ -558,142 +746,171 @@ class AgenDev:
                         message=f"Implementation of {task.title}",
                         tags=[task.task_type.value]
                     )
-                    snapshot_completed = True
-                except Exception as e:
-                    snapshot_exception = e
+                    latest_snapshot_id = snapshot_metadata.snapshot_id
+                    logger.info(f"Created snapshot {latest_snapshot_id}")
+                except Exception as snapshot_error:
+                    logger.warning(f"Error creating snapshot: {snapshot_error}")
+                    error_category, error_detail, retry_strategy = self._classify_error(
+                        snapshot_error, "snapshot creation"
+                    )
                     
-            # Start snapshot creation in a separate thread
-            snapshot_thread = threading.Thread(target=create_snapshot_with_timeout)
-            snapshot_thread.daemon = True
-            snapshot_thread.start()
-            
-            # Wait for completion with timeout (10 seconds)
-            timeout = 10  # seconds
-            start_time = time.time()
-            while not snapshot_completed and time.time() - start_time < timeout:
-                time.sleep(0.1)
+                    # Update result with error information but continue (non-critical error)
+                    result.error = error_detail
+                    result.error_category = error_category
                 
-            if not snapshot_completed:
-                print(f"WARNING: Snapshot creation timed out after {timeout} seconds, continuing without snapshot")
-                if snapshot_exception:
-                    print(f"Snapshot exception: {snapshot_exception}")
-            
-            # Actually save the implementation file with timeout
-            file_saved = False
-            file_exception = None
-            
-            def save_file_with_timeout():
-                nonlocal file_saved, file_exception
+                # Save the implementation file
                 try:
                     full_path = resolve_path(file_path, create_parents=True)
                     with open(full_path, 'w') as f:
                         f.write(code)
-                    file_saved = True
-                except Exception as e:
-                    file_exception = e
-            
-            # Start file saving in a separate thread
-            file_thread = threading.Thread(target=save_file_with_timeout)
-            file_thread.daemon = True
-            file_thread.start()
-            
-            # Wait for completion with timeout (5 seconds)
-            timeout = 5  # seconds
-            start_time = time.time()
-            while not file_saved and time.time() - start_time < timeout:
-                time.sleep(0.1)
+                    logger.info(f"Saved implementation to {file_path}")
+                except Exception as file_error:
+                    logger.error(f"Error saving implementation file: {file_error}")
+                    error_category, error_detail, retry_strategy = self._classify_error(
+                        file_error, "file saving"
+                    )
+                    
+                    # Update result with error information
+                    result.error = error_detail
+                    result.error_category = error_category
+                    result.retry_strategy = retry_strategy
+                    result.retry_count = retry_count
+                    
+                    # If we should retry, continue to next attempt
+                    if retry_count < max_retries and retry_strategy != RetryStrategy.NONE:
+                        retry_count += 1
+                        continue
+                    else:
+                        # If we're out of retries or shouldn't retry, return error
+                        raise Exception(f"Failed to save implementation file: {error_detail}")
                 
-            if not file_saved:
-                print(f"WARNING: File saving timed out after {timeout} seconds")
-                if file_exception:
-                    print(f"File exception: {file_exception}")
-                raise TimeoutError(f"File saving operation timed out after {timeout} seconds")
+                # Verify the implementation quality
+                # This could include syntax checking or even running tests if available
+                try:
+                    self._verify_implementation_quality(code, file_path)
+                except Exception as quality_error:
+                    logger.error(f"Quality verification failed: {quality_error}")
+                    error_category, error_detail, retry_strategy = self._classify_error(
+                        quality_error, "quality verification"
+                    )
+                    
+                    # Update result with error information
+                    result.error = error_detail
+                    result.error_category = error_category
+                    result.retry_strategy = retry_strategy
+                    result.retry_count = retry_count
+                    
+                    # If we should retry, continue to next attempt
+                    if retry_count < max_retries and retry_strategy != RetryStrategy.NONE:
+                        retry_count += 1
+                        continue
+                    else:
+                        # If we're out of retries or shouldn't retry, return error
+                        raise Exception(f"Implementation failed quality check: {error_detail}")
                 
-            # Update task status
-            old_status = task.status
-            task.status = TaskStatus.COMPLETED
-            task.completion_percentage = 100.0
-            task.actual_duration_hours = task.estimated_duration_hours  # In real system, we'd track actual time
-            task.artifact_paths.append(file_path)
-            
-            # Notify about task completion
-            if self.notification_manager:
-                self.notification_manager.task_status_update(task, old_status)
-            
-            # Update dependencies with timeout
-            deps_completed = False
-            
-            def update_deps_with_timeout():
-                nonlocal deps_completed
+                # Update task status
+                old_status = task.status
+                task.status = TaskStatus.COMPLETED
+                task.completion_percentage = 100.0
+                task.actual_duration_hours = (time.time() - start_time) / 3600  # Convert seconds to hours
+                task.artifact_paths.append(file_path)
+                
+                # Update result with success information
+                result.success = True
+                result.implementation = implementation
+                result.file_path = file_path
+                result.snapshot_id = latest_snapshot_id
+                result.retry_count = retry_count
+                result.execution_time = time.time() - start_time
+                result.metadata = {
+                    "title": task.title,
+                    "description": task.description,
+                    "status": task.status.value,
+                    "artifact_paths": task.artifact_paths
+                }
+                
+                # Notify about task completion
+                if self.notification_manager:
+                    self.notification_manager.task_status_update(task, old_status)
+                
+                # Update dependencies and save state
                 self.task_graph.update_task_statuses()
-                deps_completed = True
-            
-            # Start dependency update in a separate thread
-            deps_thread = threading.Thread(target=update_deps_with_timeout)
-            deps_thread.daemon = True
-            deps_thread.start()
-            
-            # Wait for completion with timeout (5 seconds)
-            timeout = 5  # seconds
-            start_time = time.time()
-            while not deps_completed and time.time() - start_time < timeout:
-                time.sleep(0.1)
-                
-            if not deps_completed:
-                print(f"WARNING: Dependencies update timed out after {timeout} seconds, continuing anyway")
-            
-            # Auto-save with timeout
-            save_completed = False
-            
-            def save_project_with_timeout():
-                nonlocal save_completed
                 self._save_project_state()
-                save_completed = True
-            
-            # Start project saving in a separate thread
-            save_thread = threading.Thread(target=save_project_with_timeout)
-            save_thread.daemon = True
-            save_thread.start()
-            
-            # Wait for completion with timeout (5 seconds)
-            timeout = 5  # seconds
-            start_time = time.time()
-            while not save_completed and time.time() - start_time < timeout:
-                time.sleep(0.1)
                 
-            if not save_completed:
-                print(f"WARNING: Project state saving timed out after {timeout} seconds, continuing anyway")
+                # Task completed successfully, break the retry loop
+                break
+                
+            except Exception as e:
+                # Handle unexpected errors
+                error_msg = f"Failed to implement task '{task.title}': {str(e)}"
+                logger.error(error_msg)
+                logger.error(traceback.format_exc())
+                
+                # Classify the error
+                error_category, error_detail, retry_strategy = self._classify_error(e, "task implementation")
+                
+                # Update result with error information
+                result.error = error_detail
+                result.error_category = error_category
+                result.retry_strategy = retry_strategy
+                result.retry_count = retry_count
+                result.execution_time = time.time() - start_time
+                
+                # If we're out of retries or shouldn't retry, update task status and return error
+                if retry_count >= max_retries or retry_strategy == RetryStrategy.NONE:
+                    # Update task status to failed
+                    old_status = task.status
+                    task.status = TaskStatus.FAILED
+                    
+                    # Add error information to task metadata
+                    if not hasattr(task, "metadata"):
+                        task.metadata = {}
+                    task.metadata["error"] = error_detail
+                    task.metadata["error_category"] = error_category.value
+                    
+                    # Notify about failure
+                    if self.notification_manager:
+                        self.notification_manager.error(error_msg)
+                    
+                    # Save state even on failure
+                    self._save_project_state()
+                    
+                    # Break the retry loop
+                    break
+                
+                # Increment retry counter and continue to next attempt
+                retry_count += 1
+        
+        # Create return dictionary
+        return result.model_dump()
+    
+    def _verify_implementation_quality(self, code: str, file_path: str) -> None:
+        """
+        Verify the quality of the implementation.
+        
+        Args:
+            code: The generated code to verify
+            file_path: Path to the implementation file
             
-            return {
-                "success": True,
-                "task_id": str(task_id),
-                "implementation": implementation,
-                "file_path": file_path,
-                "snapshot_id": snapshot_metadata.snapshot_id if snapshot_metadata else None
-            }
-            
-        except Exception as e:
-            error_msg = f"Failed to implement task '{task.title}': {str(e)}"
-            print(f"Implementation error: {error_msg}")
-            import traceback
-            traceback.print_exc()
-            
-            # Update task status to failed
-            old_status = task.status
-            task.status = TaskStatus.FAILED
-            
-            # Notify about failure
-            if self.notification_manager:
-                self.notification_manager.error(error_msg)
-            
-            # Save state even on failure
-            self._save_project_state()
-            
-            return {
-                "success": False,
-                "task_id": str(task_id),
-                "error": error_msg
-            }
+        Raises:
+            Exception: If the implementation has quality issues
+        """
+        # Basic syntax check for Python files
+        if file_path.endswith(".py"):
+            try:
+                # Try to parse the code to check for syntax errors
+                ast_module = __import__('ast')
+                ast_module.parse(code)
+            except SyntaxError as e:
+                # Extract line and column information
+                line = e.lineno
+                col = e.offset
+                context = e.text
+                
+                raise Exception(f"Syntax error in generated code at line {line}, column {col}: {str(e)}. Context: {context}")
+        
+        # TODO: Add more specialized quality checks based on file type
+        # This could include running linters, validators, etc.
     
     def get_project_status(self) -> Dict[str, Any]:
         """
