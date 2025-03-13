@@ -4,7 +4,7 @@ View container components for the AgenDev UI.
 This module contains utility functions for creating view container elements
 such as editor, terminal, and browser views.
 """
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Dict, Any
 from dash import html, dcc
 
 def create_terminal_view(
@@ -481,7 +481,7 @@ def create_playback_controls(
                         html.I(className="fas fa-step-backward"),
                         className="btn-control",
                         id="playback-backward",
-                        title="Previous step",
+                        title="Previous step (←)",
                         disabled=is_live,
                         style={"opacity": "0.5" if is_live else "1"}
                     ),
@@ -489,7 +489,7 @@ def create_playback_controls(
                         html.I(id="play-icon", className=play_icon_class),
                         className="btn-control",
                         id="playback-play",
-                        title="Play/Pause",
+                        title="Play/Pause (Space)",
                         disabled=is_live,
                         style={"opacity": "0.5" if is_live else "1"}
                     ),
@@ -497,7 +497,7 @@ def create_playback_controls(
                         html.I(className="fas fa-step-forward"),
                         className="btn-control",
                         id="playback-forward",
-                        title="Next step",
+                        title="Next step (→)",
                         disabled=is_live,
                         style={"opacity": "0.5" if is_live else "1"}
                     ),
@@ -508,7 +508,8 @@ def create_playback_controls(
                             "marginLeft": "10px", 
                             "marginRight": "10px",
                             "display": "flex",
-                            "alignItems": "center"
+                            "alignItems": "center",
+                            "position": "relative"
                         },
                         children=[
                             dcc.Slider(
@@ -527,7 +528,7 @@ def create_playback_controls(
                         html.I(className="fas fa-bolt"),
                         className=live_button_class,
                         id="live-button",
-                        title="Live mode"
+                        title="Live mode (L)"
                     ),
                     html.Div(
                         id="playback-speed-control",
@@ -572,7 +573,8 @@ def create_playback_controls(
                             "marginLeft": "10px",
                             "display": "inline-flex",
                             "alignItems": "center",
-                            "opacity": "1" if not is_live else "0"
+                            "opacity": "1" if not is_live else "0",
+                            "transition": "opacity 0.3s ease"
                         },
                         children=[
                             html.I(className="fas fa-film", style={"marginRight": "5px"}),
@@ -584,11 +586,17 @@ def create_playback_controls(
         ]
     )
 
-def create_timeline_marker(step_type: str, tooltip_text: str, is_current: bool = False) -> html.Div:
+def create_timeline_marker(
+    position: float, 
+    step_type: str, 
+    tooltip_text: str, 
+    is_current: bool = False
+) -> html.Div:
     """
     Create a timeline marker for the playback slider.
     
     Args:
+        position: Position on the timeline (0-100)
         step_type: Type of step ("code", "terminal", "browser", "error", etc.)
         tooltip_text: Text to show in the tooltip
         is_current: Whether this is the current step
@@ -600,22 +608,24 @@ def create_timeline_marker(step_type: str, tooltip_text: str, is_current: bool =
     icon_map = {
         "terminal": "fas fa-terminal",
         "code": "fas fa-code",
+        "file": "fas fa-file-code",
         "browser": "fas fa-globe",
         "error": "fas fa-exclamation-circle",
         "success": "fas fa-check-circle",
         "task": "fas fa-tasks",
-        "file": "fas fa-file",
+        "setup": "fas fa-cog",
         "default": "fas fa-circle"
     }
     
     color_map = {
         "terminal": "#61dafb",
-        "code": "#00ff00",
-        "browser": "#ffc107",
+        "code": "#f8f8f8",
+        "file": "#00ff00",
+        "browser": "#ff6b6b",
         "error": "#dc3545",
-        "success": "#00ff00",
+        "success": "#28a745",
         "task": "#9370db",
-        "file": "#ff6b6b",
+        "setup": "#ffc107",
         "default": "#888"
     }
     
@@ -626,8 +636,9 @@ def create_timeline_marker(step_type: str, tooltip_text: str, is_current: bool =
         className="timeline-marker",
         style={
             "position": "absolute",
-            "transform": "translateX(-50%)",
+            "left": f"{position}%",
             "bottom": "20px",
+            "transform": "translateX(-50%)",
             "zIndex": "10",
             "cursor": "pointer"
         },
@@ -637,7 +648,180 @@ def create_timeline_marker(step_type: str, tooltip_text: str, is_current: bool =
             style={
                 "color": color,
                 "fontSize": "16px" if is_current else "12px",
-                "filter": "drop-shadow(0 0 3px rgba(255,255,255,0.5))" if is_current else "none"
+                "filter": "drop-shadow(0 0 3px rgba(255,255,255,0.5))" if is_current else "none",
+                "transition": "all 0.2s ease"
             }
         )
     )
+
+def create_step_preview(step_data: Dict[str, Any], is_current: bool = False) -> html.Div:
+    """
+    Create a preview component for a step in the timeline.
+    
+    Args:
+        step_data: Step data including type, operation, file path, etc.
+        is_current: Whether this is the current step
+        
+    Returns:
+        Dash component for step preview
+    """
+    # Determine icon based on step type
+    step_type = step_data.get("type", "terminal")
+    step_type_icon = {
+        "terminal": "fas fa-terminal",
+        "editor": "fas fa-file-code",
+        "browser": "fas fa-globe"
+    }.get(step_type, "fas fa-circle")
+    
+    # Determine color based on step operation
+    operation_type = step_data.get("operation_type", "")
+    operation_color = {
+        "Setting up": "#ffc107",
+        "Configuring": "#61dafb",
+        "Creating": "#00ff00",
+        "Implementing": "#f8f8f8",
+        "Saving": "#28a745",
+        "Error": "#dc3545"
+    }.get(operation_type, "#888")
+    
+    # Build preview content
+    content = [
+        html.Div(
+            style={
+                "display": "flex",
+                "alignItems": "center",
+                "marginBottom": "10px"
+            },
+            children=[
+                html.I(
+                    className=step_type_icon,
+                    style={
+                        "marginRight": "10px",
+                        "color": operation_color,
+                        "fontSize": "18px"
+                    }
+                ),
+                html.Span(
+                    operation_type or step_type.capitalize(),
+                    style={
+                        "fontWeight": "bold",
+                        "color": operation_color
+                    }
+                )
+            ]
+        ),
+        html.Div(
+            style={
+                "marginBottom": "5px"
+            },
+            children=[
+                html.Span(
+                    "File: ",
+                    style={
+                        "color": "#888",
+                        "marginRight": "5px"
+                    }
+                ),
+                html.Code(
+                    step_data.get("file_path", "") or "N/A",
+                    style={
+                        "backgroundColor": "rgba(97, 218, 251, 0.1)",
+                        "padding": "2px 4px",
+                        "borderRadius": "2px"
+                    }
+                )
+            ]
+        )
+    ]
+    
+    # Add timestamp if available
+    if "timestamp" in step_data:
+        import datetime
+        timestamp = datetime.datetime.fromtimestamp(step_data["timestamp"]).strftime("%H:%M:%S")
+        content.append(
+            html.Div(
+                timestamp,
+                style={
+                    "color": "#888",
+                    "fontSize": "0.8em",
+                    "marginTop": "5px"
+                }
+            )
+        )
+    
+    return html.Div(
+        className="step-preview",
+        style={
+            "backgroundColor": "#2d2d2d" if is_current else "#1e1e1e",
+            "border": f"1px solid {operation_color}" if is_current else "1px solid #444",
+            "borderRadius": "4px",
+            "padding": "10px",
+            "transition": "all 0.3s ease",
+            "opacity": "1" if is_current else "0.7"
+        },
+        children=content
+    )
+
+def create_keyboard_listener() -> dcc.Store:
+    """
+    Create a keyboard event listener for playback navigation.
+    
+    Returns:
+        Keyboard listener component
+    """
+    return html.Div([
+        # Hidden div that listens for keyboard events
+        html.Div(id='keyboard-listener', 
+                 n_keydowns=0,
+                 keydowns=[],
+                 style={'display': 'none'},
+                 **{'data-dash-is-loading': True}),  # Required for clientside callbacks
+        
+        # Store for keyboard actions
+        dcc.Store(id='keyboard-action', data=None),
+        
+        # Clientside JavaScript to capture keyboard events
+        html.Script('''
+            document.addEventListener('keydown', function(e) {
+                // Only handle playback control keys
+                if (['ArrowLeft', 'ArrowRight', ' ', 'l', 'L', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) {
+                    // Don't capture when typing in text fields
+                    if (document.activeElement.tagName === 'INPUT' || 
+                        document.activeElement.tagName === 'TEXTAREA' ||
+                        document.activeElement.isContentEditable) {
+                        return;
+                    }
+                    
+                    // Update the keyboard listener component
+                    var keyboardListener = document.getElementById('keyboard-listener');
+                    if (keyboardListener) {
+                        var n_keydowns = parseInt(keyboardListener.getAttribute('n_keydowns') || '0');
+                        var keydowns = JSON.parse(keyboardListener.getAttribute('keydowns') || '[]');
+                        
+                        n_keydowns += 1;
+                        keydowns.push({
+                            key: e.key,
+                            timeStamp: new Date().getTime()
+                        });
+                        
+                        // Limit array size to avoid memory issues
+                        if (keydowns.length > 10) {
+                            keydowns = keydowns.slice(-10);
+                        }
+                        
+                        keyboardListener.setAttribute('n_keydowns', n_keydowns);
+                        keyboardListener.setAttribute('keydowns', JSON.stringify(keydowns));
+                        
+                        // Trigger a change event for Dash to detect
+                        var event = new Event('change');
+                        keyboardListener.dispatchEvent(event);
+                        
+                        // Prevent default behavior for space (page scroll)
+                        if (e.key === ' ') {
+                            e.preventDefault();
+                        }
+                    }
+                }
+            });
+        ''')
+    ])

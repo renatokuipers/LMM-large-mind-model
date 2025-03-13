@@ -11,7 +11,8 @@ from .view_components import (
     create_view_header, 
     create_view_type_indicator, 
     create_playback_controls,
-    create_terminal_view
+    create_terminal_view,
+    create_keyboard_listener
 )
 
 def create_chat_container(project_title: str, todo_content: str = "", task_sections: Optional[List] = None) -> html.Div:
@@ -103,13 +104,23 @@ def create_view_container(
                 children=view_content
             ),
             
+            # Optional step visualization (visible in replay mode)
+            html.Div(
+                id="current-step-visualization",
+                style={"display": "none"},
+                children=[]
+            ),
+            
             # Playback Controls with enhanced replay support
             create_playback_controls(
                 total_steps=total_steps,
                 current_step=current_step,
                 is_playing=is_playing,
                 is_live=is_live
-            )
+            ),
+            
+            # Keyboard listener for playback navigation
+            create_keyboard_listener()
         ]
     )
 
@@ -194,7 +205,10 @@ def create_stores() -> List[dcc.Store]:
                 "view": "landing",
                 "initial_prompt": "",
                 "current_task_index": 0,
-                "is_live_mode": True
+                "is_live_mode": True,
+                "project_name": "",
+                "project_start_time": 0,
+                "playback_speed": 1.0
             }
         ),
         
@@ -205,8 +219,12 @@ def create_stores() -> List[dcc.Store]:
                 "total_steps": 0,
                 "current_step": 0,
                 "is_playing": False,
+                "is_live": True,
                 "play_interval": 3,  # seconds between steps
-                "steps": []
+                "playback_speed": 1.0,
+                "last_update_time": 0,
+                "steps": [],
+                "timeline_markers": []
             }
         ),
         
