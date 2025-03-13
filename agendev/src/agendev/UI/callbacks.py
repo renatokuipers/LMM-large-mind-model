@@ -181,7 +181,7 @@ def register_callbacks(app) -> None:
         playback_data["steps"] = [
             {
                 "type": "terminal",
-                "content": f"$ echo 'Initializing {title}'\nInitializing {title}\n$ mkdir {title.lower().replace(' ', '_')}\n$ cd {title.lower().replace(' ', '_')}",
+                "content": f"$ echo 'Initializing {title}'\\nInitializing {title}\\n$ mkdir {title.lower().replace(' ', '_')}\\n$ cd {title.lower().replace(' ', '_')}",
                 "operation_type": "Setting up",
                 "file_path": title.lower().replace(' ', '_'),
                 "timestamp": time.time(),
@@ -189,7 +189,7 @@ def register_callbacks(app) -> None:
             },
             {
                 "type": "terminal",
-                "content": f"$ echo 'Creating project structure'\nCreating project structure\n$ mkdir -p src tests docs\n$ touch README.md\n$ echo '# {title}' > README.md\n$ echo 'Project setup complete!'",
+                "content": f"$ echo 'Creating project structure'\\nCreating project structure\\n$ mkdir -p src tests docs\\n$ touch README.md\\n$ echo '# {title}' > README.md\\n$ echo 'Project setup complete!'",
                 "operation_type": "Configuring",
                 "file_path": "project structure",
                 "timestamp": time.time() + 1,
@@ -198,7 +198,7 @@ def register_callbacks(app) -> None:
             {
                 "type": "editor",
                 "filename": "README.md",
-                "content": f"# {title}\n\nThis project was created with AgenDev, an Intelligent Agentic Development System.\n\n## Description\n\n{prompt_value}\n\n## Getting Started\n\n```bash\n# Clone or download the project\ncd {title.lower().replace(' ', '-')}\n```\n\n## Features\n\n- Feature 1 (Coming soon)\n- Feature 2 (Coming soon)\n- Feature 3 (Coming soon)\n\n## License\n\nMIT\n",
+                "content": f"# {title}\\n\\nThis project was created with AgenDev, an Intelligent Agentic Development System.\\n\\n## Description\\n\\n{prompt_value}\\n\\n## Getting Started\\n\\n```bash\\n# Clone or download the project\\ncd {title.lower().replace(' ', '-')}\\n```\\n\\n## Features\\n\\n- Feature 1 (Coming soon)\\n- Feature 2 (Coming soon)\\n- Feature 3 (Coming soon)\\n\\n## License\\n\\nMIT\\n",
                 "operation_type": "Creating",
                 "file_path": "README.md",
                 "timestamp": time.time() + 2,
@@ -460,16 +460,20 @@ def register_callbacks(app) -> None:
          Output("task-status-icon", "className"),
          Output("current-task-text", "children"),
          Output("task-progress", "children"),
-         Output("replay-indicator", "style")],
+         Output("replay-indicator", "style"),
+         Output("current-step-visualization", "style"),
+         Output("current-step-visualization", "children")],
         [Input("playback-backward", "n_clicks"),
          Input("playback-play", "n_clicks"),
          Input("playback-forward", "n_clicks"),
          Input("live-button", "n_clicks"),
          Input("playback-interval", "n_intervals"),
          Input("playback-slider", "value"),
-         Input("playback-speed", "value")],
+         Input("playback-speed", "value"),
+         Input("keyboard-action", "data")],
         [State("playback-data", "data"),
-         State("app-state", "data")],
+         State("app-state", "data"),
+         State("replay-state", "data")],
         prevent_initial_call=True
     )
     def control_playback(
@@ -480,9 +484,11 @@ def register_callbacks(app) -> None:
         interval: int, 
         slider_value: float, 
         playback_speed: float,
+        keyboard_action: Dict[str, Any],
         playback_data: Dict[str, Any], 
-        app_state: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], bool, str, str, str, str, str, str, Dict[str, Any]]:
+        app_state: Dict[str, Any],
+        replay_state: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool, str, str, str, str, str, str, Dict[str, Any], Dict[str, Any], List[DashComponent]]:
         """
         Control playback based on user interaction with playback controls.
         
@@ -494,8 +500,10 @@ def register_callbacks(app) -> None:
             interval: Number of interval ticks
             slider_value: Current slider value
             playback_speed: Playback speed multiplier
+            keyboard_action: Keyboard action data
             playback_data: Current playback data
             app_state: Current application state
+            replay_state: Current replay state
             
         Returns:
             Updated playback state and UI indicators
@@ -516,8 +524,50 @@ def register_callbacks(app) -> None:
         # Track if major state change occurred
         state_changed = False
         
-        # Handle different triggers
-        if trigger_id == "playback-backward":
+        # Handle keyboard actions
+        if trigger_id == "keyboard-action" and keyboard_action:
+            action = keyboard_action.get("action")
+            value = keyboard_action.get("value")
+            
+            if action == "backward":
+                current_step = max(0, current_step - 1)
+                is_playing = False
+                is_live = False
+                state_changed = True
+                logger.info(f"Keyboard: Moving backward to step {current_step + 1}/{total_steps}")
+            
+            elif action == "forward":
+                current_step = min(total_steps - 1, current_step + 1)
+                is_live = current_step == total_steps - 1
+                state_changed = True
+                logger.info(f"Keyboard: Moving forward to step {current_step + 1}/{total_steps}")
+            
+            elif action == "play":
+                is_playing = not is_playing
+                is_live = False
+                state_changed = True
+                logger.info(f"Keyboard: Playback {'started' if is_playing else 'paused'}")
+            
+            elif action == "live":
+                is_live = True
+                current_step = total_steps - 1
+                is_playing = False
+                state_changed = True
+                logger.info("Keyboard: Switching to live mode")
+            
+            elif action == "slider" and value is not None:
+                # Calculate step based on percentage
+                if total_steps > 1:
+                    new_step = min(total_steps - 1, max(0, round((value / 100) * (total_steps - 1))))
+                    if new_step != current_step:
+                        current_step = new_step
+                        state_changed = True
+                        is_playing = False
+                        is_live = current_step == total_steps - 1
+                        logger.info(f"Keyboard: Jumped to step {current_step + 1}/{total_steps}")
+        
+        # Handle button actions
+        elif trigger_id == "playback-backward":
             current_step = max(0, current_step - 1)
             is_playing = False
             is_live = False
@@ -536,7 +586,6 @@ def register_callbacks(app) -> None:
             logger.info(f"Moving forward to step {current_step + 1}/{total_steps}")
             
             if current_step == total_steps - 1:
-                is_playing = False
                 is_live = True
                 logger.info("Reached latest step, switching to live mode")
         
@@ -606,6 +655,12 @@ def register_callbacks(app) -> None:
         # Update app state
         app_state["is_live_mode"] = is_live
         
+        # Update replay state for better persistence
+        replay_state["is_replay"] = not is_live
+        replay_state["is_playing"] = is_playing
+        replay_state["current_step"] = current_step
+        replay_state["playback_speed"] = playback_speed
+        
         # Update task status
         status_class = "status-tag in-progress"
         icon_class = "fas fa-spinner fa-spin"
@@ -633,6 +688,69 @@ def register_callbacks(app) -> None:
             "transition": "opacity 0.3s ease"
         }
         
+        # Step visualization (only shown in replay mode)
+        step_vis_style = {
+            "display": "block" if not is_live else "none",
+            "padding": "10px",
+            "backgroundColor": "#2d2d2d",
+            "marginTop": "10px",
+            "borderRadius": "4px",
+            "border": "1px solid #444"
+        }
+        
+        # Create step visualization content
+        step_visualization = []
+        if not is_live and current_step < len(playback_data["steps"]):
+            step_data = playback_data["steps"][current_step]
+            
+            # Format timestamp
+            timestamp = datetime.fromtimestamp(
+                step_data.get("timestamp", time.time())
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Get operation details
+            operation = step_data.get("operation_type", "Unknown operation")
+            file_path = step_data.get("file_path", "Unknown file")
+            step_type = step_data.get("type", "unknown").capitalize()
+            
+            # Create detailed visualization
+            step_visualization = [
+                html.Div([
+                    html.Span("Replay Mode - ", style={"color": "#61dafb", "fontWeight": "bold"}),
+                    html.Span(f"Step {current_step + 1} of {total_steps}")
+                ], style={"marginBottom": "10px", "fontSize": "1.1em"}),
+                
+                html.Div([
+                    html.Span("Type: ", style={"color": "#888", "marginRight": "5px"}),
+                    html.Span(step_type, style={"fontWeight": "bold"})
+                ], style={"marginBottom": "5px"}),
+                
+                html.Div([
+                    html.Span("Operation: ", style={"color": "#888", "marginRight": "5px"}),
+                    html.Span(operation, style={"fontWeight": "bold"})
+                ], style={"marginBottom": "5px"}),
+                
+                html.Div([
+                    html.Span("File path: ", style={"color": "#888", "marginRight": "5px"}),
+                    html.Code(file_path, style={"backgroundColor": "rgba(97, 218, 251, 0.1)", "padding": "2px 4px"})
+                ], style={"marginBottom": "5px"}),
+                
+                html.Div([
+                    html.Span("Timestamp: ", style={"color": "#888", "marginRight": "5px"}),
+                    html.Span(timestamp)
+                ], style={"fontSize": "0.9em", "color": "#aaa"})
+            ]
+            
+            # Add navigation instructions
+            step_visualization.append(
+                html.Div([
+                    html.I(className="fas fa-keyboard", style={"marginRight": "5px"}),
+                    html.Span("Navigation: ", style={"color": "#888"}),
+                    html.Span("← Previous | → Next | Space Play/Pause | L Live mode", 
+                             style={"fontSize": "0.85em", "color": "#aaa"})
+                ], style={"marginTop": "10px", "fontSize": "0.9em"})
+            )
+        
         return (
             playback_data, 
             not is_playing,  # Interval is disabled when not playing
@@ -642,7 +760,9 @@ def register_callbacks(app) -> None:
             icon_class,
             current_task,
             progress_text,
-            replay_indicator_style
+            replay_indicator_style,
+            step_vis_style,
+            step_visualization
         )
     
     @app.callback(
@@ -804,7 +924,7 @@ def register_callbacks(app) -> None:
             # Generate playback steps for the failed task
             new_steps = [{
                 "type": "terminal",
-                "content": f"$ echo 'Task execution failed'\nError: {error_message}\nCategory: {error_category}",
+                "content": f"$ echo 'Task execution failed'\\nError: {error_message}\\nCategory: {error_category}",
                 "operation_type": "Error",
                 "file_path": "Task execution",
                 "timestamp": time.time(),
@@ -1012,7 +1132,7 @@ def register_callbacks(app) -> None:
         # Add task reset step to playback data
         new_step = {
             "type": "terminal",
-            "content": f"$ echo 'Resetting task for retry'\nTask {task_id} reset to planned status for retry.",
+            "content": f"$ echo 'Resetting task for retry'\\nTask {task_id} reset to planned status for retry.",
             "operation_type": "Retry Preparation",
             "file_path": "Task management",
             "timestamp": time.time(),
@@ -1240,7 +1360,7 @@ def register_callbacks(app) -> None:
         
         return status_class, icon_class, status_text
     
-    # New callback for timeline markers
+    # Callback for timeline markers
     @app.callback(
         Output("playback-slider-container", "children"),
         [Input("playback-data", "data")],
@@ -1273,6 +1393,11 @@ def register_callbacks(app) -> None:
             marker_type = marker.get("type", "default")
             marker_tooltip = marker.get("tooltip", "Event")
             
+            # Check if this marker corresponds to the current step
+            is_current = False
+            if total_steps > 1 and abs(marker_pos - slider_value) < 5:  # Within 5% of timeline
+                is_current = True
+            
             markers.append(
                 html.Div(
                     style={
@@ -1280,10 +1405,12 @@ def register_callbacks(app) -> None:
                         "left": f"{marker_pos}%",
                         "bottom": "20px",
                         "transform": "translateX(-50%)",
-                        "zIndex": "10"
+                        "zIndex": "10",
+                        "cursor": "pointer"
                     },
                     className="timeline-marker",
                     title=marker_tooltip,
+                    id={"type": "timeline-marker", "position": marker_pos},
                     children=html.I(
                         className={
                             "terminal": "fas fa-terminal",
@@ -1308,7 +1435,9 @@ def register_callbacks(app) -> None:
                                 "browser": "#ff6b6b",
                                 "default": "#888"
                             }.get(marker_type, "#888"),
-                            "fontSize": "12px"
+                            "fontSize": "16px" if is_current else "12px",
+                            "filter": "drop-shadow(0 0 3px rgba(255,255,255,0.5))" if is_current else "none",
+                            "transition": "all 0.2s ease"
                         }
                     )
                 )
@@ -1334,97 +1463,153 @@ def register_callbacks(app) -> None:
             )
         ]
     
-    # New callback for step visualization - shows the current step in the timeline
+    # New callback to handle timeline marker clicks
     @app.callback(
-        Output("current-step-visualization", "children", allow_duplicate=True),
-        [Input("playback-data", "data")],
+        Output("playback-data", "data", allow_duplicate=True),
+        [Input({"type": "timeline-marker", "position": ALL}, "n_clicks")],
+        [State({"type": "timeline-marker", "position": ALL}, "id"),
+         State("playback-data", "data")],
         prevent_initial_call=True
     )
-    def update_step_visualization(playback_data: Dict[str, Any]) -> DashComponent:
+    def handle_timeline_marker_click(
+        n_clicks_list: List[int],
+        marker_ids: List[Dict[str, Any]],
+        playback_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
-        Update the visualization of the current step.
+        Handle clicks on timeline markers to jump to specific events.
         
         Args:
-            playback_data: Playback data store
+            n_clicks_list: List of click counts for all markers
+            marker_ids: List of marker IDs
+            playback_data: Current playback data
             
         Returns:
-            Step visualization component
+            Updated playback data
         """
-        if not playback_data or not playback_data.get("steps"):
-            return html.Div("No steps available")
+        ctx = callback_context
+        if not ctx.triggered:
+            raise PreventUpdate
         
-        current_step = playback_data["current_step"]
-        total_steps = playback_data.get("total_steps", len(playback_data["steps"]))
+        # Find which marker was clicked
+        triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+        if not triggered_id or '{' not in triggered_id:
+            raise PreventUpdate
         
-        if current_step >= len(playback_data["steps"]):
-            current_step = len(playback_data["steps"]) - 1
+        try:
+            marker_id = json.loads(triggered_id)
+            clicked_position = marker_id.get("position")
             
-        if current_step < 0:
-            current_step = 0
-            
-        step_data = playback_data["steps"][current_step]
-        
-        # Create step visualization
-        step_info = html.Div([
-            html.H3(f"Step {current_step + 1} of {total_steps}"),
-            html.P(f"Type: {step_data.get('type', 'unknown')}"),
-            html.P(f"Operation: {step_data.get('operation_type', 'none')}"),
-            html.P(f"File: {step_data.get('file_path', 'none')}"),
-            html.P(f"Time: {datetime.fromtimestamp(step_data.get('timestamp', time.time())).strftime('%Y-%m-%d %H:%M:%S')}")
-        ])
-        
-        return step_info
-    
-    # Add keyboard navigation for playback
-    app.clientside_callback(
-        """
-        function(n_keydowns, keys, playback_data) {
-            // Get playback state
-            const isPlaying = playback_data.is_playing;
-            const currentStep = playback_data.current_step;
-            const totalSteps = playback_data.total_steps;
-            
-            if (keys && keys.length > 0) {
-                const lastKey = keys[keys.length - 1];
+            # Find the closest step to this position
+            if not clicked_position:
+                raise PreventUpdate
                 
-                // Arrow left: backward
-                if (lastKey.key === 'ArrowLeft') {
-                    return ['backward', null, null, null, null];
-                }
-                // Arrow right: forward
-                else if (lastKey.key === 'ArrowRight') {
-                    return ['forward', null, null, null, null];
-                }
-                // Space: play/pause
-                else if (lastKey.key === ' ') {
-                    return ['play', null, null, null, null];
-                }
-                // L key: live mode
-                else if (lastKey.key === 'l' || lastKey.key === 'L') {
-                    return ['live', null, null, null, null];
-                }
-                // Number keys 1-9: jump to percentage of timeline
-                else if (lastKey.key >= '1' && lastKey.key <= '9') {
-                    const percentage = parseInt(lastKey.key) * 10;
-                    return ['slider', percentage, null, null, null];
-                }
-                // 0 key: jump to start
-                else if (lastKey.key === '0') {
-                    return ['slider', 0, null, null, null];
-                }
-            }
+            # Calculate the corresponding step index based on position
+            total_steps = playback_data.get("total_steps", 1)
+            if total_steps <= 1:
+                step_index = 0
+            else:
+                # Convert position (0-100) to step index
+                step_index = min(total_steps - 1, max(0, round((clicked_position / 100) * (total_steps - 1))))
             
-            // No action
-            return [null, null, null, null, null];
-        }
-        """,
-        [Output("keyboard-action", "data"),
-         Output("playback-backward", "n_clicks", allow_duplicate=True),
-         Output("playback-play", "n_clicks", allow_duplicate=True),
-         Output("playback-forward", "n_clicks", allow_duplicate=True),
-         Output("live-button", "n_clicks", allow_duplicate=True)],
+            # Update playback state
+            playback_data["current_step"] = step_index
+            playback_data["is_playing"] = False
+            playback_data["is_live"] = step_index == total_steps - 1
+            playback_data["last_update_time"] = time.time()
+            
+            logger.info(f"Jumped to step {step_index + 1}/{total_steps} via timeline marker")
+            
+            return playback_data
+        except (json.JSONDecodeError, KeyError):
+            raise PreventUpdate
+    
+    # Callback for keyboard shortcuts
+    @app.callback(
+        Output("keyboard-action", "data"),
         [Input("keyboard-listener", "n_keydowns")],
         [State("keyboard-listener", "keydowns"),
          State("playback-data", "data")],
+        prevent_initial_call=True
+    )
+    def handle_keyboard_shortcuts(
+        n_keydowns: int,
+        keydowns: List[Dict[str, Any]],
+        playback_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process keyboard shortcuts for playback control.
+        
+        Args:
+            n_keydowns: Number of key down events
+            keydowns: List of key down events
+            playback_data: Current playback data
+            
+        Returns:
+            Action to perform based on keyboard input
+        """
+        if not keydowns or len(keydowns) == 0:
+            raise PreventUpdate
+        
+        # Get the last key pressed
+        last_key = keydowns[-1]
+        key = last_key.get("key")
+        
+        # Map keys to actions
+        if key == "ArrowLeft":
+            return {"action": "backward"}
+        elif key == "ArrowRight":
+            return {"action": "forward"}
+        elif key == " ":  # Space
+            return {"action": "play"}
+        elif key in ["l", "L"]:
+            return {"action": "live"}
+        elif key in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]:
+            # Jump to percentage of timeline
+            percentage = int(key) * 10
+            if key == "0":
+                percentage = 0
+            return {"action": "slider", "value": percentage}
+        
+        # No recognized action
+        return {"action": None}
+    
+    # Add clientside callback for keyboard navigation
+    app.clientside_callback(
+        """
+        function(keydowns, playback_data) {
+            if (!keydowns || keydowns.length === 0) {
+                return null;
+            }
+            
+            // Get the last key pressed
+            const lastKey = keydowns[keydowns.length - 1];
+            const key = lastKey.key;
+            
+            // Map keys to actions
+            if (key === 'ArrowLeft') {
+                return {action: 'backward'};
+            } else if (key === 'ArrowRight') {
+                return {action: 'forward'};
+            } else if (key === ' ') {  // Space
+                return {action: 'play'};
+            } else if (key === 'l' || key === 'L') {
+                return {action: 'live'};
+            } else if (['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(key)) {
+                // Jump to percentage of timeline
+                let percentage = parseInt(key) * 10;
+                if (key === '0') {
+                    percentage = 0;
+                }
+                return {action: 'slider', value: percentage};
+            }
+            
+            // No recognized action
+            return null;
+        }
+        """,
+        Output("keyboard-action", "data", allow_duplicate=True),
+        [Input("keyboard-listener", "keydowns")],
+        [State("playback-data", "data")],
         prevent_initial_call=True
     ) 
