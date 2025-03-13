@@ -7,6 +7,7 @@ such as task sections, system messages, and markdown rendering.
 from typing import List, Union, Any, Dict, Optional, cast, Literal
 from dash import html, dcc
 from pydantic import BaseModel, Field
+import json
 
 # Define a DashComponent type for better type hinting
 DashComponent = Any  # This is safer than trying to reference a non-existent base class

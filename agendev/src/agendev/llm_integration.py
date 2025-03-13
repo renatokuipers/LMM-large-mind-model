@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 import threading
 import random
+from pydantic import BaseModel, Field
 
 from .llm_module import LLMClient, Message
 from .models.task_models import Task, TaskType
