@@ -140,7 +140,8 @@ class TaskProbabilityModel:
         self,
         task_graph: Optional[TaskGraph] = None,
         llm_integration: Optional[LLMIntegration] = None,
-        model_id: Optional[str] = None
+        model_id: Optional[str] = None,
+        project_type: Optional[str] = None
     ):
         """
         Initialize the task probability model.
@@ -149,10 +150,24 @@ class TaskProbabilityModel:
             task_graph: Optional task graph
             llm_integration: Optional LLM integration for generating priors
             model_id: Optional identifier for the model
+            project_type: Optional project type for specialized modeling
         """
         self.task_graph = task_graph
         self.llm_integration = llm_integration
         self.model_id = model_id or f"model_{int(time.time())}"
+        
+        # Detect project type if not provided
+        self.project_type = project_type
+        if task_graph and not self.project_type:
+            self.project_type = ProjectTypeDetector.detect_project_type(task_graph)
+        else:
+            self.project_type = PROJECT_TYPE_UNKNOWN
+        
+        # Project complexity
+        self.project_complexity = (
+            ProjectTypeDetector.analyze_project_complexity(task_graph) 
+            if task_graph else 1.0
+        )
         
         # Probability distributions for each task
         self.task_distributions: Dict[UUID, BetaDistribution] = {}
@@ -165,12 +180,18 @@ class TaskProbabilityModel:
         self.task_attempts: Dict[UUID, int] = {}
         self.task_successes: Dict[UUID, int] = {}
         
+        # Cache for repeated calculations
+        self._task_type_risk_cache: Dict[str, Dict[str, float]] = {}
+        
         # Initialize model directory
         self.model_dir = resolve_path(f"planning/simulations/{self.model_id}", create_parents=True)
         
         # Initialize distributions if task graph is provided
         if task_graph:
             self._initialize_distributions()
+            
+        logger.info(f"Initialized TaskProbabilityModel with project type: {self.project_type}, "
+                   f"complexity: {self.project_complexity:.2f}")
     
     def _initialize_distributions(self) -> None:
         """Initialize probability distributions for all tasks."""
@@ -220,11 +241,153 @@ class TaskProbabilityModel:
             # More complex tasks are harder
             beta += (complexity_factor - 1.0) * 0.5
         
+        # Apply task type-specific adjustments
+        alpha, beta = self._apply_task_type_adjustments(task, alpha, beta)
+        
+        # Apply project type-specific adjustments
+        alpha, beta = self._apply_project_type_adjustments(task, alpha, beta)
+        
         # If LLM integration is available, refine with LLM
         if self.llm_integration:
             alpha, beta = self._refine_prior_with_llm(task, alpha, beta)
         
         return BetaDistribution(alpha, beta)
+        
+    def _apply_task_type_adjustments(self, task: Task, alpha: float, beta: float) -> Tuple[float, float]:
+        """
+        Apply adjustments based on task type.
+        
+        Args:
+            task: The task to adjust for
+            alpha: Initial alpha value
+            beta: Initial beta value
+            
+        Returns:
+            Tuple of (adjusted_alpha, adjusted_beta)
+        """
+        # Different task types have different success probabilities
+        if task.task_type == TaskType.IMPLEMENTATION:
+            # Implementation tasks have average success rate
+            # No adjustment needed
+            pass
+        elif task.task_type == TaskType.PLANNING:
+            # Planning tasks are usually easier
+            alpha *= 1.2
+        elif task.task_type == TaskType.DOCUMENTATION:
+            # Documentation tasks are usually easier
+            alpha *= 1.3
+        elif task.task_type == TaskType.TEST:
+            # Test tasks have mixed success rates
+            # No adjustment needed
+            pass
+        elif task.task_type == TaskType.REFACTOR:
+            # Refactoring is riskier
+            beta *= 1.3
+        elif task.task_type == TaskType.BUGFIX:
+            # Bug fixes can be unpredictable
+            beta *= 1.2
+            
+        return alpha, beta
+        
+    def _apply_project_type_adjustments(self, task: Task, alpha: float, beta: float) -> Tuple[float, float]:
+        """
+        Apply adjustments based on project type and task characteristics.
+        
+        Args:
+            task: The task to adjust for
+            alpha: Initial alpha value
+            beta: Initial beta value
+            
+        Returns:
+            Tuple of (adjusted_alpha, adjusted_beta)
+        """
+        if self.project_type == PROJECT_TYPE_WEB_APP:
+            return self._apply_web_app_adjustments(task, alpha, beta)
+        elif self.project_type == PROJECT_TYPE_CLI:
+            return self._apply_cli_app_adjustments(task, alpha, beta)
+        else:
+            return alpha, beta
+            
+    def _apply_web_app_adjustments(self, task: Task, alpha: float, beta: float) -> Tuple[float, float]:
+        """
+        Apply adjustments specific to web app projects.
+        
+        Args:
+            task: The task to adjust for
+            alpha: Initial alpha value
+            beta: Initial beta value
+            
+        Returns:
+            Tuple of (adjusted_alpha, adjusted_beta)
+        """
+        title_lower = task.title.lower()
+        description_lower = task.description.lower()
+        
+        # Check for specific web app components
+        is_frontend = any(term in title_lower or term in description_lower 
+                          for term in ["frontend", "ui", "interface", "react", "vue", "angular"])
+        
+        is_backend = any(term in title_lower or term in description_lower 
+                         for term in ["backend", "api", "server", "endpoint", "database"])
+        
+        # Apply adjustments based on component type
+        if is_frontend:
+            if task.task_type == TaskType.IMPLEMENTATION:
+                # Frontend implementation can be challenging
+                beta *= 1.1
+            elif task.task_type == TaskType.TEST:
+                # Frontend testing is especially challenging
+                beta *= 1.2
+                
+        if is_backend:
+            if task.task_type == TaskType.IMPLEMENTATION:
+                # Backend implementation complexity varies
+                if "database" in title_lower or "database" in description_lower:
+                    # Database work is risky
+                    beta *= 1.3
+                elif "api" in title_lower or "api" in description_lower:
+                    # API work is moderate risk
+                    beta *= 1.1
+                    
+        return alpha, beta
+        
+    def _apply_cli_app_adjustments(self, task: Task, alpha: float, beta: float) -> Tuple[float, float]:
+        """
+        Apply adjustments specific to CLI app projects.
+        
+        Args:
+            task: The task to adjust for
+            alpha: Initial alpha value
+            beta: Initial beta value
+            
+        Returns:
+            Tuple of (adjusted_alpha, adjusted_beta)
+        """
+        title_lower = task.title.lower()
+        description_lower = task.description.lower()
+        
+        # Check for specific CLI app components
+        is_command = any(term in title_lower or term in description_lower 
+                          for term in ["command", "cli", "terminal", "console", "argument"])
+        
+        is_processing = any(term in title_lower or term in description_lower 
+                            for term in ["process", "transform", "convert", "parse"])
+        
+        # Apply adjustments based on component type
+        if is_command:
+            if task.task_type == TaskType.IMPLEMENTATION:
+                # Command parsing is usually well-defined
+                alpha *= 1.1
+            elif task.task_type == TaskType.TEST:
+                # CLI testing is straightforward
+                alpha *= 1.2
+                
+        if is_processing:
+            if task.task_type == TaskType.IMPLEMENTATION:
+                # Processing logic can be complex
+                beta *= 1.2
+                    
+        return alpha, beta
     
     def _refine_prior_with_llm(self, task: Task, alpha: float, beta: float) -> Tuple[float, float]:
         """
@@ -456,6 +619,10 @@ class TaskProbabilityModel:
         outcomes = []
         completed_tasks = set()
         
+        # Track context for simulation: preceding successes/failures influence later tasks
+        consecutive_failures = 0
+        consecutive_successes = 0
+        
         for task_id in task_sequence:
             # Get base task distribution
             if task_id not in self.task_distributions:
@@ -476,14 +643,37 @@ class TaskProbabilityModel:
                 if risk > 0:
                     success_prob *= (1.0 - risk * 0.5)
             
+            # Apply adjustment based on project type
+            if self.project_type == PROJECT_TYPE_WEB_APP:
+                success_prob = self._adjust_web_app_success_prob(task_id, success_prob, completed_tasks)
+            elif self.project_type == PROJECT_TYPE_CLI:
+                success_prob = self._adjust_cli_success_prob(task_id, success_prob, completed_tasks)
+                
+            # Apply momentum effects (consecutive successes/failures affect probability)
+            if consecutive_successes > 2:
+                # Positive momentum: slight boost
+                success_prob = min(1.0, success_prob * (1.0 + 0.05 * min(consecutive_successes - 2, 3)))
+            elif consecutive_failures > 1:
+                # Negative momentum: increased risk of failure
+                success_prob = success_prob * (1.0 - 0.1 * min(consecutive_failures, 3))
+            
+            # Ensure probability stays in valid range
+            success_prob = max(0.01, min(0.99, success_prob))
+            
             # Determine outcome
             random_value = random.random()
             if random_value < success_prob:
                 result = SimulationResult.SUCCESS
+                consecutive_successes += 1
+                consecutive_failures = 0
             elif random_value < success_prob + (1 - success_prob) * 0.5:
                 result = SimulationResult.PARTIAL_SUCCESS
+                consecutive_successes = 0
+                consecutive_failures = 0
             else:
                 result = SimulationResult.FAILURE
+                consecutive_failures += 1
+                consecutive_successes = 0
             
             outcomes.append((task_id, result))
             
@@ -500,6 +690,98 @@ class TaskProbabilityModel:
                 completed_tasks.add(task_id)
         
         return outcomes
+        
+    def _adjust_web_app_success_prob(self, task_id: UUID, base_prob: float, completed_tasks: Set[UUID]) -> float:
+        """
+        Adjust success probability for web app specific patterns.
+        
+        Args:
+            task_id: ID of the task
+            base_prob: Base success probability
+            completed_tasks: Set of completed task IDs
+            
+        Returns:
+            Adjusted success probability
+        """
+        if task_id not in self.task_graph.tasks:
+            return base_prob
+            
+        task = self.task_graph.tasks[task_id]
+        title_lower = task.title.lower()
+        
+        # Check for key components
+        is_frontend = "frontend" in title_lower or "ui" in title_lower
+        is_backend = "backend" in title_lower or "api" in title_lower
+        
+        # Frontend tasks need backend foundations
+        if is_frontend and task.task_type == TaskType.IMPLEMENTATION:
+            # Check if necessary backend work is completed
+            backend_completed = any(
+                "backend" in self.task_graph.tasks[comp_id].title.lower() or 
+                "api" in self.task_graph.tasks[comp_id].title.lower()
+                for comp_id in completed_tasks
+                if comp_id in self.task_graph.tasks
+            )
+            
+            if not backend_completed:
+                # Implementing frontend without backend increases risk
+                return base_prob * 0.8
+        
+        # Tests are more likely to succeed if implementation was successful
+        if task.task_type == TaskType.TEST:
+            target_impl = None
+            # Try to find the implementation task this is testing
+            for impl_id in completed_tasks:
+                if impl_id in self.task_graph.tasks:
+                    impl_task = self.task_graph.tasks[impl_id]
+                    if impl_task.task_type == TaskType.IMPLEMENTATION:
+                        # Simple heuristic: check for similar words in title
+                        impl_words = set(impl_task.title.lower().split())
+                        test_words = set(task.title.lower().split())
+                        common_words = impl_words.intersection(test_words)
+                        if len(common_words) >= 2:
+                            target_impl = impl_task
+                            break
+            
+            if target_impl:
+                # Tests for successful implementations are more likely to succeed
+                return base_prob * 1.1
+        
+        return base_prob
+        
+    def _adjust_cli_success_prob(self, task_id: UUID, base_prob: float, completed_tasks: Set[UUID]) -> float:
+        """
+        Adjust success probability for CLI app specific patterns.
+        
+        Args:
+            task_id: ID of the task
+            base_prob: Base success probability
+            completed_tasks: Set of completed task IDs
+            
+        Returns:
+            Adjusted success probability
+        """
+        if task_id not in self.task_graph.tasks:
+            return base_prob
+            
+        task = self.task_graph.tasks[task_id]
+        title_lower = task.title.lower()
+        
+        # For CLI apps, command structure should be implemented first
+        if "command" not in title_lower and task.task_type == TaskType.IMPLEMENTATION:
+            # Check if command structure is completed
+            command_completed = any(
+                "command" in self.task_graph.tasks[comp_id].title.lower() or 
+                "cli" in self.task_graph.tasks[comp_id].title.lower()
+                for comp_id in completed_tasks
+                if comp_id in self.task_graph.tasks
+            )
+            
+            if not command_completed:
+                # Implementing features without command structure increases risk
+                return base_prob * 0.85
+        
+        return base_prob
     
     def save(self) -> str:
         """
@@ -514,6 +796,8 @@ class TaskProbabilityModel:
         model_data = {
             "model_id": self.model_id,
             "timestamp": datetime.now().isoformat(),
+            "project_type": self.project_type,
+            "project_complexity": self.project_complexity,
             "task_distributions": {
                 str(task_id): dist.to_dict()
                 for task_id, dist in self.task_distributions.items()
@@ -566,8 +850,12 @@ class TaskProbabilityModel:
         # Load model data
         model_data = load_json(model_path)
         
-        # Create model
-        model = cls(task_graph=task_graph, model_id=model_id)
+        # Create model with project type if available
+        project_type = model_data.get("project_type", PROJECT_TYPE_UNKNOWN)
+        model = cls(task_graph=task_graph, model_id=model_id, project_type=project_type)
+        
+        # Set project complexity if available
+        model.project_complexity = model_data.get("project_complexity", 1.0)
         
         # Load distributions
         for task_id_str, dist_data in model_data.get("task_distributions", {}).items():
@@ -662,6 +950,10 @@ class TaskProbabilityModel:
                     for (source, dep_id), risk in self.dependency_risks.items()
                     if source == task_id
                 }
+            },
+            "project_info": {
+                "type": self.project_type,
+                "complexity": self.project_complexity
             }
         }
         
@@ -727,18 +1019,23 @@ class ProjectRiskModel:
         critical_path = self._get_critical_path()
         hotspots = []
         
+        # First, check critical path tasks
         for task_id in critical_path:
             prob = self.task_model.get_task_probability(task_id)
             
             if prob < threshold:
                 # This is a risk hotspot
                 task_name = "Unknown"
+                task_type = None
                 if task_id in self.task_graph.tasks:
-                    task_name = self.task_graph.tasks[task_id].title
+                    task = self.task_graph.tasks[task_id]
+                    task_name = task.title
+                    task_type = task.task_type.value
                 
                 hotspots.append({
                     "task_id": str(task_id),
                     "task_name": task_name,
+                    "task_type": task_type,
                     "success_probability": prob,
                     "confidence_interval": self.task_model.get_confidence_interval(task_id),
                     "is_on_critical_path": True
@@ -757,6 +1054,7 @@ class ProjectRiskModel:
                     hotspots.append({
                         "task_id": str(task_id),
                         "task_name": task.title,
+                        "task_type": task.task_type.value,
                         "success_probability": prob,
                         "confidence_interval": self.task_model.get_confidence_interval(task_id),
                         "is_on_critical_path": False,
@@ -789,6 +1087,7 @@ class ProjectRiskModel:
         # Track the critical path
         critical_path = self._get_critical_path()
         
+        # Run simulations
         for _ in range(num_simulations):
             # Reset for this simulation
             completion_time = 0
@@ -870,6 +1169,7 @@ class ProjectRiskModel:
             {
                 "task_id": str(task_id),
                 "task_name": self.task_graph.tasks[task_id].title if task_id in self.task_graph.tasks else "Unknown",
+                "task_type": self.task_graph.tasks[task_id].task_type.value if task_id in self.task_graph.tasks else None,
                 "failure_count": count,
                 "failure_rate": count / num_simulations,
                 "is_on_critical_path": task_id in critical_path
@@ -887,5 +1187,7 @@ class ProjectRiskModel:
                 "p50": p50,
                 "p90": p90
             },
-            "failure_points": failure_points[:10]  # Top 10 failure points
+            "failure_points": failure_points[:10],  # Top 10 failure points
+            "project_type": self.task_model.project_type,
+            "project_complexity": self.task_model.project_complexity
         }
