@@ -64,46 +64,20 @@ class LLMClient:
             },
             "stream": stream
         }
-        
-        try:
-            response = requests.post(endpoint, headers=self.headers, json=payload)
-            response.raise_for_status()
-            
-            if stream:
-                return response
-            else:
-                # Extract content from the LLM response
-                content = response.json()["choices"][0]["message"]["content"]
-                
-                # Parse the content as JSON since it should be a valid JSON string
-                try:
-                    parsed_json = json.loads(content)
-                    # Return a standardized response format
-                    return {
-                        "success": True,
-                        "result": parsed_json,
-                        "error": None,
-                        "raw_content": content
-                    }
-                except json.JSONDecodeError as e:
-                    print(f"Error parsing JSON response: {e}")
-                    print(f"Raw content: {content}")
-                    # Return a standardized error response
-                    return {
-                        "success": False,
-                        "result": {},
-                        "error": f"JSON parsing error: {str(e)}",
-                        "raw_content": content
-                    }
-        except requests.RequestException as e:
-            print(f"Request error: {e}")
-            # Return a standardized error response for request errors
-            return {
-                "success": False,
-                "result": {},
-                "error": f"Request error: {str(e)}",
-                "raw_content": None
-            }
+        response = requests.post(endpoint, headers=self.headers, json=payload)
+        response.raise_for_status()
+        if stream:
+            return response
+        else:
+            content = response.json()["choices"][0]["message"]["content"]
+            # Parse the content as JSON since it should be a valid JSON string
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON response: {e}")
+                print(f"Raw content: {content}")
+                # Return an empty dict as fallback
+                return {}
 
     # -------------------------
     # Embedding Methods
