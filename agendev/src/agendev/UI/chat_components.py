@@ -4,8 +4,12 @@ Chat container components for the AgenDev UI.
 This module contains utility functions for creating chat container elements
 such as task sections, system messages, and markdown rendering.
 """
-from typing import List, Union, Dict, Any
+from typing import List, Union, Any, Dict, Optional, cast
 from dash import html, dcc
+from pydantic import BaseModel
+
+# Define a DashComponent type for better type hinting
+DashComponent = Any  # This is safer than trying to reference a non-existent base class
 
 def render_markdown(markdown_text: str) -> dcc.Markdown:
     """
@@ -36,7 +40,7 @@ def render_markdown(markdown_text: str) -> dcc.Markdown:
         dangerously_allow_html=True
     )
 
-def create_system_message(title: str, content: Union[str, List[html.Component]]) -> html.Div:
+def create_system_message(title: str, content: Union[str, List[DashComponent]]) -> html.Div:
     """
     Create a system message component.
     
@@ -88,7 +92,7 @@ def create_todo_display(todo_content: str) -> html.Div:
     )
 
 def create_collapsible_section(id_prefix: str, header_content: Union[html.Div, str], 
-                              content: List, is_open: bool = True) -> html.Div:
+                              content: List[DashComponent], is_open: bool = True) -> html.Div:
     """
     Create a collapsible section component.
     
@@ -168,7 +172,17 @@ def create_file_operation(operation: str, filepath: str, status: str = "complete
         ]
     )
 
-def create_task_section(task_id: str, title: str, status: str, content: List) -> html.Div:
+class TaskContent(BaseModel):
+    """Model for task content with validation."""
+    title: str
+    description: Optional[str] = None
+    status: str
+    content_items: List[Dict[str, Any]]
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+def create_task_section(task_id: str, title: str, status: str, content: List[DashComponent]) -> html.Div:
     """
     Create a task section component.
     
@@ -198,10 +212,23 @@ def create_task_section(task_id: str, title: str, status: str, content: List) ->
         html.Span(title)
     ])
     
-    # Create collapsible section
-    return create_collapsible_section(
-        task_id,
-        header_content,
-        content,
-        is_open=(status == "in-progress")
-    )
+    # Create section with pattern-matching ID format
+    return html.Div([
+        html.Div(
+            className="collapsible-header",
+            id={"type": "task-header", "index": task_id},
+            children=[
+                html.I(
+                    className="fas fa-chevron-down mr-2",
+                    style={"marginRight": "10px"}
+                ),
+                header_content
+            ]
+        ),
+        html.Div(
+            id={"type": "task-content", "index": task_id},
+            className="collapsible-content",
+            style={"display": "block" if status == "in-progress" else "none"},
+            children=content
+        )
+    ])
