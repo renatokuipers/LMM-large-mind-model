@@ -1,10 +1,14 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback, ctx
+from dash import dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
+import os
 import json
 import time
 from datetime import datetime
+from pathlib import Path
+import markdown
+from typing import Dict, List, Optional, Any, Union
 
 # Initialize the Dash app with dark theme
 app = dash.Dash(
@@ -19,7 +23,18 @@ app = dash.Dash(
     ],
 )
 
-# Custom CSS for styling to match the screenshots
+# App state store
+app_state = dcc.Store(
+    id='app-state',
+    data={
+        "view": "landing",
+        "initial_prompt": "",
+        "current_task_index": 0,
+        "is_live_mode": True
+    }
+)
+
+# Custom CSS for styling
 app.index_string = '''
 <!DOCTYPE html>
 <html>
@@ -30,17 +45,21 @@ app.index_string = '''
         {%css%}
         <style>
             :root {
-                --primary-color: #333;
-                --secondary-color: #444;
-                --text-color: #f8f9fa;
+                --primary-color: #1e1e1e;
+                --secondary-color: #2a2a2a;
+                --tertiary-color: #333;
+                --text-color: #fff;
+                --text-secondary: #ccc;
+                --text-muted: #888;
                 --accent-color: #61dafb;
-                --success-color: #28a745;
-                --danger-color: #dc3545;
+                --success-color: #00ff00;
                 --warning-color: #ffc107;
+                --danger-color: #dc3545;
+                --purple-accent: #800080;
             }
             
             body {
-                background-color: #1a1a1a;
+                background-color: var(--primary-color);
                 color: var(--text-color);
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                 overflow: hidden;
@@ -69,8 +88,8 @@ app.index_string = '''
                 height: 100%;
                 overflow-y: auto;
                 padding: 20px;
-                background-color: #1a1a1a;
-                border-right: 1px solid #333;
+                background-color: var(--primary-color);
+                border-right: 1px solid var(--tertiary-color);
             }
             
             .view-container {
@@ -79,11 +98,11 @@ app.index_string = '''
                 overflow: hidden;
                 display: flex;
                 flex-direction: column;
-                background-color: #1a1a1a;
+                background-color: var(--primary-color);
             }
             
             .view-header {
-                background-color: #333;
+                background-color: var(--tertiary-color);
                 padding: 10px;
                 display: flex;
                 justify-content: space-between;
@@ -94,11 +113,11 @@ app.index_string = '''
                 flex-grow: 1;
                 overflow: auto;
                 padding: 0;
-                background-color: #2a2a2a;
+                background-color: var(--secondary-color);
             }
             
             .view-controls {
-                background-color: #333;
+                background-color: var(--tertiary-color);
                 padding: 10px;
                 display: flex;
                 justify-content: space-between;
@@ -116,14 +135,14 @@ app.index_string = '''
             
             .system-message {
                 padding: 15px;
-                background-color: #333;
+                background-color: var(--tertiary-color);
                 border-radius: 8px;
                 margin-bottom: 20px;
             }
             
             .user-message {
                 padding: 15px;
-                background-color: #2a2a2a;
+                background-color: var(--secondary-color);
                 border-radius: 8px;
                 margin-bottom: 20px;
             }
@@ -132,7 +151,7 @@ app.index_string = '''
                 display: flex;
                 align-items: center;
                 padding: 10px;
-                background-color: #333;
+                background-color: var(--tertiary-color);
                 border-radius: 4px;
                 cursor: pointer;
                 margin-bottom: 10px;
@@ -144,20 +163,20 @@ app.index_string = '''
             
             .collapsible-content {
                 padding: 10px;
-                background-color: #2a2a2a;
+                background-color: var(--secondary-color);
                 border-radius: 4px;
                 margin-bottom: 15px;
                 margin-left: 15px;
-                border-left: 2px solid #61dafb;
+                border-left: 2px solid var(--accent-color);
             }
             
             .command-element {
-                background-color: #2a2a2a;
+                background-color: var(--secondary-color);
                 padding: 8px 12px;
                 border-radius: 4px;
                 margin: 5px 0;
                 font-family: 'Consolas', 'Courier New', monospace;
-                border-left: 3px solid #61dafb;
+                border-left: 3px solid var(--accent-color);
             }
             
             .status-element {
@@ -177,6 +196,7 @@ app.index_string = '''
                 padding: 10px;
                 height: 100%;
                 overflow: auto;
+                white-space: pre-wrap;
             }
             
             .editor-view {
@@ -214,7 +234,7 @@ app.index_string = '''
             }
             
             .function-tag {
-                background-color: #61dafb;
+                background-color: var(--accent-color);
                 color: #000;
                 padding: 2px 6px;
                 border-radius: 4px;
@@ -230,17 +250,17 @@ app.index_string = '''
             }
             
             .status-tag.success {
-                background-color: #28a745;
-                color: #fff;
+                background-color: var(--success-color);
+                color: #000;
             }
             
             .status-tag.in-progress {
-                background-color: #ffc107;
+                background-color: var(--warning-color);
                 color: #000;
             }
             
             .status-tag.error {
-                background-color: #dc3545;
+                background-color: var(--danger-color);
                 color: #fff;
             }
             
@@ -266,7 +286,11 @@ app.index_string = '''
             }
             
             .btn-control:hover {
-                color: #fff;
+                color: var(--accent-color);
+            }
+            
+            .btn-control.active {
+                color: var(--success-color);
             }
             
             .code-content {
@@ -281,7 +305,7 @@ app.index_string = '''
                 width: 80%;
                 max-width: 800px;
                 padding: 20px;
-                background-color: #333;
+                background-color: var(--tertiary-color);
                 border-radius: 8px;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             }
@@ -296,14 +320,54 @@ app.index_string = '''
                 margin-bottom: 30px;
                 font-size: 2.5rem;
                 font-weight: bold;
-                color: #61dafb;
+                color: var(--accent-color);
             }
             
             .brand-slogan {
                 font-size: 1rem;
-                color: #888;
+                color: var(--text-muted);
                 margin-bottom: 30px;
                 text-align: center;
+            }
+            
+            .todo-markdown h1 {
+                color: var(--accent-color);
+                font-size: 1.8rem;
+                margin-top: 1rem;
+                margin-bottom: 0.5rem;
+            }
+            
+            .todo-markdown h2 {
+                color: var(--accent-color);
+                font-size: 1.4rem;
+                margin-top: 0.8rem;
+                margin-bottom: 0.4rem;
+            }
+            
+            .todo-markdown h3 {
+                color: var(--accent-color);
+                font-size: 1.2rem;
+                margin-top: 0.6rem;
+                margin-bottom: 0.3rem;
+            }
+            
+            .todo-markdown ul {
+                padding-left: 20px;
+                margin-top: 0.5rem;
+                margin-bottom: 0.5rem;
+            }
+            
+            .todo-markdown li {
+                margin-bottom: 0.3rem;
+            }
+            
+            .todo-markdown input[type="checkbox"] {
+                margin-right: 0.5rem;
+            }
+            
+            .todo-markdown input[type="checkbox"]:checked + span {
+                text-decoration: line-through;
+                opacity: 0.7;
             }
         </style>
     </head>
@@ -317,6 +381,113 @@ app.index_string = '''
     </body>
 </html>
 '''
+
+# ========== COMPONENT FUNCTIONS ==========
+
+def create_terminal_view(content: str) -> html.Div:
+    """Create a terminal view component"""
+    return html.Div(
+        className="terminal-view",
+        children=[html.Pre(content)]
+    )
+
+def create_editor_view(filename: str, content: str, language: str = "text") -> html.Div:
+    """Create an editor view component with syntax highlighting"""
+    return html.Div(
+        className="editor-view",
+        children=[
+            html.Div(
+                className="editor-header",
+                children=[
+                    html.Div(filename),
+                    html.Div([
+                        html.Button("Diff", className="btn-control"),
+                        html.Button("Original", className="btn-control"),
+                        html.Button("Modified", className="btn-control", style={"color": "#fff"}),
+                    ])
+                ]
+            ),
+            html.Pre(
+                content,
+                className="editor-content",
+                style={"whiteSpace": "pre-wrap"}
+            )
+        ]
+    )
+
+def create_collapsible_section(id_prefix: str, header_content: Union[html.Div, str], 
+                              content: List, is_open: bool = True) -> html.Div:
+    """Create a collapsible section component"""
+    return html.Div([
+        html.Div(
+            className="collapsible-header",
+            id=f"{id_prefix}-header",
+            children=[
+                html.I(
+                    className="fas fa-chevron-down mr-2",
+                    style={"marginRight": "10px"}
+                ),
+                header_content
+            ]
+        ),
+        html.Div(
+            id=f"{id_prefix}-content",
+            className="collapsible-content",
+            style={"display": "block" if is_open else "none"},
+            children=content
+        )
+    ])
+
+def create_command_element(command: str, status: str = "completed") -> html.Div:
+    """Create a command execution element"""
+    icon_class = ("fas fa-check-circle text-success" if status == "completed" 
+                else "fas fa-spinner fa-spin text-warning")
+    
+    return html.Div(
+        className="status-element",
+        children=[
+            html.Span(className=f"status-icon {icon_class}"),
+            html.Span("Executing command", style={"marginRight": "10px"}),
+            html.Code(command, className="command-element")
+        ]
+    )
+
+def create_file_operation(operation: str, filepath: str, status: str = "completed") -> html.Div:
+    """Create a file operation status element"""
+    icon_class = ("fas fa-check-circle text-success" if status == "completed" 
+                else "fas fa-spinner fa-spin text-warning")
+    
+    return html.Div(
+        className="status-element",
+        children=[
+            html.Span(className=f"status-icon {icon_class}"),
+            html.Span(f"{operation} file", style={"marginRight": "10px"}),
+            html.Code(filepath, className="file-path")
+        ]
+    )
+
+def render_markdown(markdown_text: str) -> dcc.Markdown:
+    """Render markdown content with custom styling"""
+    # Process checkboxes with custom rendering
+    lines = markdown_text.split('\n')
+    for i, line in enumerate(lines):
+        if '- [ ]' in line:
+            lines[i] = line.replace('- [ ]', '- <input type="checkbox"><span>')
+            lines[i] += '</span>'
+        elif '- [x]' in line:
+            lines[i] = line.replace('- [x]', '- <input type="checkbox" checked><span>')
+            lines[i] += '</span>'
+    
+    processed_markdown = '\n'.join(lines)
+    
+    # Return Markdown component with proper HTML handling
+    return dcc.Markdown(
+        processed_markdown,
+        className="todo-markdown",
+        dangerously_allow_html=True
+    )
+
+# ========== LAYOUT COMPONENTS ==========
 
 # Landing page layout with centered input
 landing_page = html.Div(
@@ -365,107 +536,6 @@ landing_page = html.Div(
     ]
 )
 
-# Terminal view component
-def create_terminal_view(content):
-    return html.Div(
-        className="terminal-view",
-        children=[
-            html.Pre(content)
-        ]
-    )
-
-# Editor view component
-def create_editor_view(filename, content, language="text"):
-    syntax_highlighting = {
-        "python": {
-            "keywords": ["def", "class", "import", "from", "return", "if", "else", "elif", "for", "while", "try", "except", "with"],
-            "keyword_color": "#569CD6",
-            "string_color": "#CE9178",
-            "comment_color": "#6A9955",
-            "function_color": "#DCDCAA",
-            "variable_color": "#9CDCFE"
-        },
-        "json": {
-            "keywords": ["null", "true", "false"],
-            "keyword_color": "#569CD6",
-            "string_color": "#CE9178",
-            "number_color": "#B5CEA8",
-            "punctuation_color": "#D4D4D4"
-        },
-        "text": {
-            "color": "#D4D4D4"
-        }
-    }
-    
-    return html.Div(
-        className="editor-view",
-        children=[
-            html.Div(
-                className="editor-header",
-                children=[
-                    html.Div(filename),
-                    html.Div([
-                        html.Button("Diff", className="btn-control"),
-                        html.Button("Original", className="btn-control"),
-                        html.Button("Modified", className="btn-control", style={"color": "#fff"}),
-                    ])
-                ]
-            ),
-            html.Pre(
-                content,
-                className="editor-content",
-                style={"whiteSpace": "pre-wrap"}
-            )
-        ]
-    )
-
-# Collapsible section component
-def create_collapsible_section(id_prefix, header_content, content, is_open=True):
-    return html.Div([
-        html.Div(
-            className="collapsible-header",
-            id=f"{id_prefix}-header",
-            children=[
-                html.I(
-                    className="fas fa-chevron-down mr-2",
-                    style={"marginRight": "10px"}
-                ),
-                header_content
-            ]
-        ),
-        html.Div(
-            id=f"{id_prefix}-content",
-            className="collapsible-content",
-            style={"display": "block" if is_open else "none"},
-            children=content
-        )
-    ])
-
-# Command execution component
-def create_command_element(command, status="completed"):
-    icon_class = "fas fa-check-circle text-success" if status == "completed" else "fas fa-spinner fa-spin text-warning"
-    return html.Div(
-        className="status-element",
-        children=[
-            html.Span(className=f"status-icon {icon_class}"),
-            html.Span("Executing command", style={"marginRight": "10px"}),
-            html.Code(command, className="command-element")
-        ]
-    )
-
-# File creation/editing component
-def create_file_operation(operation, filepath, status="completed"):
-    icon_class = "fas fa-check-circle text-success" if status == "completed" else "fas fa-spinner fa-spin text-warning"
-    
-    return html.Div(
-        className="status-element",
-        children=[
-            html.Span(className=f"status-icon {icon_class}"),
-            html.Span(f"{operation} file", style={"marginRight": "10px"}),
-            html.Code(filepath, className="file-path")
-        ]
-    )
-
 # Main split view layout
 main_view = html.Div(
     id="main-container",
@@ -488,76 +558,29 @@ main_view = html.Div(
                                 html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
                             ]
                         ),
-                        html.H3(id="project-title", children="Python Snake Game Development", style={"margin": "0 0 10px 0"})
+                        html.H3(id="project-title", children="Project Development", style={"margin": "0 0 10px 0"})
                     ]
                 ),
                 
-                # Example of a task section
-                create_collapsible_section(
-                    "task1",
-                    html.Div([
-                        html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"}),
-                        html.Span("Continue: Create Next.js application for political debate simulation")
-                    ]),
-                    [
-                        html.P("Creating a Next.js application for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_command_element("cd /home/ubuntu && create_nextjs_app zelenskyy_debate_sim"),
-                        html.P("Successfully created Next.js application for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/app/data/scenarios.json")
-                    ]
-                ),
-                
-                # Example of a task section
-                create_collapsible_section(
-                    "task2",
-                    html.Div([
-                        html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"}),
-                        html.Span("Develop dialogue system and political scenario scripts")
-                    ]),
-                    [
-                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Editing", "zelenskyy_debate_sim/src/app/page.tsx"),
-                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/app/simulation/page.tsx"),
-                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Editing", "zelenskyy_debate_sim/src/app/globals.css")
-                    ]
-                ),
-                
-                # Example of a task section
-                create_collapsible_section(
-                    "task3",
-                    html.Div([
-                        html.I(className="fas fa-spinner fa-spin", style={"marginRight": "10px", "color": "#ffc107"}),
-                        html.Span("Design and implement user interface with styling")
-                    ]),
-                    [
-                        html.P("Moving to add additional user interface elements and styling to the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/CharacterPortrait.tsx"),
-                        html.P("Adding user interface components and styling to enhance the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/DialogueBubble.tsx"),
-                        html.P("Adding user interface components and styling to enhance the Zelenskyy-Trump-Vance interactive simulation."),
-                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/ResponseOption.tsx")
-                    ]
-                ),
-                
-                # Thinking indicator
+                # Todo.md display area
                 html.Div(
-                    className="chat-message",
+                    id="todo-display",
+                    className="system-message",
+                    style={"marginTop": "20px", "marginBottom": "20px"},
                     children=[
                         html.Div(
-                            style={
-                                "display": "flex",
-                                "alignItems": "center",
-                                "color": "#888"
-                            },
+                            style={"display": "flex", "alignItems": "center", "marginBottom": "15px"},
                             children=[
-                                html.I(className="fas fa-circle-notch fa-spin", style={"marginRight": "10px"}),
-                                html.Span("Thinking")
+                                html.I(className="fas fa-tasks", style={"fontSize": "18px", "marginRight": "10px", "color": "#61dafb"}),
+                                html.Span("Project Tasks", style={"fontSize": "18px", "fontWeight": "bold"})
                             ]
-                        )
+                        ),
+                        html.Div(id="todo-content")
                     ]
-                )
+                ),
+                
+                # Task sections will be dynamically generated
+                html.Div(id="task-sections")
             ]
         ),
         
@@ -572,13 +595,15 @@ main_view = html.Div(
                         html.Div("AgenDev's Computer"),
                         html.Button(
                             html.I(className="fas fa-expand"),
-                            className="btn-control"
+                            className="btn-control",
+                            id="expand-view"
                         )
                     ]
                 ),
                 
                 # View type indicator
                 html.Div(
+                    id="view-type-indicator",
                     style={
                         "padding": "5px 10px",
                         "backgroundColor": "#2d2d2d",
@@ -588,8 +613,9 @@ main_view = html.Div(
                     },
                     children=[
                         html.Span("AgenDev is using", style={"color": "#888", "marginRight": "5px"}),
-                        html.Span("Editor"),
+                        html.Span(id="current-view-type", children="Editor"),
                         html.Div(
+                            id="file-operation-indicator",
                             style={
                                 "marginLeft": "20px",
                                 "display": "flex",
@@ -598,9 +624,10 @@ main_view = html.Div(
                                 "fontSize": "0.85em"
                             },
                             children=[
-                                html.Span("Creating file"),
+                                html.Span(id="operation-type", children="Creating file"),
                                 html.Code(
-                                    "zelenskyy_debate_sim/src/app/data/scenarios.json",
+                                    id="current-file-path",
+                                    children="project/file.txt",
                                     style={
                                         "marginLeft": "5px",
                                         "backgroundColor": "transparent",
@@ -616,47 +643,10 @@ main_view = html.Div(
                 html.Div(
                     className="view-content",
                     id="view-content",
-                    children=[
-                        # Default to editor view
-                        create_editor_view(
-                            "scenarios.json",
-                            '''
-{
-  "scenarios": [
-    {
-      "id": 1,
-      "title": "Opening Remarks",
-      "description": "President Trump welcomes you to the White House. The meeting has just begun with initial pleasantries.",
-      "trumpDialogue": "President Trump welcomes you to the White House. We're going to have a great discussion today about ending this terrible war. I hope I'm going to be remembered as a peacemaker.",
-      "vanceDialogue": "",
-      "options": [
-        {
-          "id": "1a",
-          "text": "Thank you, Mr. President. Ukraine is grateful for America's support. We look forward to discussing how we can achieve a just peace that ensures Ukraine's security.",
-          "type": "diplomatic",
-          "trumpReaction": "positive",
-          "vanceReaction": "neutral",
-          "nextScenario": 2
-        },
-        {
-          "id": "1b",
-          "text": "Thank you for meeting with me. I must emphasize that Ukraine needs more than just words - we need continued military support and security guarantees to end this war.",
-          "type": "assertive",
-          "trumpReaction": "neutral",
-          "vanceReaction": "negative",
-          "nextScenario": 2
-        },
-        ...
-      ]
-    }
-  ]
-}''',
-                            "json"
-                        )
-                    ]
+                    children=[]  # Will be dynamically populated
                 ),
                 
-                # Controls
+                # Replay Controls
                 html.Div(
                     className="view-controls",
                     children=[
@@ -666,30 +656,39 @@ main_view = html.Div(
                                 html.Button(
                                     html.I(className="fas fa-step-backward"),
                                     className="btn-control",
-                                    id="playback-backward"
+                                    id="playback-backward",
+                                    title="Previous step"
                                 ),
                                 html.Button(
-                                    html.I(className="fas fa-play"),
+                                    html.I(id="play-icon", className="fas fa-play"),
                                     className="btn-control",
-                                    id="playback-play"
+                                    id="playback-play",
+                                    title="Play/Pause"
                                 ),
                                 html.Button(
                                     html.I(className="fas fa-step-forward"),
                                     className="btn-control",
-                                    id="playback-forward"
+                                    id="playback-forward",
+                                    title="Next step"
                                 ),
                                 html.Div(
                                     dcc.Slider(
                                         id="playback-slider",
                                         min=0,
                                         max=100,
-                                        value=50,
+                                        value=0,
                                         updatemode="drag",
                                         marks=None,
-                                        tooltip={"always_visible": False},
+                                        tooltip={"always_visible": False, "placement": "bottom"},
                                         className="timeline-slider"
                                     ),
                                     style={"width": "300px", "marginLeft": "10px", "marginRight": "10px"}
+                                ),
+                                html.Button(
+                                    html.I(className="fas fa-bolt"),
+                                    className="btn-control active",
+                                    id="live-button",
+                                    title="Live mode"
                                 )
                             ]
                         ),
@@ -697,12 +696,13 @@ main_view = html.Div(
                             className="status-indicator",
                             children=[
                                 html.Span(
-                                    html.I(className="fas fa-check-circle"),
-                                    className="status-tag success",
+                                    html.I(id="task-status-icon", className="fas fa-spinner fa-spin"),
+                                    id="task-status-tag",
+                                    className="status-tag in-progress",
                                     style={"marginRight": "5px"}
                                 ),
-                                html.Span("Deploy simulation to a public URL for permanent access"),
-                                html.Span("9/9", className="time-indicator")
+                                html.Span(id="current-task-text", children="Setting up project environment"),
+                                html.Span(id="task-progress", children="1/5", className="time-indicator")
                             ]
                         )
                     ]
@@ -712,104 +712,82 @@ main_view = html.Div(
     ]
 )
 
-# Store of playback data with timeline steps
-def create_demo_playback_data():
-    return {
-        "total_steps": 10,
+# Store for playback data
+playback_store = dcc.Store(
+    id='playback-data',
+    data={
+        "total_steps": 0,
         "current_step": 0,
         "is_playing": False,
-        "steps": [
+        "play_interval": 3,  # seconds between steps
+        "steps": []
+    }
+)
+
+# Store for todo.md content
+todo_store = dcc.Store(
+    id='todo-data',
+    data={
+        "content": "# Project Development\n## Setup Phase\n- [ ] Initialize project repository\n- [ ] Set up development environment\n## Implementation Phase\n- [ ] Implement core functionality\n- [ ] Create user interface\n## Testing Phase\n- [ ] Write unit tests\n- [ ] Perform integration testing"
+    }
+)
+
+# Store for task sections
+task_store = dcc.Store(
+    id='task-data',
+    data={
+        "tasks": [
             {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu && cd /home/ubuntu\nubuntu@sandbox:~ $ create_nextjs_app python_snake_game\nStarting setup...\nCreating Next.js app for development: python_snake_game\nInstalling dependencies...\nInitializing git repository...",
-                "timestamp": "00:00"
-            },
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu && cd /home/ubuntu\nubuntu@sandbox:~ $ create_nextjs_app python_snake_game\nStarting setup...\nCreating Next.js app for development: python_snake_game\nInstalling dependencies...\nInitializing git repository...\nCreated new Next.js app python_snake_game at /home/ubuntu/python_snake_game\n--- Project Structure ---\n|— migrations/\n|   └— 0001_initial.sql      # DB migration script\n|— src/\n|   |— app/                 # Next.js pages\n|   |   └— counter.ts       # Example component\n|   |— components/\n|   |— hooks/\n|   |— lib/\n|   └— wrangler.toml        # Cloudflare config",
-                "timestamp": "00:10"
-            },
-            {
-                "type": "editor",
-                "filename": "game_engine.py",
-                "content": "# game_engine.py\n\nclass SnakeGame:\n    def __init__(self, width, height):\n        self.width = width\n        self.height = height\n        self.snake = [(width // 2, height // 2)]\n        self.direction = 'RIGHT'\n        self.food = None\n        self.score = 0\n        self.game_over = False\n        self._place_food()\n    \n    def _place_food(self):\n        # Logic to place food\n        import random\n        while True:\n            x = random.randint(0, self.width - 1)\n            y = random.randint(0, self.height - 1)\n            if (x, y) not in self.snake:\n                self.food = (x, y)\n                break",
-                "timestamp": "00:30"
-            },
-            {
-                "type": "editor",
-                "filename": "snake_game.py",
-                "content": "# snake_game.py\nimport pygame\nimport sys\nfrom game_engine import SnakeGame\n\nclass SnakeGameUI:\n    def __init__(self, width=20, height=20, cell_size=20):\n        self.width = width\n        self.height = height\n        self.cell_size = cell_size\n        self.game = SnakeGame(width, height)\n        \n        # Initialize pygame\n        pygame.init()\n        self.screen = pygame.display.set_mode(\n            (width * cell_size, height * cell_size)\n        )\n        pygame.display.set_caption('Python Snake Game')\n        \n        # Colors\n        self.colors = {\n            'background': (15, 15, 15),\n            'snake': (0, 255, 0),\n            'food': (255, 0, 0),\n            'text': (255, 255, 255)\n        }\n        \n        # Game clock\n        self.clock = pygame.time.Clock()\n        self.speed = 10  # FPS",
-                "timestamp": "00:45"
-            },
-            {
-                "type": "editor",
-                "filename": "snake_game.py",
-                "content": "# snake_game.py\nimport pygame\nimport sys\nfrom game_engine import SnakeGame\n\nclass SnakeGameUI:\n    def __init__(self, width=20, height=20, cell_size=20):\n        self.width = width\n        self.height = height\n        self.cell_size = cell_size\n        self.game = SnakeGame(width, height)\n        \n        # Initialize pygame\n        pygame.init()\n        self.screen = pygame.display.set_mode(\n            (width * cell_size, height * cell_size)\n        )\n        pygame.display.set_caption('Python Snake Game')\n        \n        # Colors\n        self.colors = {\n            'background': (15, 15, 15),\n            'snake': (0, 255, 0),\n            'food': (255, 0, 0),\n            'text': (255, 255, 255)\n        }\n        \n        # Game clock\n        self.clock = pygame.time.Clock()\n        self.speed = 10  # FPS\n        \n    def draw(self):\n        # Clear screen\n        self.screen.fill(self.colors['background'])\n        \n        # Draw snake\n        for segment in self.game.snake:\n            pygame.draw.rect(\n                self.screen,\n                self.colors['snake'],\n                pygame.Rect(\n                    segment[0] * self.cell_size,\n                    segment[1] * self.cell_size,\n                    self.cell_size,\n                    self.cell_size\n                )\n            )\n        \n        # Draw food\n        pygame.draw.rect(\n            self.screen,\n            self.colors['food'],\n            pygame.Rect(\n                self.game.food[0] * self.cell_size,\n                self.game.food[1] * self.cell_size,\n                self.cell_size,\n                self.cell_size\n            )\n        )\n        \n        # Update display\n        pygame.display.flip()",
-                "timestamp": "01:05"
-            },
-            {
-                "type": "editor",
-                "filename": "main.py",
-                "content": "# main.py\nfrom snake_game import SnakeGameUI\nimport pygame\nimport sys\n\ndef main():\n    # Create game instance\n    game_ui = SnakeGameUI(width=20, height=20, cell_size=30)\n    \n    # Main game loop\n    while not game_ui.game.game_over:\n        # Process events\n        for event in pygame.event.get():\n            if event.type == pygame.QUIT:\n                pygame.quit()\n                sys.exit()\n            elif event.type == pygame.KEYDOWN:\n                if event.key == pygame.K_UP and game_ui.game.direction != 'DOWN':\n                    game_ui.game.direction = 'UP'\n                elif event.key == pygame.K_DOWN and game_ui.game.direction != 'UP':\n                    game_ui.game.direction = 'DOWN'\n                elif event.key == pygame.K_LEFT and game_ui.game.direction != 'RIGHT':\n                    game_ui.game.direction = 'LEFT'\n                elif event.key == pygame.K_RIGHT and game_ui.game.direction != 'LEFT':\n                    game_ui.game.direction = 'RIGHT'\n        \n        # Update game state\n        game_ui.game.update()\n        \n        # Draw game\n        game_ui.draw()\n        \n        # Control game speed\n        game_ui.clock.tick(game_ui.speed)\n    \n    # Game over screen\n    game_ui.show_game_over()\n    \n    # Wait for quit event\n    waiting = True\n    while waiting:\n        for event in pygame.event.get():\n            if event.type == pygame.QUIT:\n                waiting = False\n    \n    pygame.quit()\n\nif __name__ == \"__main__\":\n    main()",
-                "timestamp": "01:30"
-            },
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu/python_snake_game\nubuntu@sandbox:~/python_snake_game $ python main.py\nTraceback (most recent call last):\n  File \"main.py\", line 31, in <module>\n    main()\n  File \"main.py\", line 19, in main\n    game_ui.game.update()\nAttributeError: 'SnakeGame' object has no attribute 'update'\n",
-                "timestamp": "02:00"
-            },
-            {
-                "type": "editor",
-                "filename": "game_engine.py",
-                "content": "# game_engine.py\n\nclass SnakeGame:\n    def __init__(self, width, height):\n        self.width = width\n        self.height = height\n        self.snake = [(width // 2, height // 2)]\n        self.direction = 'RIGHT'\n        self.food = None\n        self.score = 0\n        self.game_over = False\n        self._place_food()\n    \n    def _place_food(self):\n        # Logic to place food\n        import random\n        while True:\n            x = random.randint(0, self.width - 1)\n            y = random.randint(0, self.height - 1)\n            if (x, y) not in self.snake:\n                self.food = (x, y)\n                break\n                \n    def update(self):\n        # Move snake based on current direction\n        head_x, head_y = self.snake[0]\n        \n        if self.direction == 'UP':\n            head_y -= 1\n        elif self.direction == 'DOWN':\n            head_y += 1\n        elif self.direction == 'LEFT':\n            head_x -= 1\n        elif self.direction == 'RIGHT':\n            head_x += 1\n            \n        # Check for game over conditions\n        if (head_x < 0 or head_x >= self.width or\n            head_y < 0 or head_y >= self.height or\n            (head_x, head_y) in self.snake):\n            self.game_over = True\n            return\n            \n        # Check if snake ate food\n        if (head_x, head_y) == self.food:\n            self.score += 1\n            self._place_food()\n        else:\n            # Remove tail if snake didn't eat\n            self.snake.pop()\n            \n        # Add new head\n        self.snake.insert(0, (head_x, head_y))",
-                "timestamp": "02:30"
-            },
-            {
-                "type": "terminal",
-                "content": "ubuntu@sandbox:~ $ cd /home/ubuntu/python_snake_game\nubuntu@sandbox:~/python_snake_game $ python main.py\n[Game is now running successfully in a pygame window]",
-                "timestamp": "03:00"
-            },
-            {
-                "type": "editor",
-                "filename": "README.md",
-                "content": "# Python Snake Game\n\nA classic snake game implemented in Python using Pygame.\n\n## Features\n\n- Clean, modular code structure with separation of game logic and UI\n- Smooth controls using arrow keys\n- Score tracking\n- Game over detection\n\n## Requirements\n\n- Python 3.6+\n- Pygame\n\n## Installation\n\n```bash\npip install pygame\n```\n\n## How to Run\n\n```bash\npython main.py\n```\n\n## Controls\n\n- Arrow keys to change direction\n- Esc to quit\n\n## Project Structure\n\n- `main.py` - Entry point for the game\n- `game_engine.py` - Core game logic\n- `snake_game.py` - UI and rendering logic\n\n## Future Improvements\n\n- Add pause functionality\n- Add high score tracking\n- Implement difficulty levels\n- Add sound effects",
-                "timestamp": "03:15"
+                "id": "task1",
+                "title": "Initialize project repository",
+                "status": "in-progress",
+                "content": [
+                    html.P("Setting up the project repository and initial structure."),
+                    create_command_element("git init", "completed"),
+                    create_command_element("npm init -y", "in-progress")
+                ]
             }
         ]
     }
-
-# Add a Store component to manage playback state
-playback_store = dcc.Store(
-    id='playback-data',
-    data=create_demo_playback_data()
 )
 
-# Add app state store
-app_state_store = dcc.Store(
-    id='app-state',
-    data={"view": "landing", "initial_prompt": ""}
+# Interval for playback
+playback_interval = dcc.Interval(
+    id='playback-interval',
+    interval=3000,  # 3 seconds between steps
+    n_intervals=0,
+    disabled=True
 )
 
-# Set the app layout - this is what was missing
+# Combine all components into the app layout
 app.layout = html.Div([
-    app_state_store,
+    app_state,
     playback_store,
+    todo_store,
+    task_store,
+    playback_interval,
     landing_page,
     main_view
 ])
+
+# ========== CALLBACKS ==========
 
 # Callback to transition from landing page to main view
 @app.callback(
     [Output("app-state", "data"),
      Output("landing-page", "style"),
      Output("main-container", "style"),
-     Output("project-title", "children")],
+     Output("project-title", "children"),
+     Output("todo-data", "data"),
+     Output("playback-data", "data")],
     [Input("submit-button", "n_clicks")],
     [State("initial-prompt", "value"),
-     State("app-state", "data")],
+     State("app-state", "data"),
+     State("todo-data", "data"),
+     State("playback-data", "data")],
     prevent_initial_call=True
 )
-def transition_to_main_view(n_clicks, prompt_value, current_state):
+def transition_to_main_view(n_clicks, prompt_value, current_state, todo_data, playback_data):
     if not n_clicks:
         raise PreventUpdate
     
@@ -821,37 +799,257 @@ def transition_to_main_view(n_clicks, prompt_value, current_state):
     title = "New Project"
     if prompt_value:
         # Simple algorithm to extract a title
-        if "create" in prompt_value.lower() and "snake" in prompt_value.lower() and "python" in prompt_value.lower():
-            title = "Python Snake Game Development"
-        elif "todo" in prompt_value.lower() or "task" in prompt_value.lower() or "list" in prompt_value.lower():
-            title = "Todo List Application"
-        elif "dashboard" in prompt_value.lower() or "data" in prompt_value.lower() or "visualization" in prompt_value.lower():
-            title = "Data Visualization Dashboard"
-        elif "web" in prompt_value.lower() or "site" in prompt_value.lower() or "app" in prompt_value.lower():
-            title = "Web Application Development"
-        elif "game" in prompt_value.lower():
-            title = "Game Development Project"
-        elif "api" in prompt_value.lower() or "backend" in prompt_value.lower() or "server" in prompt_value.lower():
-            title = "API Development Project"
+        if len(prompt_value.split()) < 5:
+            title = prompt_value.capitalize()
         else:
-            # Extract key words for a generic title
             words = prompt_value.split()
-            if len(words) > 3:
-                # Take a few significant words from the middle of the prompt
-                middle_index = len(words) // 2
-                title_words = words[max(0, middle_index-1):min(len(words), middle_index+2)]
-                title = " ".join(word.capitalize() for word in title_words) + " Project"
-            else:
-                # For short prompts, use the whole thing
-                title = prompt_value.capitalize()
+            title_words = words[:3]
+            title = " ".join(word.capitalize() for word in title_words) + " Project"
+    
+    # Create a todo.md based on the prompt
+    todo_content = f"# {title}\n\n## Setup Phase\n- [ ] Initialize project repository\n- [ ] Set up development environment\n\n## Implementation Phase\n- [ ] Design core architecture\n- [ ] Implement key features\n- [ ] Create user interface\n\n## Testing Phase\n- [ ] Write unit tests\n- [ ] Perform integration testing\n\n## Deployment Phase\n- [ ] Prepare deployment pipeline\n- [ ] Release version 1.0"
+    
+    todo_data["content"] = todo_content
+    
+    # Create sample playback steps
+    playback_data["steps"] = [
+        {
+            "type": "terminal",
+            "content": f"$ echo 'Initializing {title}'\nInitializing {title}\n$ mkdir {title.lower().replace(' ', '_')}\n$ cd {title.lower().replace(' ', '_')}\n$ git init\nInitialized empty Git repository in ./{title.lower().replace(' ', '_')}/.git/",
+            "operation_type": "Setting up",
+            "file_path": title.lower().replace(' ', '_')
+        },
+        {
+            "type": "terminal",
+            "content": f"$ npm init -y\nWrote to ./{title.lower().replace(' ', '_')}/package.json\n$ npm install --save-dev webpack webpack-cli\nAdded 214 packages, and audited 215 packages in 3s",
+            "operation_type": "Installing",
+            "file_path": "package.json"
+        },
+        {
+            "type": "editor",
+            "filename": "package.json",
+            "content": '{\n  "name": "' + title.lower().replace(' ', '_') + '",\n  "version": "1.0.0",\n  "description": "' + title + '",\n  "main": "index.js",\n  "scripts": {\n    "test": "echo \\"Error: no test specified\\" && exit 1",\n    "start": "webpack --mode development",\n    "build": "webpack --mode production"\n  },\n  "keywords": [],\n  "author": "",\n  "license": "ISC",\n  "devDependencies": {\n    "webpack": "^5.75.0",\n    "webpack-cli": "^5.0.1"\n  }\n}',
+            "operation_type": "Editing",
+            "file_path": "package.json"
+        },
+        {
+            "type": "editor",
+            "filename": "README.md",
+            "content": f"# {title}\n\nThis project was created with AgenDev, an Intelligent Agentic Development System.\n\n## Getting Started\n\n```bash\nnpm install\nnpm start\n```\n\n## Features\n\n- Feature 1\n- Feature 2\n- Feature 3\n\n## License\n\nMIT\n",
+            "operation_type": "Creating",
+            "file_path": "README.md"
+        }
+    ]
+    
+    playback_data["total_steps"] = len(playback_data["steps"])
+    playback_data["current_step"] = 0
     
     # Hide landing page, show main container
     landing_style = {"display": "none"}
     main_style = {"display": "flex"}
     
-    return current_state, landing_style, main_style, title
+    return current_state, landing_style, main_style, title, todo_data, playback_data
 
-# Callback for task1 collapsible section
+# Callback to render the todo.md content
+@app.callback(
+    Output("todo-content", "children"),
+    [Input("todo-data", "data")],
+    prevent_initial_call=True
+)
+def update_todo_content(todo_data):
+    return render_markdown(todo_data["content"])
+
+# Callback to render task sections
+@app.callback(
+    Output("task-sections", "children"),
+    [Input("task-data", "data")],
+    prevent_initial_call=True
+)
+def update_task_sections(task_data):
+    task_sections = []
+    
+    for task in task_data.get("tasks", []):
+        # Determine icon class based on status
+        if task["status"] == "completed":
+            icon_class = "fas fa-check-circle"
+            icon_style = {"marginRight": "10px", "color": "#00ff00"}
+        elif task["status"] == "in-progress":
+            icon_class = "fas fa-spinner fa-spin"
+            icon_style = {"marginRight": "10px", "color": "#ffc107"}
+        else:
+            icon_class = "fas fa-circle"
+            icon_style = {"marginRight": "10px", "color": "#888"}
+        
+        # Create header with icon and title
+        header_content = html.Div([
+            html.I(className=icon_class, style=icon_style),
+            html.Span(task["title"])
+        ])
+        
+        # Create collapsible section
+        section = create_collapsible_section(
+            task["id"],
+            header_content,
+            task["content"],
+            is_open=(task["status"] == "in-progress")
+        )
+        
+        task_sections.append(section)
+    
+    return task_sections
+
+# Callback for updating view content based on playback
+@app.callback(
+    [Output("view-content", "children"),
+     Output("current-view-type", "children"),
+     Output("operation-type", "children"),
+     Output("current-file-path", "children")],
+    [Input("playback-data", "data")],
+    prevent_initial_call=True
+)
+def update_view_content(playback_data):
+    if not playback_data or not playback_data.get("steps"):
+        return [], "None", "", ""
+    
+    current_step = playback_data["current_step"]
+    
+    if current_step >= len(playback_data["steps"]):
+        return [], "None", "", ""
+    
+    step_data = playback_data["steps"][current_step]
+    view_type = step_data.get("type", "terminal")
+    
+    if view_type == "terminal":
+        content = create_terminal_view(step_data.get("content", ""))
+    elif view_type == "editor":
+        content = create_editor_view(
+            step_data.get("filename", "unnamed.txt"),
+            step_data.get("content", ""),
+            "text"
+        )
+    elif view_type == "browser":
+        content = html.Iframe(
+            src=step_data.get("url", "about:blank"),
+            style={"width": "100%", "height": "100%", "border": "none"}
+        )
+    else:
+        content = html.Div("No content available")
+    
+    # Update operation indicators
+    operation_type = step_data.get("operation_type", "Working on")
+    file_path = step_data.get("file_path", "")
+    
+    return [content], view_type.capitalize(), operation_type, file_path
+
+# Callback for playback controls
+@app.callback(
+    [Output("playback-data", "data", allow_duplicate=True),
+     Output("playback-interval", "disabled"),
+     Output("play-icon", "className"),
+     Output("live-button", "className"),
+     Output("task-status-tag", "className"),
+     Output("task-status-icon", "className"),
+     Output("current-task-text", "children"),
+     Output("task-progress", "children"),
+     Output("playback-slider", "value")],
+    [Input("playback-backward", "n_clicks"),
+     Input("playback-play", "n_clicks"),
+     Input("playback-forward", "n_clicks"),
+     Input("live-button", "n_clicks"),
+     Input("playback-interval", "n_intervals"),
+     Input("playback-slider", "value")],
+    [State("playback-data", "data"),
+     State("app-state", "data")],
+    prevent_initial_call=True
+)
+def control_playback(backward_clicks, play_clicks, forward_clicks, live_clicks, 
+                    interval, slider_value, playback_data, app_state):
+    # Get the component that triggered the callback
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else None
+    
+    if not playback_data:
+        raise PreventUpdate
+    
+    # Initialize values
+    current_step = playback_data["current_step"]
+    is_playing = playback_data["is_playing"]
+    is_live = app_state.get("is_live_mode", True)
+    total_steps = playback_data["total_steps"]
+    
+    # Handle different triggers
+    if trigger_id == "playback-backward":
+        current_step = max(0, current_step - 1)
+        is_playing = False
+        is_live = False
+    
+    elif trigger_id == "playback-play":
+        is_playing = not is_playing
+    
+    elif trigger_id == "playback-forward":
+        current_step = min(total_steps - 1, current_step + 1)
+        if current_step == total_steps - 1:
+            is_playing = False
+            is_live = True
+    
+    elif trigger_id == "live-button":
+        is_live = True
+        current_step = total_steps - 1
+        is_playing = False
+    
+    elif trigger_id == "playback-interval" and is_playing:
+        current_step = min(total_steps - 1, current_step + 1)
+        if current_step == total_steps - 1:
+            is_playing = False
+            is_live = True
+    
+    elif trigger_id == "playback-slider":
+        # Calculate the step based on slider value
+        current_step = round((slider_value / 100) * (total_steps - 1))
+        is_playing = False
+        is_live = (current_step == total_steps - 1)
+    
+    # Update playback data
+    playback_data["current_step"] = current_step
+    playback_data["is_playing"] = is_playing
+    app_state["is_live_mode"] = is_live
+    
+    # Calculate slider value (0-100)
+    if total_steps > 1:
+        slider_value = (current_step / (total_steps - 1)) * 100
+    else:
+        slider_value = 0
+    
+    # Update task status
+    status_class = "status-tag in-progress"
+    icon_class = "fas fa-spinner fa-spin"
+    if is_live and total_steps > 0:
+        current_task = "Current task in progress..."
+    else:
+        step_index = min(current_step, total_steps - 1) if total_steps > 0 else 0
+        step_data = playback_data["steps"][step_index] if playback_data["steps"] else {}
+        current_task = f"Step {step_index + 1}: {step_data.get('operation_type', '')} {step_data.get('file_path', '')}"
+    
+    # Task progress indicator
+    progress_text = f"{current_step + 1}/{total_steps}"
+    
+    # Button classes
+    play_icon_class = "fas fa-pause" if is_playing else "fas fa-play"
+    live_button_class = "btn-control active" if is_live else "btn-control"
+    
+    return (
+        playback_data, 
+        not is_playing,  # Interval is disabled when not playing
+        play_icon_class,
+        live_button_class,
+        status_class,
+        icon_class,
+        current_task,
+        progress_text,
+        slider_value
+    )
+
+# Callbacks for collapsible sections
 @app.callback(
     Output("task1-content", "style"),
     Input("task1-header", "n_clicks"),
@@ -859,36 +1057,6 @@ def transition_to_main_view(n_clicks, prompt_value, current_state):
     prevent_initial_call=True
 )
 def toggle_section_task1(n_clicks, current_style):
-    if not n_clicks:
-        raise PreventUpdate
-    
-    is_visible = current_style.get("display") == "block"
-    new_style = {"display": "none" if is_visible else "block"}
-    return new_style
-
-# Callback for task2 collapsible section  
-@app.callback(
-    Output("task2-content", "style"),
-    Input("task2-header", "n_clicks"),
-    State("task2-content", "style"),
-    prevent_initial_call=True
-)
-def toggle_section_task2(n_clicks, current_style):
-    if not n_clicks:
-        raise PreventUpdate
-    
-    is_visible = current_style.get("display") == "block"
-    new_style = {"display": "none" if is_visible else "block"}
-    return new_style
-
-# Callback for task3 collapsible section
-@app.callback(
-    Output("task3-content", "style"),
-    Input("task3-header", "n_clicks"),
-    State("task3-content", "style"),
-    prevent_initial_call=True
-)
-def toggle_section_task3(n_clicks, current_style):
     if not n_clicks:
         raise PreventUpdate
     
