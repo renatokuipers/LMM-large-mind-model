@@ -5,7 +5,7 @@ This module contains utility functions for creating view container elements
 such as editor, terminal, and browser views.
 """
 from typing import Union
-from dash import html
+from dash import html, dcc
 
 def create_terminal_view(content: str) -> html.Div:
     """
@@ -177,7 +177,18 @@ def create_playback_controls() -> html.Div:
                     ),
                     html.Div(
                         id="playback-slider-container",
-                        style={"width": "300px", "marginLeft": "10px", "marginRight": "10px"}
+                        style={"width": "300px", "marginLeft": "10px", "marginRight": "10px"},
+                        children=[
+                            dcc.Slider(
+                                id="playback-slider",
+                                min=0,
+                                max=100,
+                                step=1,
+                                value=0,
+                                marks=None,
+                                updatemode='drag'
+                            )
+                        ]
                     ),
                     html.Button(
                         html.I(className="fas fa-bolt"),
