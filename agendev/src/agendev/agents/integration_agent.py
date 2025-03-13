@@ -1,5 +1,10 @@
 # integration_agent.py
-"""Integration agent for integration of different components."""
+"""
+Integration agent for integrating components and managing dependencies.
+
+This agent is responsible for integrating different components of the system,
+managing dependencies, and ensuring compatibility.
+"""
 
 from __future__ import annotations
 from typing import Dict, List, Optional, Any, Tuple, Set, Union
@@ -12,6 +17,8 @@ from pathlib import Path
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 from datetime import datetime
+import subprocess
+import logging
 
 from .agent_base import Agent, AgentStatus
 from ..models.task_models import Task
@@ -62,11 +69,28 @@ class IntegrationAgent(Agent):
             agent_type=agent_type
         )
         
-        # Workspace for integration operations
-        self.workspace_dir = workspace_dir or "workspace/src"
+        # Workspace for integration operations - using private variables
+        self._workspace_dir = workspace_dir or "workspace/src"
         
         # Track integration results
-        self.integration_results: List[IntegrationResult] = []
+        self._integration_results: List[IntegrationResult] = []
+    
+    # Define properties for safer access
+    @property
+    def workspace_dir(self) -> str:
+        return self._workspace_dir
+    
+    @workspace_dir.setter
+    def workspace_dir(self, value: str):
+        self._workspace_dir = value
+    
+    @property
+    def integration_results(self) -> List[IntegrationResult]:
+        return self._integration_results
+    
+    @integration_results.setter
+    def integration_results(self, value: List[IntegrationResult]):
+        self._integration_results = value
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -518,4 +542,82 @@ class IntegrationAgent(Agent):
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
             
-        return content 
+        return content
+
+    def _write_file(self, file_path: str, content: str) -> bool:
+        """
+        Write content to a file.
+        
+        Args:
+            file_path: Path to the file
+            content: Content to write
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Resolve the absolute path
+            abs_path = resolve_path(os.path.join(self.workspace_dir, file_path), create_parents=True)
+            
+            # Check if the file already exists
+            if os.path.exists(abs_path):
+                # If it exists, use difflib to apply changes
+                return self._apply_diff_to_file(abs_path, content)
+            
+            # If it's a new file, write it directly
+            with open(abs_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            self.logger.info(f"Successfully wrote file: {file_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error writing file {file_path}: {str(e)}")
+            return False
+
+    def _apply_diff_to_file(self, abs_path: str, new_content: str) -> bool:
+        """
+        Apply changes to an existing file using difflib for better control.
+        
+        Args:
+            abs_path: Absolute path to the file
+            new_content: New content to apply
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Read the original file
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            # If the content is identical, no need to update
+            if original_content == new_content:
+                self.logger.info(f"File content unchanged: {abs_path}")
+                return True
+            
+            # Generate a unified diff
+            original_lines = original_content.splitlines(keepends=True)
+            new_lines = new_content.splitlines(keepends=True)
+            
+            # Create a diff
+            diff = difflib.unified_diff(
+                original_lines, 
+                new_lines,
+                fromfile=f'Original: {os.path.basename(abs_path)}',
+                tofile=f'Modified: {os.path.basename(abs_path)}',
+                n=3  # Context lines
+            )
+            
+            # Log the diff for debugging
+            diff_text = ''.join(diff)
+            self.logger.info(f"Applying changes to {abs_path}:\n{diff_text}")
+            
+            # Write the new content
+            with open(abs_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            
+            self.logger.info(f"Successfully updated file: {abs_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error applying diff to {abs_path}: {str(e)}")
+            return False 

@@ -18,7 +18,7 @@ from datetime import datetime
 from .agent_base import Agent, AgentStatus
 from ..models.task_models import Task, TaskType, TaskPriority, TaskRisk, TaskGraph, TaskStatus
 from ..models.planning_models import PlanSnapshot, SimulationConfig, MCTSNode
-from ..search_algorithms import MCTSPlanner
+from ..search_algorithms import MCTSPlanner, AStarPathfinder
 from ..probability_modeling import TaskProbabilityModel
 
 
@@ -59,9 +59,36 @@ class PlannerAgent(Agent):
             agent_type=agent_type
         )
         
-        # Store the most recent analysis and plan
-        self.current_analysis: Optional[RequirementAnalysis] = None
-        self.current_plan: Optional[List[Task]] = None
+        # Store the most recent analysis and plan 
+        # Initialize these as instance variables, not as Pydantic model fields
+        self._current_analysis = None
+        self._current_plan = None
+        self._current_task_breakdown = None
+    
+    # Define properties to access these attributes safely
+    @property
+    def current_analysis(self) -> Optional[RequirementAnalysis]:
+        return self._current_analysis
+    
+    @current_analysis.setter
+    def current_analysis(self, value: Optional[RequirementAnalysis]):
+        self._current_analysis = value
+    
+    @property
+    def current_plan(self) -> Optional[List[Task]]:
+        return self._current_plan
+    
+    @current_plan.setter
+    def current_plan(self, value: Optional[List[Task]]):
+        self._current_plan = value
+    
+    @property
+    def current_task_breakdown(self) -> Optional[Dict[str, Any]]:
+        return self._current_task_breakdown
+    
+    @current_task_breakdown.setter
+    def current_task_breakdown(self, value: Optional[Dict[str, Any]]):
+        self._current_task_breakdown = value
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -236,7 +263,7 @@ class PlannerAgent(Agent):
             }
             
             # Query the LLM for structured analysis
-            query_result = await self.llm.structured_query(
+            query_result = self.llm.structured_query(
                 prompt=f"Analyze the following project requirements:\n\n{prompt}",
                 json_schema=analysis_schema,
                 clear_context=True
@@ -244,11 +271,19 @@ class PlannerAgent(Agent):
             
             # Check for successful result
             if not query_result.get("success", False):
-                raise ValueError(f"Failed to analyze requirements: {query_result.get('error', 'Unknown error')}")
+                error_message = query_result.get("error", "Unknown error")
+                raw_content = query_result.get("raw_content", "No content")
+                
+                # Log detailed error for debugging
+                print(f"Analysis query failed: {error_message}")
+                print(f"Raw content: {raw_content}")
+                
+                raise ValueError(f"Failed to analyze requirements: {error_message}")
             
+            # Extract the result from the response
             analysis = query_result.get("result", {})
             
-            # Store for later use
+            # Store the analysis for future reference
             self.current_analysis = analysis
             
             # Complete the action
@@ -385,7 +420,7 @@ class PlannerAgent(Agent):
             existing_req_info = "\n".join([f"- {req}" for req in existing_requirements])
             
             # Query the LLM for structured analysis
-            query_result = await self.llm.structured_query(
+            query_result = self.llm.structured_query(
                 prompt=f"""Analyze the following feature request:
 
 Feature Request:
@@ -401,8 +436,16 @@ Provide a detailed analysis of this feature request, including how it relates to
             
             # Check for successful result
             if not query_result.get("success", False):
-                raise ValueError(f"Failed to analyze feature: {query_result.get('error', 'Unknown error')}")
+                error_message = query_result.get("error", "Unknown error")
+                raw_content = query_result.get("raw_content", "No content")
+                
+                # Log detailed error for debugging
+                print(f"Feature analysis query failed: {error_message}")
+                print(f"Raw content: {raw_content}")
+                
+                raise ValueError(f"Failed to analyze feature: {error_message}")
             
+            # Extract the result from the response
             feature_analysis = query_result.get("result", {})
             
             # Complete the action
@@ -558,7 +601,7 @@ Provide a detailed analysis of this feature request, including how it relates to
             }
             
             # Query the LLM for structured task breakdown
-            query_result = await self.llm.structured_query(
+            query_result = self.llm.structured_query(
                 prompt=f"""Break down the following project into implementable tasks:
 
 Project Analysis:
@@ -571,8 +614,16 @@ Provide a detailed task breakdown for this project, organizing tasks by componen
             
             # Check for successful result
             if not query_result.get("success", False):
-                raise ValueError(f"Failed to break down tasks: {query_result.get('error', 'Unknown error')}")
+                error_message = query_result.get("error", "Unknown error")
+                raw_content = query_result.get("raw_content", "No content")
+                
+                # Log detailed error for debugging
+                print(f"Task breakdown query failed: {error_message}")
+                print(f"Raw content: {raw_content}")
+                
+                raise ValueError(f"Failed to break down tasks: {error_message}")
             
+            # Extract the result from the response
             task_breakdown = query_result.get("result", {})
             
             # Store for later use
@@ -625,16 +676,22 @@ Provide a detailed task breakdown for this project, organizing tasks by componen
         
         try:
             # First, break down tasks if not already done
-            if not hasattr(self, "current_task_breakdown"):
+            if not self.current_task_breakdown:
                 task_breakdown_result = await self._break_down_tasks()
                 if not task_breakdown_result.get("success", False):
                     raise ValueError(f"Failed to break down tasks: {task_breakdown_result.get('error', 'Unknown error')}")
             
+            # Create a Task Graph from the task breakdown
+            task_graph, tasks = self._create_task_graph_from_breakdown()
+            
+            # Use MCTS to find optimal plan
+            optimal_sequence = self._generate_optimal_plan_with_mcts(task_graph)
+            
             # Prepare a specific context for the LLM
             system_message = """You are an expert software architect specialized in creating implementation plans.
-            Your task is to take a project analysis and task breakdown and create a detailed implementation plan.
+            Your task is to take a project analysis, task breakdown, and an optimal task sequence and create a detailed implementation plan.
             The plan should include project setup, development phases, testing strategies, and deployment steps.
-            Consider dependencies between tasks and provide a logical sequence for implementation.
+            Consider dependencies between tasks and follow the provided optimal sequence for implementation.
             Be specific about frameworks, libraries, and tools to be used.
             
             Pay special attention to project structure and organization, especially for Python projects.
@@ -779,9 +836,16 @@ Provide a detailed task breakdown for this project, organizing tasks by componen
                 }
             }
             
+            # Include the optimal sequence in the prompt
+            sequence_info = "\n\nOptimal Task Sequence (determined by Monte Carlo Tree Search algorithm):\n"
+            for i, task_id in enumerate(optimal_sequence):
+                task = tasks.get(task_id)
+                if task:
+                    sequence_info += f"{i+1}. {task.title} - {task.description[:50]}...\n"
+            
             # Query the LLM for structured implementation plan
-            query_result = await self.llm.structured_query(
-                prompt=f"""Generate an implementation plan based on the following project analysis and task breakdown:
+            query_result = self.llm.structured_query(
+                prompt=f"""Generate an implementation plan based on the following project analysis, task breakdown, and optimal task sequence:
 
 Project Analysis:
 {json.dumps(self.current_analysis, indent=2)}
@@ -789,18 +853,28 @@ Project Analysis:
 Task Breakdown:
 {json.dumps(self.current_task_breakdown, indent=2)}
 
-Provide a detailed implementation plan for this project, including project structure, implementation phases, and setup instructions.""",
+{sequence_info}
+
+Provide a detailed implementation plan for this project, following the optimal task sequence provided, including project structure, implementation phases, and setup instructions.""",
                 json_schema=plan_schema,
                 clear_context=True
             )
             
             # Check for successful result
             if not query_result.get("success", False):
-                raise ValueError(f"Failed to generate plan: {query_result.get('error', 'Unknown error')}")
+                error_message = query_result.get("error", "Unknown error")
+                raw_content = query_result.get("raw_content", "No content")
+                
+                # Log detailed error for debugging
+                print(f"Implementation plan query failed: {error_message}")
+                print(f"Raw content: {raw_content}")
+                
+                raise ValueError(f"Failed to generate plan: {error_message}")
             
+            # Extract the result from the response
             implementation_plan = query_result.get("result", {})
             
-            # Store for later use
+            # Store the plan for future reference
             self.current_plan = implementation_plan
             
             # Complete the action
@@ -826,4 +900,188 @@ Provide a detailed implementation plan for this project, including project struc
             return {
                 "success": False,
                 "error": f"Plan generation failed: {str(e)}"
-            } 
+            }
+    
+    def _create_task_graph_from_breakdown(self) -> Tuple[TaskGraph, Dict[UUID, Task]]:
+        """
+        Create a TaskGraph from the current task breakdown.
+        
+        Returns:
+            Tuple of (TaskGraph, Dict[UUID, Task])
+        """
+        task_graph = TaskGraph()
+        tasks = {}
+        
+        # Extract tasks from breakdown
+        task_data = self.current_task_breakdown.get("tasks", [])
+        
+        # Create Task objects
+        for task_info in task_data:
+            task_id = uuid4()
+            task = Task(
+                id=task_id,
+                title=task_info.get("name", "Unnamed Task"),
+                description=task_info.get("description", ""),
+                task_type=TaskType(task_info.get("type", "implementation")),
+                priority=TaskPriority(task_info.get("priority", "medium")),
+                risk=TaskRisk(task_info.get("risk", "medium")),
+                estimated_duration_hours=task_info.get("estimated_hours", 1.0)
+            )
+            tasks[task_id] = task
+            task_graph.add_task(task)
+        
+        # Add dependencies
+        for task_info in task_data:
+            if "dependencies" in task_info and task_info["dependencies"]:
+                # Find the task with this name
+                task_name = task_info.get("name")
+                source_id = None
+                for task_id, task in tasks.items():
+                    if task.title == task_name:
+                        source_id = task_id
+                        break
+                
+                if source_id:
+                    for dep_name in task_info["dependencies"]:
+                        # Find the dependency task id
+                        target_id = None
+                        for task_id, task in tasks.items():
+                            if task.title == dep_name:
+                                target_id = task_id
+                                break
+                        
+                        if target_id:
+                            # Add the dependency
+                            task_graph.add_dependency(
+                                Dependency(
+                                    source_id=source_id,
+                                    target_id=target_id,
+                                    dependency_type="blocks",
+                                    strength=1.0
+                                )
+                            )
+        
+        return task_graph, tasks
+    
+    def _generate_optimal_plan_with_mcts(self, task_graph: TaskGraph) -> List[UUID]:
+        """
+        Use Monte Carlo Tree Search to generate an optimal task sequence.
+        
+        Args:
+            task_graph: The TaskGraph containing tasks and dependencies
+            
+        Returns:
+            List of task IDs in optimal sequence
+        """
+        # Create a simulation config
+        config = SimulationConfig(
+            max_iterations=1000,  # Adjust based on complexity
+            exploration_weight=1.414,  # UCT constant
+            max_depth=30,
+            time_limit_seconds=20.0  # Maximum time to spend on optimization
+        )
+        
+        # Create the MCTS planner
+        mcts_planner = MCTSPlanner(
+            task_graph=task_graph,
+            llm_integration=self.llm,
+            config=config
+        )
+        
+        try:
+            # Run the simulation
+            simulation_result = mcts_planner.run_simulation()
+            
+            # Get the best sequence
+            best_sequence = simulation_result.get("best_sequence", [])
+            
+            if not best_sequence:
+                print("MCTS optimization returned empty sequence, falling back to A* pathfinding")
+                # Fallback to A* if MCTS fails
+                best_sequence = self._generate_optimal_plan_with_astar(task_graph)
+            
+            return best_sequence
+        except Exception as e:
+            print(f"Error in MCTS planning: {e}")
+            # Fallback to A* if MCTS fails
+            return self._generate_optimal_plan_with_astar(task_graph)
+    
+    def _generate_optimal_plan_with_astar(self, task_graph: TaskGraph) -> List[UUID]:
+        """
+        Use A* pathfinding to generate an optimal task sequence.
+        
+        Args:
+            task_graph: The TaskGraph containing tasks and dependencies
+            
+        Returns:
+            List of task IDs in optimal sequence
+        """
+        try:
+            from ..search_algorithms import AStarPathfinder
+            
+            # Define a custom heuristic function for A* that considers task priority and risk
+            def custom_heuristic(node_id: UUID, remaining_tasks: Set[UUID]) -> float:
+                # The fewer remaining tasks, the better
+                base_score = len(remaining_tasks) * 10
+                
+                # Add risk and priority factors
+                if node_id in task_graph.tasks:
+                    task = task_graph.tasks[node_id]
+                    
+                    # Prioritize high-priority tasks
+                    if task.priority == TaskPriority.HIGH:
+                        base_score -= 5
+                    elif task.priority == TaskPriority.CRITICAL:
+                        base_score -= 10
+                    
+                    # Add penalty for high-risk tasks
+                    if task.risk == TaskRisk.HIGH:
+                        base_score += 5
+                    elif task.risk == TaskRisk.CRITICAL:
+                        base_score += 10
+                    
+                    # Consider task duration
+                    base_score += task.estimated_duration_hours * 2
+                
+                return base_score
+            
+            # Create the A* pathfinder
+            pathfinder = AStarPathfinder(
+                task_graph=task_graph,
+                heuristic_function=custom_heuristic
+            )
+            
+            # Find tasks with no dependencies (start tasks)
+            start_tasks = []
+            for task_id, task in task_graph.tasks.items():
+                if not task.dependencies:
+                    start_tasks.append(task_id)
+            
+            if not start_tasks:
+                # If no start tasks, just use the first task
+                if task_graph.tasks:
+                    start_tasks = [next(iter(task_graph.tasks.keys()))]
+                else:
+                    return []
+            
+            # Define goal condition: all tasks completed
+            def all_tasks_completed(completed_tasks: Set[UUID]) -> bool:
+                return len(completed_tasks) == len(task_graph.tasks)
+            
+            # Find the path
+            path, path_info = pathfinder.find_path(
+                start_tasks=start_tasks,
+                goal_condition=all_tasks_completed
+            )
+            
+            print(f"A* pathfinding found a path of length {len(path)} with cost {path_info.get('total_cost', 0)}")
+            
+            return path
+        except Exception as e:
+            print(f"Error in A* pathfinding: {e}")
+            # Final fallback to critical path if A* fails
+            try:
+                return task_graph.get_critical_path()
+            except Exception:
+                # If everything fails, just return tasks in order
+                return list(task_graph.tasks.keys()) 

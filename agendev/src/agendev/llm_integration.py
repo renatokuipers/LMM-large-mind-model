@@ -8,6 +8,7 @@ import time
 import json
 import logging
 from pathlib import Path
+import requests
 
 from .llm_module import LLMClient, Message
 from .models.task_models import Task, TaskType
@@ -209,6 +210,9 @@ class LLMIntegration:
             if self.context.system_message:
                 messages.insert(0, Message(role="system", content=self.context.system_message))
         
+        # Log the request
+        logger.info(f"Sending structured query with schema: {json_schema.get('name', 'unknown')}")
+        
         # Execute with retry logic
         response = self._execute_with_retry(
             lambda: self.llm_client.structured_completion(
@@ -221,9 +225,20 @@ class LLMIntegration:
             )
         )
         
-        # Save string representation of response to context if requested
+        # Check if we got a successful response
+        if not response.get("success", False):
+            error_msg = response.get("error", "Unknown error")
+            logger.error(f"Structured query failed: {error_msg}")
+            if response.get("raw_content"):
+                logger.debug(f"Raw content: {response.get('raw_content')}")
+        else:
+            logger.info(f"Structured query successful")
+            
+        # Save response to context if requested
         if save_to_context:
-            response_str = json.dumps(response, indent=2) if isinstance(response, dict) else str(response)
+            # Use the result if available, otherwise use the raw response
+            result_to_save = response.get("result", {}) if response.get("success", False) else response
+            response_str = json.dumps(result_to_save, indent=2)
             self.context.add_message("assistant", response_str)
         
         return response
@@ -369,10 +384,7 @@ class LLMIntegration:
             max_retries: Maximum number of retries
             
         Returns:
-            Result of the operation
-            
-        Raises:
-            Exception: If all retries fail
+            Result of the operation or standardized error response
         """
         retries = max_retries or self.config.max_retries
         last_error = None
@@ -386,6 +398,19 @@ class LLMIntegration:
                     logger.warning(f"Attempt {attempt + 1} failed: {str(e)}. Retrying in {self.config.retry_delay_seconds}s...")
                     time.sleep(self.config.retry_delay_seconds)
                 else:
-                    logger.error(f"All {retries} attempts failed.")
+                    logger.error(f"All {retries} attempts failed. Error: {str(e)}")
         
-        raise last_error
+        # Instead of raising an exception, return a structured error response
+        if isinstance(last_error, requests.RequestException):
+            error_type = "RequestError"
+        elif isinstance(last_error, json.JSONDecodeError):
+            error_type = "JSONDecodeError"
+        else:
+            error_type = type(last_error).__name__
+            
+        return {
+            "success": False,
+            "result": {},
+            "error": f"{error_type}: {str(last_error)}",
+            "raw_content": None
+        }

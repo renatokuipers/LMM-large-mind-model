@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback, ctx
+from dash import dcc, html, Input, Output, State, callback, ctx, ALL, MATCH, ALLSMALLER
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import json
@@ -9,6 +9,38 @@ import asyncio
 import uuid
 from datetime import datetime
 from pathlib import Path
+import threading
+from dash.long_callback import DiskcacheLongCallbackManager
+import diskcache
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+import atexit
+import sys
+import signal
+from src.agendev.utils.fs_utils import get_workspace_root, ensure_workspace_structure
+
+# Set up global executor for background tasks
+background_executor = ThreadPoolExecutor(max_workers=2)
+
+# Register cleanup on application exit
+def cleanup_executor():
+    print("Shutting down executor...")
+    try:
+        background_executor.shutdown(wait=False)
+    except:
+        pass
+
+atexit.register(cleanup_executor)
+
+# Handle signals gracefully
+def signal_handler(sig, frame):
+    print("Intercepted signal, cleaning up...")
+    cleanup_executor()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+if hasattr(signal, 'SIGTERM'):
+    signal.signal(signal.SIGTERM, signal_handler)
 
 # Import agents and necessary modules for agentic functionality
 from agendev.agents.planner_agent import PlannerAgent
@@ -20,6 +52,22 @@ from agendev.utils.config import load_config
 from agendev.utils.llm import LLMProvider
 from agendev.llm_integration import LLMIntegration, LLMConfig
 
+# Set up diskcache for long callbacks
+cache = diskcache.Cache("./cache")
+
+# Clear the cache on startup to prevent stale callback issues
+def clear_cache():
+    try:
+        cache.clear()
+        print("Cleared callback cache")
+    except Exception as e:
+        print(f"Error clearing cache: {e}")
+
+# Execute cache clearing
+clear_cache()
+
+long_callback_manager = DiskcacheLongCallbackManager(cache)
+
 # Initialize the Dash app with dark theme
 app = dash.Dash(
     __name__,
@@ -28,26 +76,42 @@ app = dash.Dash(
         "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
     ],
     suppress_callback_exceptions=True,
+    prevent_initial_callbacks=True,
+    url_base_pathname='/',
+    update_title=None,
     meta_tags=[
         {"name": "viewport", "content": "width=device-width, initial-scale=1.0"}
     ],
+    long_callback_manager=long_callback_manager
 )
+
+# Clear the component registry to prevent callback hash issues
+app._callback_list = []
+app.callback_map = {}
 
 # Load configuration
 config = load_config()
-workspace_path = config.get("workspace_path", os.getcwd())
+# Use get_workspace_root to ensure projects are saved in the workspace directory
+workspace_path = str(ensure_workspace_structure())
+print(f"Using workspace directory: {workspace_path}")
 
-# Initialize LLM provider and agents
+# Initialize LLM provider and agents - with a single instance
 llm_config = config.get("llm", {})
 llm_provider = LLMProvider(llm_config)
 
-# Initialize LLM integration for agents
+# Initialize LLM integration for agents - ensure URL is complete
 base_url = llm_config.get("endpoint", "http://192.168.2.12:1234")
+# Ensure the URL is complete - append port if missing
+if not base_url.endswith(":1234") and ":" not in base_url:
+    base_url = f"{base_url}:1234"
+print(f"Using LLM endpoint: {base_url}")
+# Don't create the LLMProvider twice
+
 model = llm_config.get("model", "qwen2.5-7b-instruct")
 llm_integration_config = LLMConfig(
     model=model,
     temperature=0.7, 
-    max_tokens=4000
+    max_tokens=16384
 )
 llm_integration = LLMIntegration(
     base_url=base_url,
@@ -1080,7 +1144,6 @@ async def process_user_prompt(prompt):
         }
     
     except Exception as e:
-        import traceback
         error_message = f"Error processing prompt: {e}\n{traceback.format_exc()}"
         print(error_message)
         
@@ -1098,18 +1161,29 @@ async def process_user_prompt(prompt):
             "actions": actions
         }
 
-# Enhanced callback to transition from landing page and initialize action recording
-@app.callback(
-    [Output("app-state", "data"),
-     Output("landing-page", "style"),
-     Output("main-container", "style"),
-     Output("project-title", "children"),
-     Output("chat-container", "children"),
-     Output("action-record", "data")],
+# Updated transition_to_main_view callback for better error handling
+@app.long_callback(
+    [Output("app-state", "data", allow_duplicate=True),
+     Output("landing-page", "style", allow_duplicate=True),
+     Output("main-container", "style", allow_duplicate=True),
+     Output("project-title", "children", allow_duplicate=True),
+     Output("chat-container", "children", allow_duplicate=True),
+     Output("action-record", "data", allow_duplicate=True)],
     [Input("submit-button", "n_clicks")],
     [State("initial-prompt", "value"),
      State("app-state", "data")],
-    prevent_initial_call=True
+    prevent_initial_call=True,
+    running=[
+        (Output("submit-button", "disabled"), True, False),
+        (Output("submit-button", "children"), "Processing...", "Submit")
+    ],
+    # Add manager-specific config to help with process handling
+    manager_config={
+        "processes": 1,
+        "max_processes": 2,
+        "disable_job_param": True,
+        "job_timeout": 1800  # 30 minutes should be plenty
+    }
 )
 def transition_to_main_view(n_clicks, prompt_value, current_state):
     if not n_clicks:
@@ -1118,119 +1192,274 @@ def transition_to_main_view(n_clicks, prompt_value, current_state):
     if not prompt_value:
         raise PreventUpdate
     
-    # Update state
-    current_state["view"] = "main"
-    current_state["initial_prompt"] = prompt_value
-    
-    # Process the prompt through the agent system
-    # Note: We need to run the async function in a synchronous callback
-    import nest_asyncio
-    nest_asyncio.apply()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(process_user_prompt(prompt_value))
-    
-    # Update the app state with project info
-    current_state["project_id"] = result.get("project_id")
-    
-    # Initialize the action record data
-    action_record_data = {
-        "actions": result.get("actions", []),
-        "current_index": 0,  # Start at first action
-        "is_recording": False,
-        "is_playing": False,
-        "playback_speed": 1.0
-    }
-    
-    # Hide landing page, show main container
-    landing_style = {"display": "none"}
-    main_style = {"display": "flex"}
-    
-    # Set the project title
-    project_name = result.get("project_name", "New Project")
-    
-    # Create chat container children with system message and tasks
-    chat_children = [
-        # System message with project title
-        html.Div(
-            className="system-message",
-            children=[
-                html.Div(
-                    style={"display": "flex", "alignItems": "center", "marginBottom": "15px"},
-                    children=[
-                        html.I(className="fas fa-robot", style={"fontSize": "24px", "marginRight": "10px", "color": "#61dafb"}),
-                        html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
-                    ]
-                ),
-                html.H3(id="project-title", children=project_name, style={"margin": "0 0 10px 0"})
-            ]
-        )
-    ]
-    
-    # Add task sections based on the plan
-    if result.get("success", False) and result.get("tasks"):
-        for i, task in enumerate(result.get("tasks", [])):
-            # Create status icon based on task status
-            if task["status"] == "completed":
-                status_icon = html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"})
-            elif task["status"] == "in-progress":
-                status_icon = html.I(className="fas fa-spinner fa-spin", style={"marginRight": "10px", "color": "#ffc107"})
-            else:
-                status_icon = html.I(className="fas fa-circle", style={"marginRight": "10px", "color": "#6c757d"})
+    try:
+        print(f"Processing prompt: {prompt_value}")
+        
+        # Initialize or get the current state
+        if not current_state:
+            current_state = {"projects": {}}
             
-            # Create collapsible section for this task
-            task_section = create_collapsible_section(
-                f"task{i+1}",
-                html.Div([
-                    status_icon,
-                    html.Span(task["name"])
-                ]),
-                task["elements"],
-                is_open=(i == 0)  # First task is open by default
-            )
-            
-            chat_children.append(task_section)
-    else:
-        # If no tasks are available, show an error message
-        error_message = result.get("error", "Failed to process your request. Please try again.")
-        chat_children.append(
+        # Generate a unique project ID
+        project_id = str(uuid.uuid4())
+        
+        # Set up the initial state for the project
+        current_state["current_project"] = project_id
+        current_state["projects"][project_id] = {
+            "id": project_id,
+            "title": prompt_value,
+            "prompt": prompt_value,
+            "actions": [],
+            "status": "in-progress",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Create the workspace directory for this project
+        workspace_dir = os.path.join(workspace_path, f"project_{project_id[:8]}")
+        os.makedirs(workspace_dir, exist_ok=True)
+        
+        # Set up the initial action record
+        action_record = {
+            "actions": [],
+            "current_index": 0,
+            "is_playing": False,
+            "auto_advance": False
+        }
+        
+        # Update state
+        current_state["view"] = "main"
+        current_state["initial_prompt"] = prompt_value
+        
+        # Update the app state with project info
+        current_state["project_id"] = project_id
+        
+        # Hide landing page, show main container
+        landing_style = {"display": "none"}
+        main_style = {"display": "flex"}
+        
+        # We'll use "Processing..." as the initial project title
+        project_name = "Processing your request..."
+        
+        # Create initial chat container children with system message and "thinking" indicator
+        chat_children = [
+            # System message with initial title
             html.Div(
                 className="system-message",
-                style={"backgroundColor": "#dc3545", "color": "white"},
                 children=[
-                    html.P(error_message)
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "marginBottom": "15px"},
+                        children=[
+                            html.I(className="fas fa-robot", style={"fontSize": "24px", "marginRight": "10px", "color": "#61dafb"}),
+                            html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
+                        ]
+                    ),
+                    html.H3(id="project-title", children=project_name, style={"margin": "0 0 10px 0"})
+                ]
+            ),
+            # Add thinking indicator
+            html.Div(
+                className="chat-message",
+                children=[
+                    html.Div(
+                        style={
+                            "display": "flex",
+                            "alignItems": "center",
+                            "color": "#888"
+                        },
+                        children=[
+                            html.I(className="fas fa-circle-notch fa-spin", style={"marginRight": "10px"}),
+                            html.Span("Processing your request... This may take a few minutes.")
+                        ]
+                    )
                 ]
             )
-        )
+        ]
+        
+        # Start processing in background - don't use the long callback's process
+        # as it can cause issues with the diskcache manager
+        background_process_prompt(prompt_value, project_id, workspace_dir)
+        
+        return current_state, landing_style, main_style, project_name, chat_children, action_record
     
-    # Add thinking indicator
-    chat_children.append(
-        html.Div(
-            className="chat-message",
-            children=[
-                html.Div(
-                    style={
-                        "display": "flex",
-                        "alignItems": "center",
-                        "color": "#888"
-                    },
-                    children=[
-                        html.I(className="fas fa-circle-notch fa-spin", style={"marginRight": "10px"}),
-                        html.Span("Thinking")
-                    ]
-                )
-            ]
-        )
-    )
-    
-    return current_state, landing_style, main_style, project_name, chat_children, action_record_data
+    except Exception as e:
+        error_message = f"Error in transition: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        
+        # Provide a fallback return in case of errors
+        current_state["view"] = "main"
+        current_state["initial_prompt"] = prompt_value
+        landing_style = {"display": "none"}
+        main_style = {"display": "flex"}
+        project_name = "Error Processing Request"
+        
+        # Show error in UI
+        error_children = [
+            html.Div(
+                className="system-message",
+                children=[
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "marginBottom": "15px"},
+                        children=[
+                            html.I(className="fas fa-robot", style={"fontSize": "24px", "marginRight": "10px", "color": "#61dafb"}),
+                            html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
+                        ]
+                    ),
+                    html.H3(id="project-title", children=project_name, style={"margin": "0 0 10px 0"})
+                ]
+            ),
+            html.Div(
+                className="chat-message",
+                style={"backgroundColor": "#dc3545", "color": "white", "padding": "15px", "borderRadius": "8px"},
+                children=[
+                    html.P("An error occurred while processing your request:"),
+                    html.Pre(str(e), style={"maxHeight": "200px", "overflow": "auto"})
+                ]
+            )
+        ]
+        
+        error_action_data = {
+            "actions": [record_action("system", f"Error: {str(e)}", {"status": "error"})],
+            "current_index": 0,
+            "is_recording": False,
+            "is_playing": False,
+            "playback_speed": 1.0
+        }
+        
+        return current_state, landing_style, main_style, project_name, error_children, error_action_data
 
-# Enhanced handle_playback_controls function to better work with action types
+# Replace the background_process_prompt function with a more robust implementation
+def background_process_prompt(prompt, project_id, workspace_dir):
+    """Process the prompt in the background and update app state"""
+    try:
+        print(f"Starting background processing for project {project_id}")
+        
+        def run_async_task():
+            try:
+                print(f"Background thread started for project {project_id}")
+                # Create a new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Process the prompt
+                try:
+                    print(f"Running process_user_prompt for {project_id}")
+                    result = loop.run_until_complete(process_user_prompt(prompt))
+                    print(f"process_user_prompt completed for {project_id}")
+                    
+                    # Update the app state with the results - safely
+                    if project_id in active_projects:
+                        print(f"Project {project_id} already in active_projects")
+                        # Update actions if they exist in the result
+                        if "actions" in result and isinstance(result["actions"], list):
+                            print(f"Updating actions for project {project_id}: {len(result['actions'])} actions")
+                            active_projects[project_id]["actions"] = result["actions"]
+                    else:
+                        # Store the project info
+                        print(f"Creating new project entry for {project_id}")
+                        active_projects[project_id] = {
+                            "project_id": project_id,
+                            "project_name": result.get("project_name", "New Project"),
+                            "description": prompt,
+                            "workspace": workspace_dir,
+                            "actions": result.get("actions", [])
+                        }
+                    print(f"active_projects now contains: {list(active_projects.keys())}")
+                    
+                except Exception as e:
+                    error_message = f"Error in process_user_prompt: {e}\n{traceback.format_exc()}"
+                    print(error_message)
+                    
+                    # Record error
+                    error_action = record_action(
+                        "system", 
+                        error_message, 
+                        {"status": "error"}
+                    )
+                    
+                    # Store error in projects
+                    if project_id in active_projects:
+                        if "actions" in active_projects[project_id]:
+                            active_projects[project_id]["actions"].append(error_action)
+                        else:
+                            active_projects[project_id]["actions"] = [error_action]
+                    else:
+                        active_projects[project_id] = {
+                            "project_id": project_id,
+                            "project_name": "Error",
+                            "description": prompt,
+                            "workspace": workspace_dir,
+                            "actions": [error_action]
+                        }
+                finally:
+                    # Always clean up the event loop
+                    try:
+                        loop.close()
+                        print(f"Event loop closed for project {project_id}")
+                    except Exception as e:
+                        print(f"Error closing event loop: {e}")
+                        pass  # Ensure this doesn't raise
+            except Exception as e:
+                error_message = f"Error in background thread: {e}\n{traceback.format_exc()}"
+                print(error_message)
+                
+                # Record error
+                error_action = record_action(
+                    "system", 
+                    error_message, 
+                    {"status": "error"}
+                )
+                
+                # Store error in projects
+                if project_id in active_projects:
+                    if "actions" in active_projects[project_id]:
+                        active_projects[project_id]["actions"].append(error_action)
+                    else:
+                        active_projects[project_id]["actions"] = [error_action]
+                else:
+                    active_projects[project_id] = {
+                        "project_id": project_id,
+                        "project_name": "Error",
+                        "description": prompt,
+                        "workspace": workspace_dir,
+                        "actions": [error_action]
+                    }
+        
+        # Use ThreadPoolExecutor instead of raw thread creation
+        future = background_executor.submit(run_async_task)
+        # Don't wait for the result - it's a background task
+        print(f"Background task submitted for project {project_id}")
+        
+    except Exception as e:
+        error_message = f"Failed to start background processing: {e}\n{traceback.format_exc()}"
+        print(error_message)
+        
+        # Record error
+        error_action = record_action(
+            "system", 
+            error_message, 
+            {"status": "error"}
+        )
+        
+        # Store error in projects
+        if project_id in active_projects:
+            if "actions" in active_projects[project_id]:
+                active_projects[project_id]["actions"].append(error_action)
+            else:
+                active_projects[project_id]["actions"] = [error_action]
+        else:
+            active_projects[project_id] = {
+                "project_id": project_id,
+                "project_name": "Error",
+                "description": prompt,
+                "workspace": workspace_dir,
+                "actions": [error_action]
+            }
+
+# Restore the playback controls callback
 @app.callback(
-    [Output("view-content", "children"),
-     Output("view-type-indicator", "children"),
-     Output("status-indicator", "children"),
-     Output("playback-slider", "value"),
+    [Output("view-content", "children", allow_duplicate=True),
+     Output("view-type-indicator", "children", allow_duplicate=True),
+     Output("status-indicator", "children", allow_duplicate=True),
+     Output("playback-slider", "value", allow_duplicate=True),
      Output("action-record", "data", allow_duplicate=True)],
     [Input("playback-backward", "n_clicks"),
      Input("playback-play", "n_clicks"),
@@ -1243,6 +1472,10 @@ def transition_to_main_view(n_clicks, prompt_value, current_state):
 def handle_playback_controls(backward_clicks, play_clicks, forward_clicks, slider_value, action_record, app_state):
     """Handle playback control interactions."""
     triggered_id = ctx.triggered_id if ctx.triggered_id is not None else 'No clicks yet'
+    
+    # Safety check for empty action_record
+    if not action_record:
+        action_record = {"actions": [], "current_index": 0, "is_playing": False}
     
     # Make a copy of the action record to modify
     action_record = action_record.copy()
@@ -1456,7 +1689,7 @@ def handle_playback_controls(backward_clicks, play_clicks, forward_clicks, slide
 )
 def update_playback_automatically(n_intervals, action_record):
     """Automatically advance playback when in play mode."""
-    if not action_record.get("is_playing", False):
+    if not action_record or not action_record.get("is_playing", False):
         return dash.no_update
     
     actions = action_record.get("actions", [])
@@ -1476,14 +1709,23 @@ interval = dcc.Interval(
     id='interval-component',
     interval=1000,  # 1 second
     n_intervals=0,
-    disabled=False
+    disabled=True
 )
 
-# Add the interval component to the layout
+# Add a new interval component for UI updates
+interval_ui = dcc.Interval(
+    id='update-interval',
+    interval=1000,  # 1 second
+    n_intervals=0,
+    disabled=True
+)
+
+# Update the app layout to include the new interval
 app.layout = html.Div([
     app_state_store,
     playback_store,
     action_record_store,
+    interval_ui,
     interval,
     landing_page,
     main_view
@@ -1534,7 +1776,7 @@ def toggle_section_task3(n_clicks, current_style):
     new_style = {"display": "none" if is_visible else "block"}
     return new_style
 
-# Run the server
+# Update the run_server section to forcefully disable all hot reloading
 if __name__ == "__main__":
     # Make sure to install required packages
     try:
@@ -1544,4 +1786,37 @@ if __name__ == "__main__":
         pip.main(['install', 'nest_asyncio'])
         import nest_asyncio
     
-    app.run_server(debug=True)
+    # Apply nest_asyncio only once at startup
+    nest_asyncio.apply()
+    
+    # Set threading and process safety 
+    import multiprocessing
+    if hasattr(multiprocessing, 'set_start_method'):
+        try:
+            multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            # Method already set
+            pass
+    
+    # Set environment variables to disable hot reloading
+    import os
+    os.environ['DASH_HOT_RELOAD'] = 'false'
+    os.environ['FLASK_ENV'] = 'production'
+    
+    # Completely disable Flask's dev server auto-reloading
+    import flask
+    flask.Flask.debug = False
+    
+    # Use Dash in "production" mode rather than development mode
+    # This is the most effective way to prevent auto-reloading
+    
+    # Run with ALL auto-refresh features disabled
+    app.run_server(
+        debug=False,
+        dev_tools_hot_reload=False,
+        dev_tools_ui=False,
+        dev_tools_props_check=False,
+        dev_tools_serve_dev_bundles=False,
+        use_reloader=False,
+        host='0.0.0.0'  # Listen on all network interfaces
+    )

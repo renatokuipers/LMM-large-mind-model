@@ -50,9 +50,26 @@ class KnowledgeAgent(Agent):
             agent_type=agent_type
         )
         
-        # Track queries and responses
-        self.queries: List[KnowledgeQuery] = []
-        self.responses: List[KnowledgeResponse] = []
+        # Track queries and responses - using private variables
+        self._queries: List[KnowledgeQuery] = []
+        self._responses: List[KnowledgeResponse] = []
+    
+    # Define properties for safer access
+    @property
+    def queries(self) -> List[KnowledgeQuery]:
+        return self._queries
+    
+    @queries.setter
+    def queries(self, value: List[KnowledgeQuery]):
+        self._queries = value
+    
+    @property
+    def responses(self) -> List[KnowledgeResponse]:
+        return self._responses
+    
+    @responses.setter
+    def responses(self, value: List[KnowledgeResponse]):
+        self._responses = value
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """

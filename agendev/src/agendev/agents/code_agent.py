@@ -12,8 +12,10 @@ from pathlib import Path
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 from datetime import datetime
+import re
+import logging
 
-from .agent_base import Agent, AgentStatus
+from .agent_base import Agent, AgentStatus, AgentAction
 from ..models.task_models import Task, TaskType, TaskStatus
 from ..llm_integration import LLMIntegration, LLMConfig
 from ..utils.fs_utils import resolve_path, save_json, load_json, ensure_workspace_structure, content_hash, save_snapshot
@@ -62,14 +64,39 @@ class CodeAgent(Agent):
             agent_type=agent_type
         )
         
-        # Workspace for code operations
-        self.workspace_dir = workspace_dir or "workspace/src"
+        # Workspace for code operations - use private attributes
+        self._workspace_dir = workspace_dir or "workspace/src"
         
         # Track file operations
-        self.file_operations: List[FileOperation] = []
+        self._file_operations: List[FileOperation] = []
         
         # Current implementation context
-        self.context: Optional[ImplementationContext] = None
+        self._context: Optional[ImplementationContext] = None
+    
+    # Define properties to access these attributes safely
+    @property
+    def workspace_dir(self) -> str:
+        return self._workspace_dir
+    
+    @workspace_dir.setter
+    def workspace_dir(self, value: str):
+        self._workspace_dir = value
+    
+    @property
+    def file_operations(self) -> List[FileOperation]:
+        return self._file_operations
+    
+    @file_operations.setter
+    def file_operations(self, value: List[FileOperation]):
+        self._file_operations = value
+    
+    @property
+    def context(self) -> Optional[ImplementationContext]:
+        return self._context
+    
+    @context.setter
+    def context(self, value: Optional[ImplementationContext]):
+        self._context = value
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -811,4 +838,82 @@ class CodeAgent(Agent):
             return {
                 "success": False,
                 "error": f"Error creating patch: {str(e)}"
-            } 
+            }
+    
+    def _write_file(self, file_path: str, content: str) -> bool:
+        """
+        Write content to a file.
+        
+        Args:
+            file_path: Path to the file
+            content: Content to write
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Resolve the absolute path
+            abs_path = resolve_path(os.path.join(self.context.workspace_path, file_path), create_parents=True)
+            
+            # Check if the file already exists
+            if os.path.exists(abs_path):
+                # If it exists, use difflib to apply changes
+                return self._apply_diff_to_file(abs_path, content)
+            
+            # If it's a new file, write it directly
+            with open(abs_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            self.logger.info(f"Successfully wrote file: {file_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error writing file {file_path}: {str(e)}")
+            return False
+    
+    def _apply_diff_to_file(self, abs_path: str, new_content: str) -> bool:
+        """
+        Apply changes to an existing file using difflib for better control.
+        
+        Args:
+            abs_path: Absolute path to the file
+            new_content: New content to apply
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Read the original file
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            # If the content is identical, no need to update
+            if original_content == new_content:
+                self.logger.info(f"File content unchanged: {abs_path}")
+                return True
+            
+            # Generate a unified diff
+            original_lines = original_content.splitlines(keepends=True)
+            new_lines = new_content.splitlines(keepends=True)
+            
+            # Create a diff
+            diff = difflib.unified_diff(
+                original_lines, 
+                new_lines,
+                fromfile=f'Original: {os.path.basename(abs_path)}',
+                tofile=f'Modified: {os.path.basename(abs_path)}',
+                n=3  # Context lines
+            )
+            
+            # Log the diff for debugging
+            diff_text = ''.join(diff)
+            self.logger.info(f"Applying changes to {abs_path}:\n{diff_text}")
+            
+            # Write the new content
+            with open(abs_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            
+            self.logger.info(f"Successfully updated file: {abs_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error applying diff to {abs_path}: {str(e)}")
+            return False 

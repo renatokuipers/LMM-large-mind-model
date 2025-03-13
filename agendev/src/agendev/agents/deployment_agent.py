@@ -56,11 +56,46 @@ class DeploymentAgent(Agent):
             agent_type=agent_type
         )
         
-        # Workspace for deployment operations
-        self.workspace_dir = workspace_dir or "workspace/src"
+        # Workspace for deployment operations - using private variables
+        self._workspace_dir = workspace_dir or "workspace/src"
         
         # Track deployment results
-        self.deployment_results: List[DeploymentResult] = []
+        self._deployment_results: List[DeploymentResult] = []
+        
+        # Store available platforms
+        self._platforms: List[str] = [
+            "local",
+            "github-pages",
+            "vercel",
+            "netlify",
+            "heroku",
+            "aws-amplify"
+        ]
+    
+    # Define properties for safer access
+    @property
+    def workspace_dir(self) -> str:
+        return self._workspace_dir
+    
+    @workspace_dir.setter
+    def workspace_dir(self, value: str):
+        self._workspace_dir = value
+    
+    @property
+    def deployment_results(self) -> List[DeploymentResult]:
+        return self._deployment_results
+    
+    @deployment_results.setter
+    def deployment_results(self, value: List[DeploymentResult]):
+        self._deployment_results = value
+    
+    @property
+    def platforms(self) -> List[str]:
+        return self._platforms
+    
+    @platforms.setter
+    def platforms(self, value: List[str]):
+        self._platforms = value
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
