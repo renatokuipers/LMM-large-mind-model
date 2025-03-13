@@ -24,6 +24,9 @@ core_integration = CoreIntegration(
     tts_base_url="http://127.0.0.1:7860"
 )
 
+# Define a DashComponent type for better type hinting
+DashComponent = Any  # This is safer than trying to reference a non-existent base class
+
 # Type definitions for better type safety
 class CallbackResult(BaseModel):
     """Base model for callback results to ensure type safety."""
@@ -37,7 +40,7 @@ class TaskExecutionResult(CallbackResult):
 
 class ViewUpdateResult(CallbackResult):
     """Result of a view content update."""
-    content: List[html.Component] = Field(...)
+    content: List[DashComponent] = Field(...)
     view_type: str = Field(...)
     operation_type: str = Field(...)
     file_path: str = Field(...)
@@ -327,7 +330,7 @@ def register_callbacks(app) -> None:
     def update_view_content(
         playback_data: Dict[str, Any],
         current_slider_value: float
-    ) -> Tuple[List[html.Component], str, str, str, float]:
+    ) -> Tuple[List[DashComponent], str, str, str, float]:
         """
         Update the view content based on playback data.
         
@@ -589,7 +592,7 @@ def register_callbacks(app) -> None:
         playback_data["total_steps"] = len(playback_data["steps"])
         playback_data["current_step"] = len(playback_data["steps"]) - 1  # Point to latest step
         
-        # Create a validated result
+        # Create a validated result using our Pydantic model
         result = TaskExecutionResult(
             task_data=task_data,
             todo_data=todo_data,
