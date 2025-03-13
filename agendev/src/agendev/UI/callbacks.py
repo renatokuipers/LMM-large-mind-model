@@ -294,7 +294,8 @@ def register_callbacks(app) -> None:
         
         # Parse the JSON ID to get the index
         try:
-            triggered_dict = json.loads(triggered_id)
+            # Handle both dictionary and string cases
+            triggered_dict = json.loads(triggered_id) if isinstance(triggered_id, str) else triggered_id
             triggered_index = triggered_dict['index']
         except (json.JSONDecodeError, KeyError):
             return [no_update] * len(styles_list)
@@ -303,7 +304,8 @@ def register_callbacks(app) -> None:
         updated_styles = []
         for i, (item_id, style) in enumerate(zip(ctx.inputs_list[0], styles_list)):
             try:
-                item_dict = json.loads(item_id['id'])
+                # Access the dictionary directly - no json.loads() needed
+                item_dict = item_id['id']
                 item_index = item_dict['index']
                 
                 # Only update the style for the triggered item
@@ -312,7 +314,7 @@ def register_callbacks(app) -> None:
                     updated_styles.append({'display': 'none' if is_visible else 'block'})
                 else:
                     updated_styles.append(no_update)
-            except (json.JSONDecodeError, KeyError):
+            except KeyError:
                 updated_styles.append(no_update)
         
         return updated_styles
