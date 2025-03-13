@@ -555,7 +555,7 @@ class AgenDev:
                     snapshot_metadata = self.snapshot_engine.create_snapshot(
                         file_path=file_path,
                         content=code,
-                        commit_message=f"Implementation of {task.title}",
+                        message=f"Implementation of {task.title}",
                         tags=[task.task_type.value]
                     )
                     snapshot_completed = True

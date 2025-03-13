@@ -23,7 +23,7 @@ class SnapshotMetadata(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     hash: str
     parent_snapshot_id: Optional[str] = None
-    commit_message: Optional[str] = None
+    message: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     author: str = "agendev"
     
@@ -122,7 +122,7 @@ class SnapshotEngine:
         file_path: Union[str, Path],
         content: str,
         branch: str = "main",
-        commit_message: Optional[str] = None,
+        message: Optional[str] = None,
         tags: Optional[List[str]] = None
     ) -> SnapshotMetadata:
         """
@@ -132,7 +132,7 @@ class SnapshotEngine:
             file_path: Path to the file to snapshot
             content: Content of the file
             branch: Branch to create the snapshot on
-            commit_message: Optional commit message
+            message: Optional snapshot message
             tags: Optional tags for the snapshot
             
         Returns:
@@ -157,7 +157,7 @@ class SnapshotEngine:
             file_path=file_path,
             metadata={
                 "branch": branch,
-                "commit_message": commit_message,
+                "message": message,
                 "tags": tags or []
             }
         )
@@ -167,7 +167,7 @@ class SnapshotEngine:
             file_path=relative_path,
             hash=hash_value,
             parent_snapshot_id=parent_id,
-            commit_message=commit_message,
+            message=message,
             tags=tags or []
         )
         

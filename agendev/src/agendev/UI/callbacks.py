@@ -123,7 +123,7 @@ def register_callbacks(app) -> None:
         for task in tasks:
             task_content = [
                 html.P(task["description"]),
-                create_command_element(f"git checkout -b task/{task['id']}", "completed")
+                create_command_element(f"cd task/{task['id']}", "completed")
             ]
             
             updated_task_data["tasks"].append({
@@ -141,7 +141,7 @@ def register_callbacks(app) -> None:
         playback_data["steps"] = [
             {
                 "type": "terminal",
-                "content": f"$ echo 'Initializing {title}'\nInitializing {title}\n$ mkdir {title.lower().replace(' ', '_')}\n$ cd {title.lower().replace(' ', '_')}\n$ git init\nInitialized empty Git repository in ./{title.lower().replace(' ', '_')}/.git/",
+                "content": f"$ echo 'Initializing {title}'\nInitializing {title}\n$ mkdir {title.lower().replace(' ', '_')}\n$ cd {title.lower().replace(' ', '_')}",
                 "operation_type": "Setting up",
                 "file_path": title.lower().replace(' ', '_')
             },
@@ -154,7 +154,7 @@ def register_callbacks(app) -> None:
             {
                 "type": "editor",
                 "filename": "README.md",
-                "content": f"# {title}\n\nThis project was created with AgenDev, an Intelligent Agentic Development System.\n\n## Description\n\n{prompt_value}\n\n## Getting Started\n\n```bash\n# Clone the repository\ngit clone https://github.com/yourusername/{title.lower().replace(' ', '-')}.git\ncd {title.lower().replace(' ', '-')}\n```\n\n## Features\n\n- Feature 1 (Coming soon)\n- Feature 2 (Coming soon)\n- Feature 3 (Coming soon)\n\n## License\n\nMIT\n",
+                "content": f"# {title}\n\nThis project was created with AgenDev, an Intelligent Agentic Development System.\n\n## Description\n\n{prompt_value}\n\n## Getting Started\n\n```bash\n# Clone or download the project\ncd {title.lower().replace(' ', '-')}\n```\n\n## Features\n\n- Feature 1 (Coming soon)\n- Feature 2 (Coming soon)\n- Feature 3 (Coming soon)\n\n## License\n\nMIT\n",
                 "operation_type": "Creating",
                 "file_path": "README.md"
             }
@@ -216,7 +216,7 @@ def register_callbacks(app) -> None:
                     # Default content if empty
                     content = [
                         html.P(f"Working on: {task['title']}"),
-                        create_command_element("git checkout -b feature/task", "completed")
+                        create_command_element("cd feature/task", "completed")
                     ]
             else:
                 # If content is a string, convert to paragraph
@@ -614,7 +614,7 @@ def register_callbacks(app) -> None:
                     task["content"] = [
                         html.P(task.get("description", "Task failed.")),
                         html.P(f"Error: {error_message}", style={"color": "red"}),
-                        create_command_element(f"git checkout -b task/{task['id']}", "failed")
+                        create_command_element(f"cd task/{task['id']}", "failed")
                     ]
                 
                 updated_tasks.append(task)
@@ -649,7 +649,7 @@ def register_callbacks(app) -> None:
                 file_path = execution_result.get("file_path", "")
                 task["content"] = [
                     html.P(task.get("description", "Task completed successfully.")),
-                    create_command_element(f"git checkout -b task/{task['id']}", "completed"),
+                    create_command_element(f"cd task/{task['id']}", "completed"),
                     create_file_operation("Created", file_path, "completed")
                 ]
             
@@ -758,13 +758,13 @@ def register_callbacks(app) -> None:
             
             # Add commands and file operations based on status
             if task.get("status") == "completed":
-                task_content.append(create_command_element(f"git checkout -b task/{task['id']}", "completed"))
+                task_content.append(create_command_element(f"cd task/{task['id']}", "completed"))
                 
                 # Add file operations if available
                 for file_path in task.get("artifact_paths", []):
                     task_content.append(create_file_operation("Created", file_path, "completed"))
             else:
-                task_content.append(create_command_element(f"git checkout -b task/{task['id']}", 
+                task_content.append(create_command_element(f"cd task/{task['id']}", 
                                                          "in-progress" if task.get("status") == "in_progress" else "completed"))
             
             updated_task_data["tasks"].append({

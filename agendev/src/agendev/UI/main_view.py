@@ -133,7 +133,7 @@ def create_stores() -> List[dcc.Store]:
         dcc.Store(
             id='todo-data',
             data={
-                "content": "# Project Development\n## Setup Phase\n- [ ] Initialize project repository\n- [ ] Set up development environment\n## Implementation Phase\n- [ ] Implement core functionality\n- [ ] Create user interface\n## Testing Phase\n- [ ] Write unit tests\n- [ ] Perform integration testing"
+                "content": "# Project Development\n## Setup Phase\n- [ ] Initialize project directory\n- [ ] Set up development environment\n## Implementation Phase\n- [ ] Implement core functionality\n- [ ] Create user interface\n## Testing Phase\n- [ ] Write unit tests\n- [ ] Perform integration testing"
             }
         ),
         
@@ -144,7 +144,7 @@ def create_stores() -> List[dcc.Store]:
                 "tasks": [
                     {
                         "id": "task1",
-                        "title": "Initialize project repository",
+                        "title": "Initialize project directory",
                         "status": "in-progress",
                         "content": []  # Populated at runtime
                     }

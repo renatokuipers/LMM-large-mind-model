@@ -139,10 +139,8 @@ def create_command_element(command: str, status: str = "completed") -> html.Div:
     icon_class = ("fas fa-check-circle text-success" if status == "completed" 
                 else "fas fa-spinner fa-spin text-warning")
     
-    # Ensure git commands are prefixed with # to avoid execution
+    # Display the command as is - Git functionality removed
     display_command = command
-    if "git " in command and not command.strip().startswith("#"):
-        display_command = f"# {command}"
     
     return html.Div(
         className="status-element",
