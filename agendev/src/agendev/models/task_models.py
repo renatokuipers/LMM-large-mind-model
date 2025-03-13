@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class TaskStatus(str, Enum):
     """Status states for tasks and epics."""
+    PENDING = "pending"             # Initial state for a task before it's planned
     PLANNED = "planned"             # Initial state for a task that's been created but not started
     IN_PROGRESS = "in_progress"     # Task is currently being worked on
     BLOCKED = "blocked"             # Task is blocked by dependencies

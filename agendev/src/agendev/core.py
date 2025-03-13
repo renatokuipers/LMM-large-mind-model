@@ -28,7 +28,7 @@ from .models.planning_models import (
 from .utils.fs_utils import resolve_path, ensure_workspace_structure, save_json, load_json
 from .context_management import ContextManager, ContextElement
 from .llm_integration import LLMIntegration, LLMConfig
-from .tts_notification import NotificationManager, NotificationType, NotificationPriority
+from .tts_notification import NotificationManager, NotificationType, NotificationPriority, NotificationConfig
 from .search_algorithms import MCTSPlanner, AStarPathfinder
 from .probability_modeling import TaskProbabilityModel, ProjectRiskModel
 from .snapshot_engine import SnapshotEngine
@@ -157,11 +157,30 @@ class AgenDev:
             llm_base_url=self.config.llm_base_url
         )
         
-        # Initialize TTS notification
+        # Initialize TTS notification with enhanced configuration
         if self.config.notifications_enabled:
-            self.notification_manager = NotificationManager(
-                tts_base_url=self.config.tts_base_url
+            # Create a notification config with optimized settings
+            notification_config = NotificationConfig(
+                enabled=True,
+                history_enabled=True,
+                history_file="artifacts/audio/notification_history.json",
+                min_interval_seconds=3.0,  # Less aggressive rate limiting
+                max_queue_size=20,  # Allow more notifications in the queue
+                queue_processing_interval=0.5  # Process queue more frequently
             )
+            
+            # Create the notification manager
+            self.notification_manager = NotificationManager(
+                tts_base_url=self.config.tts_base_url,
+                config=notification_config
+            )
+            
+            # Log notification service status
+            connection_status = self.notification_manager.get_connection_status()
+            if connection_status["tts_available"]:
+                logger.info(f"TTS notification service connected at {self.config.tts_base_url}")
+            else:
+                logger.warning(f"TTS notification service unavailable at {self.config.tts_base_url}")
         else:
             self.notification_manager = None
         
@@ -390,9 +409,15 @@ class AgenDev:
             config=SimulationConfig(max_iterations=max_iterations)
         )
         
-        # Notify about planning start
+        # Enhanced planning notifications
         if self.notification_manager:
-            self.notification_manager.info(f"Generating implementation plan...")
+            # Notify about planning start with more details
+            task_count = len(self.task_graph.tasks)
+            epic_count = len(self.task_graph.epics)
+            self.notification_manager.planning(
+                f"Generating implementation plan for {task_count} tasks across {epic_count} epics. "
+                f"Using Monte Carlo simulation with {max_iterations} iterations."
+            )
         
         # Run simulation
         simulation_results = planner.run_simulation(iterations=max_iterations)
@@ -453,12 +478,20 @@ class AgenDev:
         # Add to planning history
         plan_id = self.planning_history.add_snapshot(plan)
         
-        # Notify about plan generation
+        # After plan generation, add enhanced notification:
         if self.notification_manager:
+            # Calculate and highlight risk level
+            risk_level = "low"
+            if simulation_results.get('success_rate', 0.0) < 0.7:
+                risk_level = "high"
+            elif simulation_results.get('success_rate', 0.0) < 0.85:
+                risk_level = "medium"
+            
+            # Create a more detailed success message
             self.notification_manager.success(
-                f"Implementation plan generated with {len(task_sequence)} tasks, "
-                f"estimated duration: {total_duration:.1f} hours, "
-                f"confidence: {simulation_results.get('success_rate', 0.0):.0%}"
+                f"Plan generated with {len(task_sequence)} tasks in optimal sequence. "
+                f"Estimated duration: {total_duration:.1f} hours with {risk_level} risk level. "
+                f"Confidence: {simulation_results.get('success_rate', 0.0):.0%}"
             )
         
         # Save project state
@@ -831,7 +864,21 @@ class AgenDev:
                 
                 # Notify about task completion
                 if self.notification_manager:
-                    self.notification_manager.task_status_update(task, old_status)
+                    # Enhanced notification with more context for critical tasks
+                    if task.priority == TaskPriority.CRITICAL or task.priority == TaskPriority.HIGH:
+                        # Include more detailed completion information for high priority tasks
+                        details = f"Task '{task.title}' completed with {task.actual_duration_hours:.1f} hours of work. "
+                        if task.estimated_duration_hours > 0:
+                            efficiency = (task.estimated_duration_hours / task.actual_duration_hours) * 100
+                            details += f"Efficiency: {efficiency:.0f}% of estimated time."
+                        
+                        self.notification_manager.task_status_update(task, old_status)
+                        
+                        # For high priority tasks, also add a detailed success notification
+                        self.notification_manager.success(details)
+                    else:
+                        # Standard notification for normal tasks
+                        self.notification_manager.task_status_update(task, old_status)
                 
                 # Update dependencies and save state
                 self.task_graph.update_task_statuses()
@@ -901,11 +948,23 @@ class AgenDev:
                 # Try to parse the code to check for syntax errors
                 ast_module = __import__('ast')
                 ast_module.parse(code)
+                
+                # If passing quality check, add a positive notification
+                if self.notification_manager:
+                    self.notification_manager.code_quality(
+                        f"Code quality check passed for {os.path.basename(file_path)}"
+                    )
             except SyntaxError as e:
                 # Extract line and column information
                 line = e.lineno
                 col = e.offset
                 context = e.text
+                
+                # In the exception handler for quality checks:
+                if self.notification_manager:
+                    self.notification_manager.code_quality(
+                        f"Code quality issue in {os.path.basename(file_path)}: {str(e)}"
+                    )
                 
                 raise Exception(f"Syntax error in generated code at line {line}, column {col}: {str(e)}. Context: {context}")
         
@@ -1006,8 +1065,22 @@ class AgenDev:
         # Save project state
         self._save_project_state()
         
+        # Get final project status
+        status = self.get_project_status()
+        
         # Notify about shutdown
         if self.notification_manager:
-            self.notification_manager.info(f"AgenDev system shutting down, project state saved.")
+            # Provide a summary notification
+            final_message = (
+                f"AgenDev system shutting down. "
+                f"Project {self.config.project_name} is {status['progress']['percentage']:.0f}% complete with "
+                f"{status['tasks'].get('by_status', {}).get(TaskStatus.COMPLETED.value, 0)} of {status['tasks']['total']} "
+                f"tasks completed."
+            )
             
+            self.notification_manager.info(final_message)
+            
+            # Proper shutdown of the notification manager
+            self.notification_manager.shutdown()
+        
         logger.info(f"AgenDev system shutdown complete for project '{self.config.project_name}'")
