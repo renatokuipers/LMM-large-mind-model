@@ -8,19 +8,29 @@ import random
 import time
 import logging
 import json
+import functools
 from uuid import UUID, uuid4
 from datetime import datetime
 import numpy as np
 from pathlib import Path
 
-from .models.task_models import Task, TaskStatus, TaskPriority, TaskRisk, TaskGraph
+from .models.task_models import Task, TaskStatus, TaskPriority, TaskRisk, TaskGraph, TaskType
 from .models.planning_models import SimulationResult
 from .llm_integration import LLMIntegration, LLMConfig, Message
 from .utils.fs_utils import safe_save_json, resolve_path, load_json
 
+# Use the same project type detector from search_algorithms
+from .search_algorithms import ProjectTypeDetector
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Project type constants for domain-specific knowledge
+PROJECT_TYPE_WEB_APP = "web_app"
+PROJECT_TYPE_CLI = "cli"
+PROJECT_TYPE_LIBRARY = "library"
+PROJECT_TYPE_UNKNOWN = "unknown"
 
 class ProbabilityDistribution:
     """Base class for probability distributions."""
