@@ -1,6 +1,7 @@
 # src/agendev/UI/snapshot_integration.py
 """Integration between the snapshot engine and UI components."""
 
+import html
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
