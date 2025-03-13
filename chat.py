@@ -1,359 +1,326 @@
-# chat.py
-import os
-import time
-import threading
-import base64
-from typing import List, Dict, Optional, Any, Callable
-
-# Dash components
 import dash
-from dash import html, dcc, callback, Input, Output, State, ClientsideFunction
+from dash import dcc, html, Input, Output, State, callback, ctx
 import dash_bootstrap_components as dbc
-from dash_extensions.enrich import DashProxy, MultiplexerTransform, BlockingCallbackTransform
-import diskcache
-
-# Custom modules
-from llm_module import LLMClient, Message
-from tts_module import (
-    text_to_speech, 
-    get_available_voices, 
-    play_audio,
-    get_output_path,
-    GenerateAudioRequest,
-    TTSClient
-)
-
-# Additional imports for enhanced functionality
-import json
-import datetime
-from pathlib import Path
-import markdown
-import traceback
 from dash.exceptions import PreventUpdate
+import json
+import time
+from datetime import datetime
+import os
+import sys
+from pathlib import Path
 
-# Initialize the disk cache for long callbacks
-cache = diskcache.Cache("./cache")
+# Ensure we can import AgenDev modules
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.append(str(current_dir))
 
-# Initialize LLM client
-llm_client = LLMClient()
+# Import AgenDev core components
+from src.agendev.core import AgenDev, AgenDevConfig, ProjectState
+from src.agendev.models.task_models import Task, TaskStatus, TaskPriority, TaskRisk, TaskType, Epic, TaskGraph
+from src.agendev.models.planning_models import SimulationConfig, PlanSnapshot
+from src.agendev.snapshot_engine import SnapshotEngine
+from src.agendev.parameter_controller import ParameterController
+from src.agendev.utils.fs_utils import resolve_path
 
-# Theme and styling
-# Define custom dark theme with yellow and blue accents
-DARK_THEME = {
-    'dark': True,
-    'primary': '#FFD700',  # Golden yellow
-    'secondary': '#4169E1',  # Royal blue
-    'background': '#121212',  # Very dark gray
-    'surface': '#1E1E1E',  # Dark gray
-    'text': '#FFFFFF',  # White text
-    'accent': '#29B6F6',  # Light blue accent
-}
-
-# Define CSS for custom styling and gradients
-custom_css = '''
-/* Dark mode background with gradient */
-body {
-    background: linear-gradient(135deg, #121212 0%, #1a1a2e 100%);
-    color: #FFFFFF;
-    min-height: 100vh;
-    margin: 0;
-    font-family: 'Segoe UI', 'Roboto', sans-serif;
-}
-
-/* Chat container */
-.chat-container {
-    background-color: rgba(30, 30, 30, 0.7);
-    border-radius: 15px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    padding: 20px;
-    margin: 20px 0;
-    border: 1px solid rgba(255, 215, 0, 0.1);
-}
-
-/* Message styling */
-.user-message {
-    background: linear-gradient(90deg, rgba(65, 105, 225, 0.1) 0%, rgba(65, 105, 225, 0.3) 100%);
-    border-left: 4px solid #4169E1;
-    border-radius: 0 15px 15px 0;
-    padding: 10px 15px;
-    margin: 10px 0;
-    max-width: 85%;
-    margin-left: auto;
-}
-
-.assistant-message {
-    background: linear-gradient(90deg, rgba(255, 215, 0, 0.1) 0%, rgba(255, 215, 0, 0.3) 100%);
-    border-left: 4px solid #FFD700;
-    border-radius: 0 15px 15px 0;
-    padding: 10px 15px;
-    margin: 10px 0;
-    max-width: 85%;
-}
-
-/* Input box styling */
-.message-input {
-    background-color: rgba(30, 30, 30, 0.7);
-    border: 1px solid rgba(255, 215, 0, 0.3);
-    border-radius: 10px;
-    color: white;
-    padding: 12px;
-    transition: all 0.3s ease;
-}
-
-.message-input:focus {
-    border-color: #FFD700;
-    box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.2);
-    outline: none;
-}
-
-/* Button styling */
-.send-button {
-    background: linear-gradient(90deg, #4169E1 0%, #29B6F6 100%);
-    border: none;
-    border-radius: 10px;
-    color: white;
-    padding: 12px 20px;
-    transition: all 0.3s ease;
-}
-
-.send-button:hover {
-    background: linear-gradient(90deg, #5a7dfa 0%, #47c4fa 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(41, 182, 246, 0.4);
-}
-
-/* Settings panel */
-.settings-panel {
-    background-color: rgba(30, 30, 30, 0.8);
-    border-radius: 15px;
-    padding: 15px;
-    margin-top: 20px;
-    border: 1px solid rgba(255, 215, 0, 0.1);
-}
-
-/* Slider styling */
-.rc-slider-track {
-    background-color: #FFD700;
-}
-
-.rc-slider-handle {
-    border-color: #FFD700;
-    background-color: #FFD700;
-}
-
-.rc-slider-rail {
-    background-color: #333333;
-}
-
-/* Tabs styling */
-.dash-tab {
-    background-color: #1E1E1E;
-    color: #BBBBBB;
-    border-color: #333;
-    border-radius: 5px 5px 0 0;
-    padding: 10px 15px;
-}
-
-.dash-tab--selected {
-    background: linear-gradient(90deg, #4169E1 0%, #29B6F6 100%);
-    color: white;
-    border: none;
-    font-weight: 500;
-}
-
-/* Dropdown styling */
-.dash-dropdown .Select-control {
-    background-color: #1E1E1E;
-    border-color: #333;
-    color: white;
-}
-
-.dash-dropdown .Select-menu-outer {
-    background-color: #1E1E1E;
-    border-color: #333;
-    color: white;
-}
-
-.dash-dropdown .Select-value-label {
-    color: white !important;
-}
-
-/* Voice block styling */
-.voice-block {
-    background: linear-gradient(90deg, rgba(65, 105, 225, 0.1) 0%, rgba(65, 105, 225, 0.3) 100%);
-    border-radius: 10px;
-    padding: 10px;
-    margin: 10px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    transition: all 0.3s ease;
-}
-
-.voice-block:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(65, 105, 225, 0.2);
-}
-
-/* Audio player styling */
-.audio-player {
-    width: 100%;
-    margin: 10px 0;
-    background-color: rgba(30, 30, 30, 0.5);
-    border-radius: 10px;
-    padding: 5px;
-}
-
-/* Loading animation */
-.loading-spinner {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 3px solid rgba(255, 215, 0, 0.3);
-    border-radius: 50%;
-    border-top-color: #FFD700;
-    animation: spin 1s ease-in-out infinite;
-    margin-left: 10px;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-/* Tooltip styling */
-.tooltip {
-    background-color: #1E1E1E;
-    color: white;
-    border: 1px solid #FFD700;
-    padding: 5px 10px;
-    border-radius: 5px;
-    font-size: 0.85rem;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-    width: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: #1E1E1E; 
-}
- 
-::-webkit-scrollbar-thumb {
-    background: #4169E1; 
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: #29B6F6; 
-}
-
-/* Markdown styling */
-.markdown-content {
-    font-family: 'Segoe UI', 'Roboto', sans-serif;
-}
-
-.markdown-content h1, .markdown-content h2, .markdown-content h3, 
-.markdown-content h4, .markdown-content h5, .markdown-content h6 {
-    color: #FFD700;
-    margin-top: 20px;
-    margin-bottom: 10px;
-}
-
-.markdown-content p {
-    margin-bottom: 15px;
-}
-
-.markdown-content a {
-    color: #29B6F6;
-    text-decoration: none;
-}
-
-.markdown-content a:hover {
-    text-decoration: underline;
-}
-
-.markdown-content pre {
-    background-color: #2d2d2d;
-    padding: 15px;
-    border-radius: 5px;
-    overflow-x: auto;
-    margin: 15px 0;
-    border-left: 4px solid #4169E1;
-}
-
-.markdown-content code {
-    font-family: 'Consolas', 'Monaco', monospace;
-    background-color: #2d2d2d;
-    padding: 3px 5px;
-    border-radius: 3px;
-    font-size: 0.9em;
-}
-
-.markdown-content ul, .markdown-content ol {
-    margin-left: 25px;
-    margin-bottom: 15px;
-}
-
-.markdown-content blockquote {
-    border-left: 4px solid #4169E1;
-    padding-left: 15px;
-    margin-left: 0;
-    color: #cccccc;
-}
-
-.markdown-content table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 15px 0;
-}
-
-.markdown-content th, .markdown-content td {
-    border: 1px solid #444;
-    padding: 8px 12px;
-    text-align: left;
-}
-
-.markdown-content th {
-    background-color: #2d2d2d;
-    color: #FFD700;
-}
-
-.markdown-content tr:nth-child(even) {
-    background-color: #2d2d2d;
-}
-'''
-
-# Initialize the Dash app with the proper callback transforms
-app = DashProxy(
+# Initialize the Dash app with dark theme
+app = dash.Dash(
     __name__,
     external_stylesheets=[
-        dbc.themes.DARKLY, 
-        'https://use.fontawesome.com/releases/v5.15.4/css/all.css'
+        dbc.themes.DARKLY,
+        "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
     ],
+    suppress_callback_exceptions=True,
     meta_tags=[
         {"name": "viewport", "content": "width=device-width, initial-scale=1.0"}
     ],
-    transforms=[
-        MultiplexerTransform(),
-        BlockingCallbackTransform()
-    ]
 )
 
-# Set the app title
-app.title = "AI Chat with TTS"
-
-# Add custom CSS
+# Custom CSS for styling to match the screenshots
 app.index_string = '''
 <!DOCTYPE html>
 <html>
     <head>
         {%metas%}
-        <title>{%title%}</title>
+        <title>AgenDev - Intelligent Agentic Development System</title>
         {%favicon%}
         {%css%}
         <style>
-        ''' + custom_css + '''
+            :root {
+                --primary-color: #333;
+                --secondary-color: #444;
+                --text-color: #f8f9fa;
+                --accent-color: #61dafb;
+                --success-color: #28a745;
+                --danger-color: #dc3545;
+                --warning-color: #ffc107;
+            }
+            
+            body {
+                background-color: #1a1a1a;
+                color: var(--text-color);
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                overflow: hidden;
+                margin: 0;
+                padding: 0;
+                height: 100vh;
+            }
+            
+            .landing-page {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+            }
+            
+            .main-container {
+                display: flex;
+                height: 100vh;
+                width: 100%;
+                overflow: hidden;
+            }
+            
+            .chat-container {
+                width: 50%;
+                height: 100%;
+                overflow-y: auto;
+                padding: 20px;
+                background-color: #1a1a1a;
+                border-right: 1px solid #333;
+            }
+            
+            .view-container {
+                width: 50%;
+                height: 100%;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                background-color: #1a1a1a;
+            }
+            
+            .view-header {
+                background-color: #333;
+                padding: 10px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            
+            .view-content {
+                flex-grow: 1;
+                overflow: auto;
+                padding: 0;
+                background-color: #2a2a2a;
+            }
+            
+            .view-controls {
+                background-color: #333;
+                padding: 10px;
+                display: flex;
+                justify-content: space-between;
+            }
+            
+            .chat-message {
+                margin-bottom: 20px;
+                animation: fadeIn 0.3s ease;
+            }
+            
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
+            .system-message {
+                padding: 15px;
+                background-color: #333;
+                border-radius: 8px;
+                margin-bottom: 20px;
+            }
+            
+            .user-message {
+                padding: 15px;
+                background-color: #2a2a2a;
+                border-radius: 8px;
+                margin-bottom: 20px;
+            }
+            
+            .collapsible-header {
+                display: flex;
+                align-items: center;
+                padding: 10px;
+                background-color: #333;
+                border-radius: 4px;
+                cursor: pointer;
+                margin-bottom: 10px;
+            }
+            
+            .collapsible-header:hover {
+                background-color: #444;
+            }
+            
+            .collapsible-content {
+                padding: 10px;
+                background-color: #2a2a2a;
+                border-radius: 4px;
+                margin-bottom: 15px;
+                margin-left: 15px;
+                border-left: 2px solid #61dafb;
+            }
+            
+            .command-element {
+                background-color: #2a2a2a;
+                padding: 8px 12px;
+                border-radius: 4px;
+                margin: 5px 0;
+                font-family: 'Consolas', 'Courier New', monospace;
+                border-left: 3px solid #61dafb;
+            }
+            
+            .status-element {
+                display: flex;
+                align-items: center;
+                margin: 5px 0;
+            }
+            
+            .status-icon {
+                margin-right: 10px;
+            }
+            
+            .terminal-view {
+                background-color: #1e1e1e;
+                color: #ddd;
+                font-family: 'Consolas', 'Courier New', monospace;
+                padding: 10px;
+                height: 100%;
+                overflow: auto;
+            }
+            
+            .editor-view {
+                background-color: #1e1e1e;
+                height: 100%;
+                overflow: auto;
+            }
+            
+            .editor-header {
+                background-color: #2d2d2d;
+                padding: 5px 10px;
+                border-bottom: 1px solid #444;
+                display: flex;
+                justify-content: space-between;
+            }
+            
+            .editor-content {
+                padding: 10px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                color: #ddd;
+                min-height: calc(100% - 40px);
+            }
+            
+            .browser-view {
+                background-color: #fff;
+                height: 100%;
+                overflow: auto;
+            }
+            
+            .file-path {
+                font-family: 'Consolas', 'Courier New', monospace;
+                color: #888;
+                font-size: 0.85em;
+                margin-bottom: 5px;
+            }
+            
+            .function-tag {
+                background-color: #61dafb;
+                color: #000;
+                padding: 2px 6px;
+                border-radius: 4px;
+                margin-right: 5px;
+                font-size: 0.8em;
+            }
+            
+            .status-tag {
+                padding: 2px 6px;
+                border-radius: 4px;
+                margin-right: 5px;
+                font-size: 0.8em;
+            }
+            
+            .status-tag.success {
+                background-color: #28a745;
+                color: #fff;
+            }
+            
+            .status-tag.in-progress {
+                background-color: #ffc107;
+                color: #000;
+            }
+            
+            .status-tag.error {
+                background-color: #dc3545;
+                color: #fff;
+            }
+            
+            .progress-controls {
+                display: flex;
+                align-items: center;
+            }
+            
+            .time-indicator {
+                font-size: 0.8em;
+                color: #888;
+                margin-left: 10px;
+            }
+            
+            .btn-control {
+                background: none;
+                border: none;
+                color: #888;
+                font-size: 1em;
+                cursor: pointer;
+                padding: 5px;
+                transition: color 0.2s;
+            }
+            
+            .btn-control:hover {
+                color: #fff;
+            }
+            
+            .code-content {
+                border-radius: 4px;
+                background-color: #2d2d2d;
+                padding: 10px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                overflow-x: auto;
+            }
+            
+            .input-prompt {
+                width: 80%;
+                max-width: 800px;
+                padding: 20px;
+                background-color: #333;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            
+            .input-heading {
+                font-size: 1.5rem;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            
+            .brand-logo {
+                margin-bottom: 30px;
+                font-size: 2.5rem;
+                font-weight: bold;
+                color: #61dafb;
+            }
+            
+            .brand-slogan {
+                font-size: 1rem;
+                color: #888;
+                margin-bottom: 30px;
+                text-align: center;
+            }
         </style>
     </head>
     <body>
@@ -367,1141 +334,846 @@ app.index_string = '''
 </html>
 '''
 
-# Initialize the conversation history
-conversation_history = []
-
-# Global variable for current message
-current_message = ""
-
-# Define available models
-available_models = [
-    "qwen2.5-7b-instruct",
-    "qwen2.5-72b-instruct",
-    "llama3-8b-instruct",
-    "llama3-70b-instruct",
-    "claude-3-sonnet-20240229",
-    "gpt-3.5-turbo"
-]
-
-# Store current settings
-app_settings = {
-    "model": "qwen2.5-7b-instruct",
-    "temperature": 0.7,
-    "max_tokens": -1,
-    "voice_enabled": True,
-    "auto_play_voice": True,
-    "voice": "af_bella",
-    "speech_speed": 1.0,
-    "base_url": "http://192.168.2.12:1234",
-    "system_prompt": "You are a helpful, creative, and friendly AI assistant. Answer concisely unless asked to elaborate."
-}
-
-# Layout Components
-
-# Message component to display chat messages
-def create_message_component(message, role):
-    """Create a message component with optional TTS controls and markdown support"""
-    message_class = "user-message" if role == "user" else "assistant-message"
-    
-    # Render markdown for assistant messages
-    message_content = None
-    if role == "assistant" and message:
-        try:
-            # Convert markdown to HTML
-            html_message = markdown.markdown(
-                message,
-                extensions=['fenced_code', 'tables', 'nl2br']
-            )
-            message_content = html.Div(
-                dangerously_allow_html=True,
-                children=html_message,
-                className="markdown-content"
-            )
-        except Exception:
-            # Fallback to plain text if markdown parsing fails
-            message_content = html.Div(message)
-    else:
-        # Display user messages as plain text
-        message_content = html.Div(message)
-    
-    # For assistant messages, add TTS button
-    tts_controls = None
-    if role == "assistant" and app_settings["voice_enabled"] and message.strip():
-        tts_controls = html.Div([
-            html.Button(
-                [html.I(className="fas fa-volume-up")], 
-                id={"type": "play-tts", "index": len(conversation_history)},
-                className="btn btn-sm btn-outline-primary ml-2",
-                title="Play text to speech"
-            ),
-            html.Audio(
-                id={"type": "audio-player", "index": len(conversation_history)},
-                className="audio-player d-none",
-                controls=True
-            )
-        ], className="d-flex align-items-center mt-2")
-    
-    return html.Div([
-        html.Div([
-            html.Strong(role.capitalize() + ": ", className="mr-2"),
-            html.Div(message_content, id={"type": "message-content", "index": len(conversation_history)})
-        ]),
-        tts_controls
-    ], className=message_class)
-
-# Chat history component
-chat_history = html.Div(
-    id="chat-history",
-    children=[],
-    style={
-        "height": "calc(100vh - 300px)",
-        "overflowY": "auto",
-        "padding": "10px",
-    },
-    className="chat-container"
-)
-
-# Input area with send button
-chat_input_area = dbc.Form(
-    [
-        dbc.Row([
-            dbc.Col([
-                dbc.Input(
-                    id="message-input",
-                    type="text",
-                    placeholder="Type your message here...",
-                    className="message-input",
-                    autoFocus=True,
-                    n_submit=0
+# Landing page layout with centered input
+landing_page = html.Div(
+    id="landing-page",
+    className="landing-page",
+    children=[
+        html.Div(className="brand-logo", children=["AgenDev"]),
+        html.Div(
+            className="brand-slogan", 
+            children=["An Intelligent Agentic Development System"]
+        ),
+        html.Div(
+            className="input-prompt",
+            children=[
+                html.H2("What would you like to develop today?", className="input-heading"),
+                dcc.Textarea(
+                    id="initial-prompt",
+                    placeholder="Describe your project or what you'd like help with...",
+                    style={
+                        "width": "100%",
+                        "height": "120px",
+                        "borderRadius": "4px",
+                        "padding": "10px",
+                        "marginBottom": "15px",
+                        "backgroundColor": "#2a2a2a",
+                        "color": "#fff",
+                        "border": "1px solid #444"
+                    }
                 ),
-            ], width=10),
-            dbc.Col([
-                dbc.Button(
-                    [
-                        "Send ",
-                        html.I(className="fas fa-paper-plane ml-1")
-                    ],
-                    id="send-button",
-                    color="primary",
-                    className="send-button w-100"
-                ),
-            ], width=2),
-        ]),
-    ],
-    className="mt-3"
-)
-
-# LLM settings panel
-llm_settings = dbc.Card([
-    dbc.CardHeader("LLM Settings"),
-    dbc.CardBody([
-        dbc.Row([
-            dbc.Col([
-                html.Label("Model"),
-                dcc.Dropdown(
-                    id="model-dropdown",
-                    options=[{"label": model, "value": model} for model in available_models],
-                    value=app_settings["model"],
-                    clearable=False,
-                    className="dash-dropdown"
+                html.Button(
+                    "Submit",
+                    id="submit-button",
+                    style={
+                        "width": "100%",
+                        "padding": "10px",
+                        "borderRadius": "4px",
+                        "backgroundColor": "#61dafb",
+                        "color": "#000",
+                        "border": "none",
+                        "cursor": "pointer",
+                        "fontWeight": "bold"
+                    }
                 )
-            ], width=6),
-            dbc.Col([
-                html.Label("API Base URL"),
-                dbc.Input(
-                    id="base-url-input",
-                    type="text",
-                    value=app_settings["base_url"],
-                    className="message-input"
-                )
-            ], width=6)
-        ]),
-        html.Div([
-            html.Label("Temperature: " + str(app_settings["temperature"])),
-            dcc.Slider(
-                id="temperature-slider",
-                min=0.0,
-                max=2.0,
-                step=0.1,
-                marks={i/10: str(i/10) for i in range(0, 21, 5)},
-                value=app_settings["temperature"]
-            )
-        ], className="mt-3"),
-        html.Div([
-            html.Label("Max Tokens: " + str(app_settings["max_tokens"])),
-            dcc.Slider(
-                id="max-tokens-slider",
-                min=100,
-                max=8000,
-                step=100,
-                marks={i: str(i) for i in range(0, 8001, 2000)},
-                value=app_settings["max_tokens"]
-            )
-        ], className="mt-3"),
-        html.Div([
-            html.Label("System Prompt"),
-            dbc.Textarea(
-                id="system-prompt-input",
-                value=app_settings["system_prompt"],
-                className="message-input",
-                style={"height": "100px"}
-            )
-        ], className="mt-3")
-    ]),
-], className="settings-panel")
-
-# TTS settings panel
-tts_settings = dbc.Card([
-    dbc.CardHeader("Text-to-Speech Settings"),
-    dbc.CardBody([
-        dbc.Row([
-            dbc.Col([
-                html.Label("Voice Options:"),
-                dcc.Checklist(
-                    id="voice-enabled-checkbox",
-                    options=[{"label": "Enable Text-to-Speech", "value": "enabled"}],
-                    value=["enabled"] if app_settings["voice_enabled"] else [],
-                    className="ml-2"
-                ),
-            ], width=6),
-            dbc.Col([
-                html.Label("Playback Options:"),
-                dcc.Checklist(
-                    id="auto-play-checkbox",
-                    options=[{"label": "Auto-play TTS", "value": "auto_play"}],
-                    value=["auto_play"] if app_settings["auto_play_voice"] else [],
-                    className="ml-2"
-                ),
-            ], width=6)
-        ]),
-        html.Div([
-            html.Label("Voice"),
-            dcc.Dropdown(
-                id="voice-dropdown",
-                options=[{"label": voice, "value": voice} for voice in get_available_voices()],
-                value=app_settings["voice"],
-                clearable=False,
-                className="dash-dropdown"
-            )
-        ], className="mt-3"),
-        html.Div([
-            html.Label("Speech Speed: " + str(app_settings["speech_speed"])),
-            dcc.Slider(
-                id="speech-speed-slider",
-                min=0.1,
-                max=2.0,
-                step=0.1,
-                marks={i/10: str(i/10) for i in range(1, 21, 5)},
-                value=app_settings["speech_speed"]
-            )
-        ], className="mt-3"),
-        html.Div([
-            html.Button(
-                "Test Voice",
-                id="test-voice-button",
-                className="send-button mt-3"
-            ),
-            html.Div(id="test-voice-output")
-        ])
-    ]),
-], className="settings-panel mt-3")
-
-# Settings panel with tabs
-settings_panel = html.Div([
-    dbc.Collapse(
-        dbc.Tabs([
-            dbc.Tab(llm_settings, label="LLM Settings", tab_id="llm-tab", className="dash-tab"),
-            dbc.Tab(tts_settings, label="TTS Settings", tab_id="tts-tab", className="dash-tab"),
-        ], active_tab="llm-tab"),
-        id="settings-collapse",
-        is_open=False,
-    ),
-    dbc.Button(
-        [
-            html.I(className="fas fa-cog mr-2"),
-            "Settings"
-        ],
-        id="settings-toggle",
-        color="secondary",
-        className="mt-3"
-    ),
-], className="mt-3")
-
-# Streaming response indicator
-streaming_indicator = html.Div([
-    html.Div([
-        "AI is thinking",
-        html.Div(className="loading-spinner ml-2")
-    ], className="d-flex align-items-center")
-], id="streaming-indicator", style={"display": "none"})
-
-# Prompt suggestions
-prompt_suggestions = html.Div(
-    id="prompt-suggestions",
-    className="mt-2"
+            ]
+        )
+    ]
 )
 
-# Layout
-app.layout = dbc.Container([
-    html.H1([
-        "AI Chat",
-        html.Span(" with TTS", style={"color": DARK_THEME["primary"]}),
-    ], className="mt-4 mb-4 text-center"),
-    
-    # Notification area for errors
-    html.Div(id="notification-area", className="mt-2"),
-    
-    # Main chat interface
-    dbc.Row([
-        dbc.Col([
-            # Chat history
-            chat_history,
-            
-            # Streaming indicator
-            streaming_indicator,
-            
-            # Prompt suggestions
-            prompt_suggestions,
-            
-            # Input area
-            chat_input_area,
-            
-            # Additional buttons row
-            dbc.Row([
-                dbc.Col([
-                    dbc.Button(
-                        [
-                            html.I(className="fas fa-cog mr-2"),
-                            "Settings"
-                        ],
-                        id="settings-toggle",
-                        color="secondary",
-                        className="mt-3 w-100"
-                    ),
-                ], width=3),
-                dbc.Col([
-                    dbc.Button(
-                        [
-                            html.I(className="fas fa-file-export mr-2"),
-                            "Export Chat"
-                        ],
-                        id="export-chat-button",
-                        color="primary",
-                        className="mt-3 w-100"
-                    ),
-                ], width=3),
-                dbc.Col([
-                    dbc.Button(
-                        [
-                            html.I(className="fas fa-file-import mr-2"),
-                            "Import Chat"
-                        ],
-                        id="import-chat-button",
-                        color="primary",
-                        className="mt-3 w-100"
-                    ),
-                    dcc.Upload(
-                        id="upload-chat-json",
-                        children=html.Div([]),
-                        style={"display": "none"},
-                        multiple=False
-                    ),
-                ], width=3),
-                dbc.Col([
-                    dbc.Button(
-                        [
-                            html.I(className="fas fa-search mr-2"),
-                            "Search Chat"
-                        ],
-                        id="search-chat-button",
-                        color="info",
-                        className="mt-3 w-100"
-                    ),
-                ], width=3),
-            ]),
-            
-            # Search modal
-            dbc.Modal([
-                dbc.ModalHeader("Search Conversation"),
-                dbc.ModalBody([
-                    dbc.Input(
-                        id="search-input",
-                        type="text",
-                        placeholder="Enter search term...",
-                        className="message-input mb-3"
-                    ),
-                    html.Div(id="search-results")
-                ]),
-                dbc.ModalFooter(
-                    dbc.Button("Close", id="close-search-modal", className="ml-auto")
-                ),
-            ], id="search-modal", is_open=False),
-            
-            # Settings
-            dbc.Collapse(
-                dbc.Tabs([
-                    dbc.Tab(llm_settings, label="LLM Settings", tab_id="llm-tab", className="dash-tab"),
-                    dbc.Tab(tts_settings, label="TTS Settings", tab_id="tts-tab", className="dash-tab"),
-                ], active_tab="llm-tab"),
-                id="settings-collapse",
-                is_open=False,
-            ),
-            
-            # Store for conversation history
-            dcc.Store(id="conversation-store"),
-            
-            # Interval for stream updates
-            dcc.Interval(id='stream-update-interval', interval=50, disabled=True),
-            
-            # Hidden audio elements for TTS
-            html.Div(id="hidden-audio-output", style={"display": "none"}),
-            
-            # Hidden div for download trigger
-            html.Div(id="download-trigger", style={"display": "none"}),
-            dcc.Download(id="download-chat"),
-            
-            # Keyboard shortcut help tooltip
-            html.Div([
-                dbc.Button(
-                    html.I(className="fas fa-keyboard"),
-                    id="keyboard-shortcuts-btn",
-                    size="sm",
-                    color="link",
-                    className="position-fixed bottom-0 end-0 mb-2 mr-2"
-                ),
-                dbc.Tooltip([
-                    html.H5("Keyboard Shortcuts"),
-                    html.Hr(),
-                    html.P([html.Kbd("Ctrl"), " + ", html.Kbd("Enter"), ": Send message"]),
-                    html.P([html.Kbd("Ctrl"), " + ", html.Kbd(","), ": Toggle settings"]),
-                    html.P([html.Kbd("Ctrl"), " + ", html.Kbd("S"), ": Export chat"]),
-                    html.P([html.Kbd("Ctrl"), " + ", html.Kbd("O"), ": Import chat"]),
-                    html.P([html.Kbd("Escape"), ": Close open panels"]),
-                ], 
-                target="keyboard-shortcuts-btn",
-                placement="top"
-                ),
-            ]),
-            
-        ], width={"size": 10, "offset": 1}),
-    ]),
-    
-    # Footer
-    html.Footer([
-        html.Hr(),
-        html.P([
-            "Powered by Qwen and TTS API | ",
-            html.A("Reset Chat", id="reset-chat-button", href="#"),
-            " | ",
-            f"Version 1.0.0 ({datetime.datetime.now().strftime('%Y-%m-%d')})"
-        ])
-    ], className="text-center mt-5"),
-    
-], fluid=True)
-
-# Auto-scroll function in JavaScript
-app.clientside_callback(
-    """
-    function scrollToBottom(n_children) {
-        var chatHistory = document.getElementById('chat-history');
-        if (chatHistory) {
-            chatHistory.scrollTop = chatHistory.scrollHeight;
-        }
-        return window.dash_clientside.no_update;
-    }
-    """,
-    Output("chat-history", "children", allow_duplicate=True),
-    Input("chat-history", "children"),
-    prevent_initial_call=True
-)
-
-# Update settings based on UI inputs
-@callback(
-    [
-        Output("temperature-slider", "value"),
-        Output("max-tokens-slider", "value"),
-        Output("model-dropdown", "value"),
-        Output("base-url-input", "value"),
-        Output("system-prompt-input", "value"),
-        Output("voice-dropdown", "value"),
-        Output("speech-speed-slider", "value"),
-        Output("voice-enabled-checkbox", "value"),
-        Output("auto-play-checkbox", "value")
-    ],
-    [
-        Input("temperature-slider", "value"),
-        Input("max-tokens-slider", "value"),
-        Input("model-dropdown", "value"),
-        Input("base-url-input", "value"),
-        Input("system-prompt-input", "value"),
-        Input("voice-dropdown", "value"),
-        Input("speech-speed-slider", "value"),
-        Input("voice-enabled-checkbox", "value"),
-        Input("auto-play-checkbox", "value")
-    ],
-    [State("conversation-store", "data")]
-)
-def update_settings(
-    temperature, max_tokens, model, base_url, system_prompt,
-    voice, speech_speed, voice_enabled, auto_play, conversation_data
-):
-    # Update app settings
-    app_settings["temperature"] = temperature
-    app_settings["max_tokens"] = max_tokens
-    app_settings["model"] = model
-    app_settings["base_url"] = base_url
-    app_settings["system_prompt"] = system_prompt
-    app_settings["voice"] = voice
-    app_settings["speech_speed"] = speech_speed
-    app_settings["voice_enabled"] = "enabled" in voice_enabled if voice_enabled else False
-    app_settings["auto_play_voice"] = "auto_play" in auto_play if auto_play else False
-    
-    # Update LLM client base URL if changed
-    if base_url != llm_client.base_url:
-        llm_client.base_url = base_url
-    
-    # Return the updated values
-    return (
-        temperature, 
-        max_tokens, 
-        model, 
-        base_url, 
-        system_prompt, 
-        voice, 
-        speech_speed, 
-        ["enabled"] if app_settings["voice_enabled"] else [],
-        ["auto_play"] if app_settings["auto_play_voice"] else []
+# Terminal view component
+def create_terminal_view(content):
+    return html.Div(
+        className="terminal-view",
+        children=[
+            html.Pre(content)
+        ]
     )
 
-# Toggle settings panel
-@callback(
-    Output("settings-collapse", "is_open"),
-    [Input("settings-toggle", "n_clicks")],
-    [State("settings-collapse", "is_open")],
-)
-def toggle_settings(n_clicks, is_open):
-    if n_clicks:
-        return not is_open
-    return is_open
-
-# Test voice button callback
-@callback(
-    Output("test-voice-output", "children"),
-    Input("test-voice-button", "n_clicks"),
-    prevent_initial_call=True
-)
-def test_voice(n_clicks):
-    if n_clicks:
-        try:
-            # Generate a test audio file
-            test_text = "This is a test of the text-to-speech system with the selected voice and speed settings."
-            result = text_to_speech(
-                text=test_text,
-                voice=app_settings["voice"],
-                speed=app_settings["speech_speed"],
-                auto_play=True
+# Editor view component
+def create_editor_view(filename, content, language="text"):
+    syntax_highlighting = {
+        "python": {
+            "keywords": ["def", "class", "import", "from", "return", "if", "else", "elif", "for", "while", "try", "except", "with"],
+            "keyword_color": "#569CD6",
+            "string_color": "#CE9178",
+            "comment_color": "#6A9955",
+            "function_color": "#DCDCAA",
+            "variable_color": "#9CDCFE"
+        },
+        "json": {
+            "keywords": ["null", "true", "false"],
+            "keyword_color": "#569CD6",
+            "string_color": "#CE9178",
+            "number_color": "#B5CEA8",
+            "punctuation_color": "#D4D4D4"
+        },
+        "text": {
+            "color": "#D4D4D4"
+        }
+    }
+    
+    return html.Div(
+        className="editor-view",
+        children=[
+            html.Div(
+                className="editor-header",
+                children=[
+                    html.Div(filename),
+                    html.Div([
+                        html.Button("Diff", className="btn-control"),
+                        html.Button("Original", className="btn-control"),
+                        html.Button("Modified", className="btn-control", style={"color": "#fff"}),
+                    ])
+                ]
+            ),
+            html.Pre(
+                content,
+                className="editor-content",
+                style={"whiteSpace": "pre-wrap"}
             )
-            
-            return html.Div([
-                html.P("Voice test successful!", className="text-success mt-2"),
-                html.Audio(
-                    src=f"data:audio/wav;base64,{get_base64_audio(result['audio_path'])}",
-                    controls=True,
-                    className="audio-player mt-2"
+        ]
+    )
+
+# Collapsible section component
+def create_collapsible_section(id_prefix, header_content, content, is_open=True):
+    return html.Div([
+        html.Div(
+            className="collapsible-header",
+            id=f"{id_prefix}-header",
+            children=[
+                html.I(
+                    className="fas fa-chevron-down mr-2",
+                    style={"marginRight": "10px"}
+                ),
+                header_content
+            ]
+        ),
+        html.Div(
+            id=f"{id_prefix}-content",
+            className="collapsible-content",
+            style={"display": "block" if is_open else "none"},
+            children=content
+        )
+    ])
+
+# Command execution component
+def create_command_element(command, status="completed"):
+    icon_class = "fas fa-check-circle text-success" if status == "completed" else "fas fa-spinner fa-spin text-warning"
+    return html.Div(
+        className="status-element",
+        children=[
+            html.Span(className=f"status-icon {icon_class}"),
+            html.Span("Executing command", style={"marginRight": "10px"}),
+            html.Code(command, className="command-element")
+        ]
+    )
+
+# File creation/editing component
+def create_file_operation(operation, filepath, status="completed"):
+    icon_class = "fas fa-check-circle text-success" if status == "completed" else "fas fa-spinner fa-spin text-warning"
+    
+    return html.Div(
+        className="status-element",
+        children=[
+            html.Span(className=f"status-icon {icon_class}"),
+            html.Span(f"{operation} file", style={"marginRight": "10px"}),
+            html.Code(filepath, className="file-path")
+        ]
+    )
+
+# Main split view layout
+main_view = html.Div(
+    id="main-container",
+    className="main-container",
+    style={"display": "none"},  # Hidden initially
+    children=[
+        # Left side - Chat interface
+        html.Div(
+            className="chat-container",
+            id="chat-container",
+            children=[
+                # Header with current task
+                html.Div(
+                    className="system-message",
+                    children=[
+                        html.Div(
+                            style={"display": "flex", "alignItems": "center", "marginBottom": "15px"},
+                            children=[
+                                html.I(className="fas fa-robot", style={"fontSize": "24px", "marginRight": "10px", "color": "#61dafb"}),
+                                html.Span("AgenDev", style={"fontSize": "24px", "fontWeight": "bold"})
+                            ]
+                        ),
+                        html.H3(id="project-title", children="Python Snake Game Development", style={"margin": "0 0 10px 0"})
+                    ]
+                ),
+                
+                # Example of a task section
+                create_collapsible_section(
+                    "task1",
+                    html.Div([
+                        html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"}),
+                        html.Span("Continue: Create Next.js application for political debate simulation")
+                    ]),
+                    [
+                        html.P("Creating a Next.js application for the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_command_element("cd /home/ubuntu && create_nextjs_app zelenskyy_debate_sim"),
+                        html.P("Successfully created Next.js application for the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Creating", "zelenskyy_debate_sim/src/app/data/scenarios.json")
+                    ]
+                ),
+                
+                # Example of a task section
+                create_collapsible_section(
+                    "task2",
+                    html.Div([
+                        html.I(className="fas fa-check-circle", style={"marginRight": "10px", "color": "#28a745"}),
+                        html.Span("Develop dialogue system and political scenario scripts")
+                    ]),
+                    [
+                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Editing", "zelenskyy_debate_sim/src/app/page.tsx"),
+                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Creating", "zelenskyy_debate_sim/src/app/simulation/page.tsx"),
+                        html.P("Implementing dialogue system and scenarios for the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Editing", "zelenskyy_debate_sim/src/app/globals.css")
+                    ]
+                ),
+                
+                # Example of a task section
+                create_collapsible_section(
+                    "task3",
+                    html.Div([
+                        html.I(className="fas fa-spinner fa-spin", style={"marginRight": "10px", "color": "#ffc107"}),
+                        html.Span("Design and implement user interface with styling")
+                    ]),
+                    [
+                        html.P("Moving to add additional user interface elements and styling to the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/CharacterPortrait.tsx"),
+                        html.P("Adding user interface components and styling to enhance the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/DialogueBubble.tsx"),
+                        html.P("Adding user interface components and styling to enhance the Zelenskyy-Trump-Vance interactive simulation."),
+                        create_file_operation("Creating", "zelenskyy_debate_sim/src/components/ResponseOption.tsx")
+                    ]
+                ),
+                
+                # Thinking indicator
+                html.Div(
+                    className="chat-message",
+                    children=[
+                        html.Div(
+                            style={
+                                "display": "flex",
+                                "alignItems": "center",
+                                "color": "#888"
+                            },
+                            children=[
+                                html.I(className="fas fa-circle-notch fa-spin", style={"marginRight": "10px"}),
+                                html.Span("Thinking")
+                            ]
+                        )
+                    ]
                 )
-            ])
-        except Exception as e:
-            return html.P(f"Error testing voice: {str(e)}", className="text-danger mt-2")
-    
-    return None
-
-def get_base64_audio(file_path):
-    """Convert audio file to base64 for embedding in page"""
-    with open(file_path, "rb") as audio_file:
-        encoded = base64.b64encode(audio_file.read())
-        return encoded.decode()
-
-# Reset chat
-@callback(
-    [
-        Output("chat-history", "children", allow_duplicate=True),
-        Output("conversation-store", "data", allow_duplicate=True)
-    ],
-    Input("reset-chat-button", "n_clicks"),
-    prevent_initial_call=True
-)
-def reset_chat(n_clicks):
-    # Clear conversation history
-    global conversation_history
-    conversation_history = []
-    
-    return [], []
-
-# Send message on button click or Enter key
-@callback(
-    [
-        Output("message-input", "value"),
-        Output("message-input", "n_submit"),
-        Output("send-button", "disabled"),
-        Output("stream-update-interval", "disabled"),
-        Output("streaming-indicator", "style")
-    ],
-    [
-        Input("send-button", "n_clicks"),
-        Input("message-input", "n_submit")
-    ],
-    [
-        State("message-input", "value"),
-        State("stream-update-interval", "disabled")
-    ],
-    prevent_initial_call=True
-)
-def send_message_start(n_clicks, n_submit, message, stream_disabled):
-    if not message or message.strip() == "":
-        return "", 0, False, True, {"display": "none"}
-    
-    # Store the message in a global variable to access it in the streaming callback
-    # This is critical for the streaming process to work correctly
-    global current_message
-    current_message = message
-    
-    # Start the streaming process by enabling the interval
-    return "", 0, True, False, {"display": "block"}
-
-# Streaming process using dash_extensions blocking callback
-@callback(
-    [
-        Output("chat-history", "children", allow_duplicate=True),
-        Output("conversation-store", "data", allow_duplicate=True),
-        Output("send-button", "disabled", allow_duplicate=True),
-        Output("stream-update-interval", "disabled", allow_duplicate=True),
-        Output("streaming-indicator", "style", allow_duplicate=True),
-        Output("hidden-audio-output", "children", allow_duplicate=True),
-        Output("notification-area", "children", allow_duplicate=True),
-    ],
-    [
-        Input("stream-update-interval", "disabled"),
-    ],
-    [
-        State("chat-history", "children"),
-        State("conversation-store", "data")
-    ],
-    prevent_initial_call=True,
-)
-def process_message_with_error_handling(stream_disabled, history, conversation_data):
-    # Add visual indicators that would have been handled by 'running' parameter
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        return dash.no_update, dash.no_update, False, True, {"display": "none"}, dash.no_update, dash.no_update
-    
-    if stream_disabled:
-        # Interval is disabled, nothing to do
-        return dash.no_update, dash.no_update, False, True, {"display": "none"}, dash.no_update, dash.no_update
-    
-    # Use the global current_message
-    global current_message
-    message = current_message
-    
-    # Initialize conversation data if None
-    if conversation_data is None:
-        conversation_data = []
-    
-    # Add user message to history
-    user_message_component = create_message_component(message, "user")
-    history = history + [user_message_component] if history else [user_message_component]
-    
-    # Add user message to conversation data
-    user_message = {"role": "user", "content": message}
-    conversation_data.append(user_message)
-    
-    # Create messages list for the LLM
-    messages = [
-        Message(role="system", content=app_settings["system_prompt"])
+            ]
+        ),
+        
+        # Right side - Dynamic view (Terminal, Editor, Browser)
+        html.Div(
+            className="view-container",
+            children=[
+                # Header
+                html.Div(
+                    className="view-header",
+                    children=[
+                        html.Div("AgenDev's Computer"),
+                        html.Button(
+                            html.I(className="fas fa-expand"),
+                            className="btn-control"
+                        )
+                    ]
+                ),
+                
+                # View type indicator
+                html.Div(
+                    style={
+                        "padding": "5px 10px",
+                        "backgroundColor": "#2d2d2d",
+                        "borderBottom": "1px solid #444",
+                        "display": "flex",
+                        "alignItems": "center"
+                    },
+                    children=[
+                        html.Span("AgenDev is using", style={"color": "#888", "marginRight": "5px"}),
+                        html.Span("Editor"),
+                        html.Div(
+                            style={
+                                "marginLeft": "20px",
+                                "display": "flex",
+                                "alignItems": "center",
+                                "color": "#888",
+                                "fontSize": "0.85em"
+                            },
+                            children=[
+                                html.Span("Creating file"),
+                                html.Code(
+                                    "zelenskyy_debate_sim/src/app/data/scenarios.json",
+                                    style={
+                                        "marginLeft": "5px",
+                                        "backgroundColor": "transparent",
+                                        "padding": "0"
+                                    }
+                                )
+                            ]
+                        )
+                    ]
+                ),
+                
+                # Content area (can be terminal, editor, or browser)
+                html.Div(
+                    className="view-content",
+                    id="view-content",
+                    children=[
+                        # Default to editor view
+                        create_editor_view(
+                            "scenarios.json",
+                            '''
+{
+  "scenarios": [
+    {
+      "id": 1,
+      "title": "Opening Remarks",
+      "description": "President Trump welcomes you to the White House. The meeting has just begun with initial pleasantries.",
+      "trumpDialogue": "President Trump welcomes you to the White House. We're going to have a great discussion today about ending this terrible war. I hope I'm going to be remembered as a peacemaker.",
+      "vanceDialogue": "",
+      "options": [
+        {
+          "id": "1a",
+          "text": "Thank you, Mr. President. Ukraine is grateful for America's support. We look forward to discussing how we can achieve a just peace that ensures Ukraine's security.",
+          "type": "diplomatic",
+          "trumpReaction": "positive",
+          "vanceReaction": "neutral",
+          "nextScenario": 2
+        },
+        {
+          "id": "1b",
+          "text": "Thank you for meeting with me. I must emphasize that Ukraine needs more than just words - we need continued military support and security guarantees to end this war.",
+          "type": "assertive",
+          "trumpReaction": "neutral",
+          "vanceReaction": "negative",
+          "nextScenario": 2
+        },
+        ...
+      ]
+    }
+  ]
+}''',
+                            "json"
+                        )
+                    ]
+                ),
+                
+                # Controls
+                html.Div(
+                    className="view-controls",
+                    children=[
+                        html.Div(
+                            className="progress-controls",
+                            children=[
+                                html.Button(
+                                    html.I(className="fas fa-step-backward"),
+                                    className="btn-control",
+                                    id="playback-backward"
+                                ),
+                                html.Button(
+                                    html.I(className="fas fa-play"),
+                                    className="btn-control",
+                                    id="playback-play"
+                                ),
+                                html.Button(
+                                    html.I(className="fas fa-step-forward"),
+                                    className="btn-control",
+                                    id="playback-forward"
+                                ),
+                                html.Div(
+                                    dcc.Slider(
+                                        id="playback-slider",
+                                        min=0,
+                                        max=100,
+                                        value=50,
+                                        updatemode="drag",
+                                        marks=None,
+                                        tooltip={"always_visible": False},
+                                        className="timeline-slider"
+                                    ),
+                                    style={"width": "300px", "marginLeft": "10px", "marginRight": "10px"}
+                                )
+                            ]
+                        ),
+                        html.Div(
+                            className="status-indicator",
+                            children=[
+                                html.Span(
+                                    html.I(className="fas fa-check-circle"),
+                                    className="status-tag success",
+                                    style={"marginRight": "5px"}
+                                ),
+                                html.Span("Deploy simulation to a public URL for permanent access"),
+                                html.Span("9/9", className="time-indicator")
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
     ]
+)
+
+# Initialize AgenDev system
+class AgenDevUI:
+    """Integration between Dash UI and AgenDev core system"""
     
-    # Add conversation history
-    for msg in conversation_data:
-        messages.append(Message(role=msg["role"], content=msg["content"]))
-    
-    notification = None
-    audio_element = None
-    
-    # Get streamed response
-    try:
-        # Initialize the streaming response
-        response = llm_client.chat_completion(
-            messages=messages,
-            model=app_settings["model"],
-            temperature=app_settings["temperature"],
-            max_tokens=app_settings["max_tokens"],
-            stream=True
+    def __init__(self):
+        """Initialize the AgenDev UI integration"""
+        self.agendev_instance = None
+        self.config = None
+        self.snapshot_engine = None
+        self.current_tasks = []
+        self.action_history = []
+        self.current_view = "terminal"  # Default view
+        
+    def initialize_project(self, project_name, project_description):
+        """Initialize a new AgenDev project"""
+        # Create a workspace directory based on project name
+        workspace_dir = os.path.join("workspace", project_name.lower().replace(' ', '_'))
+        
+        # Initialize AgenDev configuration
+        self.config = AgenDevConfig(
+            project_name=project_name,
+            workspace_dir=workspace_dir
         )
         
-        # Create a placeholder for the assistant's message
-        assistant_response = ""
-        assistant_message_component = create_message_component(assistant_response, "assistant")
-        history = history + [assistant_message_component]
-        
-        # Process the stream in chunks
-        for chunk in llm_client.stream_generator(response):
-            assistant_response += chunk
-            # Update the last message (assistant's response)
-            history[-1] = create_message_component(assistant_response, "assistant")
-            time.sleep(0.01)  # Small delay to avoid overwhelming the UI
+        # Initialize AgenDev instance
+        try:
+            self.agendev_instance = AgenDev(self.config)
+            self.snapshot_engine = SnapshotEngine(workspace_dir=workspace_dir)
             
-        # Add assistant response to conversation data
-        assistant_message = {"role": "assistant", "content": assistant_response}
-        conversation_data.append(assistant_message)
-        
-        # Handle TTS if enabled
-        if app_settings["voice_enabled"] and assistant_response.strip():
-            try:
-                # Generate TTS for the assistant's response
-                tts_result = text_to_speech(
-                    text=assistant_response,
-                    voice=app_settings["voice"],
-                    speed=app_settings["speech_speed"],
-                    auto_play=app_settings["auto_play_voice"]
+            # Record this action
+            self.record_action(
+                action_type="initialization",
+                content=f"Initialized AgenDev project: {project_name}\n\nDescription: {project_description}",
+                view_type="terminal"
+            )
+            
+            # Create initial tasks based on project description
+            self._create_initial_tasks(project_description)
+            
+            return {
+                "success": True,
+                "project_name": project_name,
+                "task_count": len(self.current_tasks)
+            }
+        except Exception as e:
+            print(f"Error initializing AgenDev project: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def _create_initial_tasks(self, project_description):
+        """Create initial tasks based on project description"""
+        try:
+            # Define core tasks for the project
+            tasks = [
+                {
+                    "title": "Initialize project directory",
+                    "description": "Set up project directory and initial file structure",
+                    "type": TaskType.PLANNING,
+                    "priority": TaskPriority.HIGH,
+                    "risk": TaskRisk.LOW,
+                    "duration": 0.5
+                },
+                {
+                    "title": "Create basic project structure",
+                    "description": "Set up directories and configuration files",
+                    "type": TaskType.PLANNING,
+                    "priority": TaskPriority.HIGH,
+                    "risk": TaskRisk.LOW,
+                    "duration": 0.5
+                },
+                {
+                    "title": f"Implement core functionality",
+                    "description": f"Write code for main features based on: {project_description}",
+                    "type": TaskType.IMPLEMENTATION,
+                    "priority": TaskPriority.HIGH,
+                    "risk": TaskRisk.MEDIUM,
+                    "duration": 2.0
+                },
+                {
+                    "title": "Add unit tests",
+                    "description": "Write tests for the implemented functionality",
+                    "type": TaskType.TEST,
+                    "priority": TaskPriority.MEDIUM,
+                    "risk": TaskRisk.LOW,
+                    "duration": 1.0
+                },
+                {
+                    "title": "Create documentation",
+                    "description": "Write documentation for the project",
+                    "type": TaskType.DOCUMENTATION,
+                    "priority": TaskPriority.MEDIUM,
+                    "risk": TaskRisk.LOW,
+                    "duration": 1.0
+                }
+            ]
+            
+            # Add tasks to AgenDev instance
+            task_ids = []
+            previous_task_id = None
+            
+            for task in tasks:
+                # Create task with optional dependency on previous task
+                dependencies = [previous_task_id] if previous_task_id is not None else None
+                
+                task_id = self.agendev_instance.create_task(
+                    title=task["title"],
+                    description=task["description"],
+                    task_type=task["type"],
+                    priority=task["priority"],
+                    risk=task["risk"],
+                    estimated_duration_hours=task["duration"],
+                    dependencies=dependencies
                 )
                 
-                # Create audio element
-                if "audio_path" in tts_result and os.path.exists(tts_result["audio_path"]):
-                    audio_element = html.Audio(
-                        src=f"data:audio/wav;base64,{get_base64_audio(tts_result['audio_path'])}",
-                        id="current-audio",
-                        autoPlay=app_settings["auto_play_voice"],
-                        controls=True,
-                        style={"display": "none"}
-                    )
+                task_ids.append(task_id)
+                previous_task_id = task_id
+                
+                # Add to current tasks
+                self.current_tasks.append({
+                    "id": str(task_id),
+                    "title": task["title"],
+                    "description": task["description"],
+                    "status": "planned",
+                    "type": task["type"].value
+                })
+            
+            # Record this action
+            self.record_action(
+                action_type="task_creation",
+                content=f"Created {len(tasks)} initial tasks for the project.",
+                view_type="terminal"
+            )
+            
+            # Generate implementation plan
+            self.record_action(
+                action_type="planning",
+                content="Generating implementation plan...",
+                view_type="terminal"
+            )
+            
+            # Actually generate the plan (this might take time)
+            try:
+                plan = self.agendev_instance.generate_implementation_plan()
+                
+                # Record planning result
+                self.record_action(
+                    action_type="planning_complete",
+                    content=f"Implementation plan generated with {len(plan.task_sequence)} tasks.\nEstimated duration: {plan.expected_duration_hours:.1f} hours\nConfidence: {plan.confidence_score:.2f}",
+                    view_type="terminal"
+                )
+                
             except Exception as e:
-                tts_error = f"TTS Error: {str(e)}"
-                print(tts_error)
-                notification = html.Div(tts_error, className="alert alert-warning")
-        
-    except Exception as e:
-        # Handle error in the response
-        error_details = traceback.format_exc()
-        print(f"Error in LLM response: {str(e)}\n{error_details}")
-        
-        error_message = f"Error communicating with the language model: {str(e)}"
-        history = history + [create_message_component(error_message, "assistant")]
-        
-        # Add error message to conversation data
-        error_system_message = {"role": "system", "content": f"Error occurred: {str(e)}"}
-        conversation_data.append(error_system_message)
-        
-        notification = html.Div([
-            html.Strong("Error: "), 
-            error_message
-        ], className="alert alert-danger")
+                print(f"Error generating implementation plan: {e}")
+                self.record_action(
+                    action_type="planning_error",
+                    content=f"Error generating implementation plan: {e}",
+                    view_type="terminal"
+                )
+            
+        except Exception as e:
+            print(f"Error creating initial tasks: {e}")
+            self.record_action(
+                action_type="error",
+                content=f"Error creating initial tasks: {e}",
+                view_type="terminal"
+            )
     
-    # Return updated history and conversation
-    return history, conversation_data, False, True, {"display": "none"}, audio_element, notification
+    def record_action(self, action_type, content, view_type="terminal", filename=None):
+        """Record an action taken by the system for later playback"""
+        timestamp = datetime.now().isoformat()
+        action = {
+            "timestamp": timestamp,
+            "display_time": datetime.now().strftime("%H:%M:%S"),
+            "type": action_type,
+            "content": content,
+            "view_type": view_type
+        }
+        
+        if filename:
+            action["filename"] = filename
+            
+        self.action_history.append(action)
+        return len(self.action_history) - 1  # Return index of new action
+    
+    def get_action_history(self):
+        """Get all recorded actions"""
+        # Convert to playback format
+        steps = []
+        for action in self.action_history:
+            step = {
+                "timestamp": action["display_time"],
+                "type": action["view_type"]
+            }
+            
+            if action["view_type"] == "terminal":
+                step["content"] = action["content"]
+            elif action["view_type"] == "editor":
+                step["content"] = action["content"]
+                step["filename"] = action.get("filename", "unknown.txt")
+            
+            steps.append(step)
+            
+        return {
+            "total_steps": len(steps),
+            "current_step": len(steps) - 1 if steps else 0,
+            "is_playing": False,
+            "steps": steps
+        }
+        
+    def implement_task(self, task_id):
+        """Implement a specific task"""
+        if not self.agendev_instance:
+            return {"success": False, "error": "No active project"}
+            
+        try:
+            # Record start of task implementation
+            self.record_action(
+                action_type="task_start",
+                content=f"Starting implementation of task: {task_id}",
+                view_type="terminal"
+            )
+            
+            # Actually implement the task using AgenDev
+            result = self.agendev_instance.implement_task(task_id)
+            
+            if result.get("success", False):
+                # Record successful implementation
+                file_path = result.get("file_path", "")
+                implementation = result.get("implementation", "")
+                
+                # Record terminal action
+                self.record_action(
+                    action_type="task_progress",
+                    content=f"Task {task_id} implementation in progress...\n$ mkdir -p $(dirname {file_path})",
+                    view_type="terminal"
+                )
+                
+                # Record editor action
+                self.record_action(
+                    action_type="code_creation",
+                    content=implementation,
+                    view_type="editor",
+                    filename=file_path
+                )
+                
+                # Record completion action
+                self.record_action(
+                    action_type="task_complete",
+                    content=f"Task implementation completed successfully.\nOutput saved to: {file_path}",
+                    view_type="terminal"
+                )
+                
+                # Update task status in UI
+                for task in self.current_tasks:
+                    if task["id"] == task_id:
+                        task["status"] = "completed"
+                
+                return {
+                    "success": True, 
+                    "task_id": task_id, 
+                    "file_path": file_path
+                }
+            else:
+                # Record failure
+                error = result.get("error", "Unknown error during task implementation")
+                self.record_action(
+                    action_type="task_error",
+                    content=f"Error implementing task: {error}",
+                    view_type="terminal"
+                )
+                
+                # Update task status in UI
+                for task in self.current_tasks:
+                    if task["id"] == task_id:
+                        task["status"] = "failed"
+                
+                return {"success": False, "error": error}
+                
+        except Exception as e:
+            print(f"Error in implement_task: {e}")
+            error_msg = str(e)
+            
+            # Record the error
+            self.record_action(
+                action_type="error",
+                content=f"Exception during task implementation: {error_msg}",
+                view_type="terminal"
+            )
+            
+            return {"success": False, "error": error_msg}
+    
+    def get_tasks(self):
+        """Get all current tasks"""
+        if not self.agendev_instance:
+            return []
+            
+        # If we have the AgenDev instance, get fresh task data
+        try:
+            tasks = []
+            for task_id, task in self.agendev_instance.task_graph.tasks.items():
+                tasks.append({
+                    "id": str(task_id),
+                    "title": task.title,
+                    "description": task.description,
+                    "status": task.status.value,
+                    "type": task.task_type.value
+                })
+            return tasks
+        except Exception as e:
+            print(f"Error getting tasks from AgenDev: {e}")
+            
+        # Fall back to our cached task list
+        return self.current_tasks
+    
+    def get_project_status(self):
+        """Get the current status of the project"""
+        if not self.agendev_instance:
+            return {"success": False, "error": "No active project"}
+            
+        try:
+            # Get status from AgenDev
+            status = self.agendev_instance.get_project_status()
+            return {"success": True, **status}
+        except Exception as e:
+            print(f"Error getting project status: {e}")
+            return {
+                "success": False,
+                "error": f"Error getting project status: {e}"
+            }
 
-# Handle playing TTS for specific messages
-@callback(
-    Output({"type": "audio-player", "index": dash.MATCH}, "src"),
-    Output({"type": "audio-player", "index": dash.MATCH}, "className"),
-    Input({"type": "play-tts", "index": dash.MATCH}, "n_clicks"),
-    State({"type": "message-content", "index": dash.MATCH}, "children"),
+# Initialize the AgenDev UI integration
+agendev_ui = AgenDevUI()
+
+# Callback to transition from landing page to main view
+@app.callback(
+    [Output("app-state", "data"),
+     Output("landing-page", "style"),
+     Output("main-container", "style"),
+     Output("project-title", "children"),
+     Output("playback-data", "data")],
+    [Input("submit-button", "n_clicks")],
+    [State("initial-prompt", "value"),
+     State("app-state", "data")],
     prevent_initial_call=True
 )
-def play_message_tts(n_clicks, message_content):
+def transition_to_main_view(n_clicks, prompt_value, current_state):
     if not n_clicks:
-        return dash.no_update, dash.no_update
-    
-    try:
-        # Generate TTS for the message
-        tts_result = text_to_speech(
-            text=message_content,
-            voice=app_settings["voice"],
-            speed=app_settings["speech_speed"],
-            auto_play=False  # Don't auto-play, we'll handle it with the audio element
-        )
-        
-        if "audio_path" in tts_result and os.path.exists(tts_result["audio_path"]):
-            audio_src = f"data:audio/wav;base64,{get_base64_audio(tts_result['audio_path'])}"
-            return audio_src, "audio-player"
-    
-    except Exception as e:
-        print(f"TTS Error: {str(e)}")
-    
-    return dash.no_update, dash.no_update
-
-# Add export chat functionality
-@callback(
-    Output("download-chat", "data"),
-    Input("export-chat-button", "n_clicks"),
-    State("conversation-store", "data"),
-    prevent_initial_call=True
-)
-def export_chat(n_clicks, conversation_data):
-    if not n_clicks or not conversation_data:
         raise PreventUpdate
     
+    # Generate a title based on the prompt
+    title = "New Project"
+    if prompt_value:
+        # Simple algorithm to extract a title
+        if "create" in prompt_value.lower() and "snake" in prompt_value.lower() and "python" in prompt_value.lower():
+            title = "Python Snake Game Development"
+        elif "todo" in prompt_value.lower() or "task" in prompt_value.lower() or "list" in prompt_value.lower():
+            title = "Todo List Application"
+        elif "dashboard" in prompt_value.lower() or "data" in prompt_value.lower() or "visualization" in prompt_value.lower():
+            title = "Data Visualization Dashboard"
+        elif "web" in prompt_value.lower() or "site" in prompt_value.lower() or "app" in prompt_value.lower():
+            title = "Web Application Development"
+        elif "game" in prompt_value.lower():
+            title = "Game Development Project"
+        elif "api" in prompt_value.lower() or "backend" in prompt_value.lower() or "server" in prompt_value.lower():
+            title = "API Development Project"
+        else:
+            # Extract key words for a generic title
+            words = prompt_value.split()
+            if len(words) > 3:
+                # Take a few significant words from the middle of the prompt
+                middle_index = len(words) // 2
+                title_words = words[max(0, middle_index-1):min(len(words), middle_index+2)]
+                title = " ".join(word.capitalize() for word in title_words) + " Project"
+            else:
+                # For short prompts, use the whole thing
+                title = prompt_value.capitalize()
+    
+    # Update state
+    current_state["view"] = "main"
+    current_state["initial_prompt"] = prompt_value
+    current_state["project_title"] = title
+    
+    # Initialize the AgenDev project
     try:
-        # Create chat export with metadata
-        export_data = {
-            "metadata": {
-                "exported_at": datetime.datetime.now().isoformat(),
-                "version": "1.0.0",
-                "model": app_settings["model"]
-            },
-            "settings": app_settings,
-            "conversation": conversation_data
-        }
-        
-        # Format the current date and time for filename
-        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"chat_export_{now}.json"
-        
-        return dict(
-            content=json.dumps(export_data, indent=2),
-            filename=filename,
-            type="application/json"
-        )
+        result = agendev_ui.initialize_project(title, prompt_value)
+        if not result.get("success", False):
+            print(f"Warning: Failed to initialize AgenDev project: {result.get('error', 'Unknown error')}")
     except Exception as e:
-        print(f"Export error: {str(e)}")
-        return dash.no_update
+        print(f"Error initializing AgenDev project: {e}")
+    
+    # Get action history for playback
+    playback_data = agendev_ui.get_action_history()
+    
+    # Hide landing page, show main container
+    landing_style = {"display": "none"}
+    main_style = {"display": "flex"}
+    
+    return current_state, landing_style, main_style, title, playback_data
 
-# Add import chat functionality
-@callback(
-    [
-        Output("chat-history", "children", allow_duplicate=True),
-        Output("conversation-store", "data", allow_duplicate=True),
-        Output("notification-area", "children"),
-    ],
-    Input("upload-chat-json", "contents"),
-    State("upload-chat-json", "filename"),
+# Callback for task1 collapsible section
+@app.callback(
+    Output("task1-content", "style"),
+    Input("task1-header", "n_clicks"),
+    State("task1-content", "style"),
     prevent_initial_call=True
 )
-def import_chat(contents, filename):
-    if contents is None:
+def toggle_section_task1(n_clicks, current_style):
+    if not n_clicks:
         raise PreventUpdate
     
-    try:
-        # Decode the uploaded file
-        content_type, content_string = contents.split(',')
-        decoded = base64.b64decode(content_string).decode('utf-8')
-        data = json.loads(decoded)
-        
-        # Validate the format
-        if "conversation" not in data:
-            return dash.no_update, dash.no_update, html.Div(
-                "Invalid chat file format",
-                className="alert alert-danger"
-            )
-        
-        # Create new message components for each message
-        history = []
-        conversation_data = data["conversation"]
-        
-        for msg in conversation_data:
-            history.append(create_message_component(msg["content"], msg["role"]))
-        
-        # Success notification
-        notification = html.Div(
-            f"Successfully imported chat from {filename}",
-            className="alert alert-success"
-        )
-        
-        return history, conversation_data, notification
-    except Exception as e:
-        error_msg = f"Error importing chat: {str(e)}"
-        print(error_msg)
-        return dash.no_update, dash.no_update, html.Div(
-            error_msg,
-            className="alert alert-danger"
-        )
+    is_visible = current_style.get("display") == "block"
+    new_style = {"display": "none" if is_visible else "block"}
+    return new_style
 
-# Trigger file selection dialog when import button is clicked
-app.clientside_callback(
-    """
-    function(n_clicks) {
-        if (n_clicks) {
-            document.getElementById('upload-chat-json').click();
-        }
-        return window.dash_clientside.no_update;
-    }
-    """,
-    Output("import-chat-button", "n_clicks", allow_duplicate=True),
-    Input("import-chat-button", "n_clicks"),
+# Callback for task2 collapsible section  
+@app.callback(
+    Output("task2-content", "style"),
+    Input("task2-header", "n_clicks"),
+    State("task2-content", "style"),
     prevent_initial_call=True
 )
+def toggle_section_task2(n_clicks, current_style):
+    if not n_clicks:
+        raise PreventUpdate
+    
+    is_visible = current_style.get("display") == "block"
+    new_style = {"display": "none" if is_visible else "block"}
+    return new_style
 
-# Add keyboard events JavaScript for usability
-app.clientside_callback(
-    """
-    function bindKeyEvents(n) {
-        // Only set up listeners once
-        if (window.keyBindingsSetup) return window.dash_clientside.no_update;
-        
-        // Function to toggle settings when Ctrl+, is pressed
-        document.addEventListener('keydown', function(e) {
-            // Ctrl+, to toggle settings
-            if (e.ctrlKey && e.key === ',') {
-                document.getElementById('settings-toggle').click();
-                e.preventDefault();
-            }
-            
-            // Ctrl+Enter to send message
-            if (e.ctrlKey && e.key === 'Enter') {
-                // Only if input is not empty
-                const input = document.getElementById('message-input');
-                if (input && input.value.trim()) {
-                    document.getElementById('send-button').click();
-                    e.preventDefault();
-                }
-            }
-            
-            // Escape to close settings if open
-            if (e.key === 'Escape') {
-                const settingsPanel = document.getElementById('settings-collapse');
-                if (settingsPanel && settingsPanel.classList.contains('show')) {
-                    document.getElementById('settings-toggle').click();
-                    e.preventDefault();
-                }
-            }
-            
-            // Ctrl+S to export chat
-            if (e.ctrlKey && e.key === 's') {
-                document.getElementById('export-chat-button').click();
-                e.preventDefault();
-            }
-            
-            // Ctrl+O to import chat
-            if (e.ctrlKey && e.key === 'o') {
-                document.getElementById('import-chat-button').click();
-                e.preventDefault();
-            }
-        });
-        
-        window.keyBindingsSetup = true;
-        return window.dash_clientside.no_update;
-    }
-    """,
-    Output("notification-area", "children", allow_duplicate=True),
-    Input("chat-history", "children"),
+# Callback for task3 collapsible section
+@app.callback(
+    Output("task3-content", "style"),
+    Input("task3-header", "n_clicks"),
+    State("task3-content", "style"),
     prevent_initial_call=True
 )
+def toggle_section_task3(n_clicks, current_style):
+    if not n_clicks:
+        raise PreventUpdate
+    
+    is_visible = current_style.get("display") == "block"
+    new_style = {"display": "none" if is_visible else "block"}
+    return new_style
 
-# Search modal toggle
-@callback(
-    Output("search-modal", "is_open"),
-    [Input("search-chat-button", "n_clicks"), Input("close-search-modal", "n_clicks")],
-    [State("search-modal", "is_open")],
-    prevent_initial_call=True
-)
-def toggle_search_modal(search_clicks, close_clicks, is_open):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        return is_open
-    
-    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    if button_id == "search-chat-button":
-        return True
-    elif button_id == "close-search-modal":
-        return False
-    
-    return is_open
-
-# Search functionality
-@callback(
-    Output("search-results", "children"),
-    [Input("search-input", "value")],
-    [State("conversation-store", "data")],
-    prevent_initial_call=True
-)
-def search_conversation(search_term, conversation_data):
-    if not search_term or not conversation_data:
-        return html.Div("Enter a search term to find similar messages")
-    
-    try:
-        # Find similar messages using embeddings
-        similar_messages = find_similar_messages(search_term, conversation_data, top_k=5)
-        
-        if not similar_messages:
-            return html.Div("No similar messages found")
-        
-        # Display search results
-        results = []
-        for i, msg in enumerate(similar_messages):
-            role_color = DARK_THEME["secondary"] if msg["role"] == "user" else DARK_THEME["primary"]
-            results.append(html.Div([
-                html.Div([
-                    html.Strong(f"{msg['role'].capitalize()}: ", style={"color": role_color}),
-                    html.Span(msg["content"][:150] + ("..." if len(msg["content"]) > 150 else ""))
-                ]),
-                html.Hr(style={"margin": "10px 0"}) if i < len(similar_messages) - 1 else None
-            ], className="mb-3"))
-        
-        return html.Div(results)
-    except Exception as e:
-        return html.Div(f"Error searching: {str(e)}", className="text-danger")
-
-# Prompt suggestions
-@callback(
-    Output("prompt-suggestions", "children"),
-    [Input("chat-history", "children")],
-    [State("conversation-store", "data")],
-    prevent_initial_call=True
-)
-def update_prompt_suggestions(history, conversation_data):
-    if not conversation_data or len(conversation_data) < 2:
-        return html.Div()
-    
-    # Get the last assistant message
-    assistant_messages = [msg for msg in conversation_data if msg["role"] == "assistant"]
-    
-    if not assistant_messages:
-        return html.Div()
-    
-    last_assistant_message = assistant_messages[-1]["content"]
-    
-    # Generate suggestions
-    suggestions = generate_prompt_suggestions(last_assistant_message)
-    
-    # Create suggestion pills
-    suggestion_components = []
-    for suggestion in suggestions:
-        suggestion_components.append(
-            dbc.Button(
-                suggestion,
-                id={"type": "suggestion-pill", "index": suggestions.index(suggestion)},
-                color="light",
-                size="sm",
-                className="mr-2 mb-2",
-                style={
-                    "backgroundColor": "rgba(65, 105, 225, 0.1)",
-                    "borderColor": "rgba(65, 105, 225, 0.3)",
-                    "color": "white"
-                }
-            )
-        )
-    
-    return html.Div([
-        html.Small("Suggested follow-ups:", className="text-muted d-block mb-2"),
-        html.Div(suggestion_components)
-    ]) if suggestion_components else html.Div()
-
-# Use suggestion pill
-@callback(
-    Output("message-input", "value", allow_duplicate=True),
-    Input({"type": "suggestion-pill", "index": dash.ALL}, "n_clicks"),
-    State({"type": "suggestion-pill", "index": dash.ALL}, "children"),
-    prevent_initial_call=True
-)
-def use_suggestion(n_clicks, suggestions):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        return dash.no_update
-    
-    # Find which button was clicked
-    button_id = ctx.triggered[0]["prop_id"]
-    index = json.loads(button_id.split(".")[0])["index"]
-    
-    # Return the clicked suggestion as the message input value
-    return suggestions[index]
-
-# Utility function for shortening long messages
-def truncate_long_message(message, max_length=500):
-    """Truncate long messages for display in UI components"""
-    if len(message) <= max_length:
-        return message
-    
-    # Truncate and add ellipsis
-    return message[:max_length] + "..."
-
-# Message similarity search using embeddings
-def find_similar_messages(query, conversation_data, top_k=3):
-    """Find messages in the conversation history similar to the query"""
-    if not conversation_data or len(conversation_data) < 2:
-        return []
-    
-    try:
-        # Generate embedding for the query
-        query_embedding = llm_client.get_embedding(query)
-        
-        # Generate embeddings for all messages in conversation history
-        message_texts = [msg["content"] for msg in conversation_data]
-        message_embeddings = llm_client.get_embedding(message_texts)
-        
-        # Calculate cosine similarity
-        similarities = []
-        for i, embedding in enumerate(message_embeddings):
-            # Simple dot product for similarity (normalized embeddings)
-            similarity = sum(q * e for q, e in zip(query_embedding, embedding))
-            similarities.append((i, similarity))
-        
-        # Sort by similarity and return top_k
-        sorted_similarities = sorted(similarities, key=lambda x: x[1], reverse=True)
-        top_indices = [idx for idx, _ in sorted_similarities[:top_k]]
-        
-        # Return the most similar messages
-        return [conversation_data[idx] for idx in top_indices]
-    except Exception as e:
-        print(f"Error finding similar messages: {str(e)}")
-        return []
-
-# Smart prompt suggestions based on message content
-def generate_prompt_suggestions(message_text):
-    """Generate smart suggestions for the next prompt based on the message content"""
-    suggestions = []
-    
-    # Check for code-related content
-    if "```" in message_text or "function" in message_text.lower() or "def " in message_text or "class " in message_text:
-        suggestions.append("Can you explain how this code works?")
-        suggestions.append("Can you optimize this code?")
-        suggestions.append("What are potential bugs in this implementation?")
-    
-    # Check for explanations that might need clarification
-    elif any(keyword in message_text.lower() for keyword in ["explain", "concept", "understanding", "means"]):
-        suggestions.append("Can you provide a simpler explanation?")
-        suggestions.append("Can you give me an example?")
-        suggestions.append("How would you explain this to a beginner?")
-    
-    # Check for list-based responses
-    elif any(pattern in message_text for pattern in ["1.", "2.", "•", "- ", "* "]):
-        suggestions.append("Can you elaborate on point #1?")
-        suggestions.append("Are there additional items you'd add to this list?")
-        suggestions.append("Which of these points is most important?")
-    
-    # Check for comparison discussions
-    elif any(keyword in message_text.lower() for keyword in ["versus", "compared to", "difference between", "pros and cons"]):
-        suggestions.append("What's the key difference to remember?")
-        suggestions.append("When would I choose one over the other?")
-        suggestions.append("Can you summarize this comparison in a table?")
-    
-    # Check for error or problem discussions
-    elif any(keyword in message_text.lower() for keyword in ["error", "problem", "issue", "bug", "fix"]):
-        suggestions.append("What's the most common cause of this error?")
-        suggestions.append("How can I prevent this problem?")
-        suggestions.append("Is there a workaround?")
-    
-    # Default suggestions
-    else:
-        suggestions.append("Can you elaborate on that?")
-        suggestions.append("How does this apply to real-world situations?")
-        suggestions.append("What should I learn next about this topic?")
-    
-    # Return unique suggestions (removing duplicates if any)
-    return list(dict.fromkeys(suggestions))
-
-# Run the app
+# Run the server
 if __name__ == "__main__":
-    # Create a cache directory if it doesn't exist
-    Path("./cache").mkdir(exist_ok=True)
-    
-    # Create output directory for TTS files
-    Path("./generated").mkdir(exist_ok=True)
-    
-    # Install required packages if not already installed
-    try:
-        import markdown
-    except ImportError:
-        import subprocess
-        print("Installing required packages...")
-        subprocess.check_call(["pip", "install", "markdown"])
-    
-    print("Starting AI Chat with TTS...")
-    app.run_server(debug=True, port=8050)
+    app.run_server(debug=True)
