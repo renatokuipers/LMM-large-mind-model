@@ -1427,4 +1427,4 @@ def register_callbacks(app) -> None:
         [State("keyboard-listener", "keydowns"),
          State("playback-data", "data")],
         prevent_initial_call=True
-    )
+    ) 
