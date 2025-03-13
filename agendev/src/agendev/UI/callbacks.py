@@ -861,7 +861,7 @@ def register_callbacks(app) -> None:
                 ]
             
             updated_tasks.append(task)
-        
+            
         task_data["tasks"] = updated_tasks
         
         # Update todo.md to reflect task completion
@@ -1378,90 +1378,53 @@ def register_callbacks(app) -> None:
     # Add keyboard navigation for playback
     app.clientside_callback(
         """
-        function(keyboardListener, keyboard_events, playback_data) {
-            // Custom event listener for keyboard events
-            if (!window.keyboardListenerInitialized) {
-                const listener = document.getElementById('keyboard-listener');
-                if (listener) {
-                    listener.addEventListener('dash_keydown', function(e) {
-                        // Get the current keyboard events
-                        let events = {...keyboard_events};
-                        
-                        // Update the events
-                        events.n_keydowns = (events.n_keydowns || 0) + 1;
-                        events.keydowns = events.keydowns || [];
-                        
-                        // Add the new event
-                        events.keydowns.push({
-                            key: e.detail.key,
-                            timeStamp: e.detail.timeStamp
-                        });
-                        
-                        // Limit array size to avoid memory issues
-                        if (events.keydowns.length > 10) {
-                            events.keydowns = events.keydowns.slice(-10);
-                        }
-                        
-                        // Update the dcc.Store
-                        return [events, null, null, null, null, null];
-                    });
-                    window.keyboardListenerInitialized = true;
-                }
-                return [keyboard_events, null, null, null, null, null];
-            }
+        function(n_keydowns, keys, playback_data) {
+            // Get playback state
+            const isPlaying = playback_data.is_playing;
+            const currentStep = playback_data.current_step;
+            const totalSteps = playback_data.total_steps;
             
-            // Process keyboard events for playback control
-            if (keyboard_events && keyboard_events.keydowns && keyboard_events.keydowns.length > 0) {
-                // Get playback state
-                const isPlaying = playback_data.is_playing;
-                const currentStep = playback_data.current_step;
-                const totalSteps = playback_data.total_steps;
-                
-                const lastKey = keyboard_events.keydowns[keyboard_events.keydowns.length - 1];
+            if (keys && keys.length > 0) {
+                const lastKey = keys[keys.length - 1];
                 
                 // Arrow left: backward
                 if (lastKey.key === 'ArrowLeft') {
-                    return [keyboard_events, 'backward', null, null, null, null];
+                    return ['backward', null, null, null, null];
                 }
                 // Arrow right: forward
                 else if (lastKey.key === 'ArrowRight') {
-                    return [keyboard_events, 'forward', null, null, null, null];
+                    return ['forward', null, null, null, null];
                 }
                 // Space: play/pause
                 else if (lastKey.key === ' ') {
-                    return [keyboard_events, 'play', null, null, null, null];
+                    return ['play', null, null, null, null];
                 }
                 // L key: live mode
                 else if (lastKey.key === 'l' || lastKey.key === 'L') {
-                    return [keyboard_events, 'live', null, null, null, null];
+                    return ['live', null, null, null, null];
                 }
                 // Number keys 1-9: jump to percentage of timeline
                 else if (lastKey.key >= '1' && lastKey.key <= '9') {
                     const percentage = parseInt(lastKey.key) * 10;
-                    return [keyboard_events, 'slider', percentage, null, null, null];
+                    return ['slider', percentage, null, null, null];
                 }
                 // 0 key: jump to start
                 else if (lastKey.key === '0') {
-                    return [keyboard_events, 'slider', 0, null, null, null];
+                    return ['slider', 0, null, null, null];
                 }
-                
-                // Clear the keyboard events after processing
-                keyboard_events.keydowns = [];
-                return [keyboard_events, null, null, null, null, null];
             }
             
             // No action
-            return [keyboard_events, null, null, null, null, null];
+            return [null, null, null, null, null];
         }
         """,
-        [Output("keyboard-events", "data"),
-         Output("keyboard-action", "data"),
+        [Output("keyboard-action", "data"),
          Output("playback-backward", "n_clicks", allow_duplicate=True),
          Output("playback-play", "n_clicks", allow_duplicate=True),
          Output("playback-forward", "n_clicks", allow_duplicate=True),
          Output("live-button", "n_clicks", allow_duplicate=True)],
-        [Input("keyboard-listener", "id")],
-        [State("keyboard-events", "data"),
+        [Input("keyboard-listener", "n_keydowns")],
+        [State("keyboard-listener", "keydowns"),
          State("playback-data", "data")],
         prevent_initial_call=True
-    ) 
+    )

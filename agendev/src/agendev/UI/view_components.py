@@ -762,7 +762,7 @@ def create_step_preview(step_data: Dict[str, Any], is_current: bool = False) -> 
         children=content
     )
 
-def create_keyboard_listener() -> html.Div:
+def create_keyboard_listener() -> dcc.Store:
     """
     Create a keyboard event listener for playback navigation.
     
@@ -772,11 +772,13 @@ def create_keyboard_listener() -> html.Div:
     return html.Div([
         # Hidden div that listens for keyboard events
         html.Div(id='keyboard-listener', 
-                 style={'display': 'none'}),
+                 n_keydowns=0,
+                 keydowns=[],
+                 style={'display': 'none'},
+                 **{'data-dash-is-loading': True}),  # Required for clientside callbacks
         
-        # Store for keyboard actions and events
+        # Store for keyboard actions
         dcc.Store(id='keyboard-action', data=None),
-        dcc.Store(id='keyboard-events', data={'n_keydowns': 0, 'keydowns': []}),
         
         # Clientside JavaScript to capture keyboard events
         html.Script('''
@@ -790,18 +792,34 @@ def create_keyboard_listener() -> html.Div:
                         return;
                     }
                     
-                    // Trigger a custom event on the keyboard listener
-                    var keyEvent = new CustomEvent('dash_keydown', {
-                        detail: {
+                    // Update the keyboard listener component
+                    var keyboardListener = document.getElementById('keyboard-listener');
+                    if (keyboardListener) {
+                        var n_keydowns = parseInt(keyboardListener.getAttribute('n_keydowns') || '0');
+                        var keydowns = JSON.parse(keyboardListener.getAttribute('keydowns') || '[]');
+                        
+                        n_keydowns += 1;
+                        keydowns.push({
                             key: e.key,
                             timeStamp: new Date().getTime()
+                        });
+                        
+                        // Limit array size to avoid memory issues
+                        if (keydowns.length > 10) {
+                            keydowns = keydowns.slice(-10);
                         }
-                    });
-                    document.getElementById('keyboard-listener').dispatchEvent(keyEvent);
-                    
-                    // Prevent default behavior for space (page scroll)
-                    if (e.key === ' ') {
-                        e.preventDefault();
+                        
+                        keyboardListener.setAttribute('n_keydowns', n_keydowns);
+                        keyboardListener.setAttribute('keydowns', JSON.stringify(keydowns));
+                        
+                        // Trigger a change event for Dash to detect
+                        var event = new Event('change');
+                        keyboardListener.dispatchEvent(event);
+                        
+                        // Prevent default behavior for space (page scroll)
+                        if (e.key === ' ') {
+                            e.preventDefault();
+                        }
                     }
                 }
             });
